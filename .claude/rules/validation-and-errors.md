@@ -51,6 +51,7 @@ and the extension member `messages: [ValidationMessageResponse]`.
 | Status | `type` URI                                                  | Trigger                                   |
 |--------|-------------------------------------------------------------|-------------------------------------------|
 | 400    | https://boatapp.owt.ch/problems/validation                  | Bean Validation / malformed JSON          |
+| 401    | https://boatapp.owt.ch/problems/auth-required               | No / expired session                      |
 | 404    | https://boatapp.owt.ch/problems/not-found                   | BoatNotFoundException                     |
 | 409    | https://boatapp.owt.ch/problems/concurrency-conflict        | OptimisticLockException / ConcurrentModification |
 | 422    | https://boatapp.owt.ch/problems/validation                  | ValidationFailureException (domain)       |
@@ -70,6 +71,7 @@ Every `@RestControllerAdvice` in both services handles (at minimum):
 | `MethodArgumentNotValidException`    | 400    | `.../validation`        | yes (per FieldError)     |
 | `ConstraintViolationException`       | 400    | `.../validation`        | yes (per violation)      |
 | `HttpMessageNotReadableException`    | 400    | `.../validation`        | yes (single entry, `request.body.malformed`) |
+| `AuthenticationException` (Spring Security entry point) | 401 | `.../auth-required` | no (handled by `RestAuthenticationEntryPoint`, not @ControllerAdvice) |
 | `ValidationFailureException`         | 422    | `.../validation`        | yes (from domain)        |
 | `BoatNotFoundException`              | 404    | `.../not-found`         | no                       |
 | `OptimisticLockException` / `ConcurrentModificationException` | 409 | `.../concurrency-conflict` | no |
