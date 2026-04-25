@@ -1,0 +1,50 @@
+# infra/keycloak/realm.yaml
+#
+# BASE realm configuration (realm + client + role) for the boat-app realm.
+# Imported in every environment:
+#   - local-intg : the `keycloak-config` sidecar in docker-compose.yml
+#   - staging    : Ansible docker task (see ai-scripts/02c3-ansible.md)
+#   - prod       : Ansible docker task (same task, different inventory)
+#
+# Env-specific seed users live in SEPARATE overlay files imported alongside
+# this one (e.g. infra/keycloak/realm.users.local-intg.yaml). Staging/prod
+# Ansible tasks import THIS file only — never an overlay containing seed
+# users — to avoid shipping a known username into a public realm.
+#
+# Env-specific values (BFF base URL, JWKS URL) are resolved at import time
+# from environment variables — see infra/keycloak/env/*.env.
+#
+# IMPORTANT — export hygiene:
+#   This file is HAND-AUTHORED. If you ever export a realm via the admin UI
+#   for debugging, strip credentials/hashes/salts BEFORE committing.
+#   Reference: ai-scripts/02a4-backend-auth.md step 4.
+realm: boat-app
+enabled: true
+sslRequired: external
+clients:
+  - clientId: boat-app-confidential
+    enabled: true
+    publicClient: false
+    standardFlowEnabled: true
+    directAccessGrantsEnabled: false
+    # Authenticate to the token endpoint with a signed JWT (RFC 7523).
+    # NO shared client_secret — use.jwks.url=true tells Keycloak to fetch the
+    # BFF's public JWKS at the URL below (the BFF publishes its public key at
+    # /.well-known/jwks.json via JwksController).
+    clientAuthenticatorType: client-jwt
+    attributes:
+      use.jwks.url: "true"
+      jwks.url: "${BFF_JWKS_URL}"
+      token.endpoint.auth.signing.alg: RS256
+    redirectUris:
+      - "${BFF_BASE_URL}/*"
+    webOrigins:
+      - "${BFF_BASE_URL}"
+roles:
+  realm:
+    - name: user
+      description: Standard boat-app user
+# NOTE: no `users:` block in the base file. Seed users (e.g. `demo`) are
+# defined per-environment in overlay files like
+# infra/keycloak/realm.users.local-intg.yaml so they NEVER reach
+# staging/prod even by accident.

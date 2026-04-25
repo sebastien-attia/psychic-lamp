@@ -2,9 +2,13 @@
 # minted by Keycloak. JWKS is fetched from {issuer-uri}/protocol/openid-connect/certs.
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/${BUSINESS_DB_NAME:boatapp}
-    username: ${BUSINESS_DB_USER:business_service}
-    password: ${BUSINESS_DB_PASSWORD:business_service}
+    # In Docker compose, DATABASE_URL/USERNAME/PASSWORD are passed by the
+    # business-service env (postgres host == 'postgres'). When running in
+    # an IDE outside Docker, those vars are unset and we fall back to the
+    # localhost form using the per-service BUSINESS_DB_* variables.
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/${BUSINESS_DB_NAME:boatapp}}
+    username: ${DATABASE_USERNAME:${BUSINESS_DB_USER:business_service}}
+    password: ${DATABASE_PASSWORD:${BUSINESS_DB_PASSWORD:business_service}}
   security:
     oauth2:
       resourceserver:

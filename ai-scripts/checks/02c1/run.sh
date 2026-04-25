@@ -37,19 +37,19 @@ if [ -f docker-compose.yml ]; then
   if grep -qE '^  keycloak-config:' docker-compose.yml; then
     pass "docker-compose.yml defines keycloak-config sidecar"
     # Must depend on keycloak being healthy, must mount infra/keycloak
-    if awk '/^  keycloak-config:/,/^  [a-z]/' docker-compose.yml \
+    if awk '/^  keycloak-config:/{f=1;next} /^  [a-z]/{f=0} f' docker-compose.yml \
         | grep -qE 'condition:[[:space:]]*service_healthy'; then
       pass "keycloak-config depends_on keycloak { condition: service_healthy }"
     else
       fail "keycloak-config must depend_on keycloak with condition: service_healthy"
     fi
-    if awk '/^  keycloak-config:/,/^  [a-z]/' docker-compose.yml \
+    if awk '/^  keycloak-config:/{f=1;next} /^  [a-z]/{f=0} f' docker-compose.yml \
         | grep -qE 'infra/keycloak[^[:space:]]*:/config'; then
       pass "keycloak-config mounts infra/keycloak into /config"
     else
       fail "keycloak-config does not mount infra/keycloak as /config"
     fi
-    if awk '/^  keycloak-config:/,/^  [a-z]/' docker-compose.yml \
+    if awk '/^  keycloak-config:/{f=1;next} /^  [a-z]/{f=0} f' docker-compose.yml \
         | grep -qE 'IMPORT_FILES_LOCATIONS:[[:space:]]*/config/realm\.yaml'; then
       pass "keycloak-config imports /config/realm.yaml"
     else
@@ -59,8 +59,11 @@ if [ -f docker-compose.yml ]; then
     fail "docker-compose.yml missing keycloak-config sidecar (replaces --import-realm)"
   fi
 
-  # Legacy: keycloak must NOT use --import-realm any more (drift risk)
-  if grep -qE 'start-dev[[:space:]]*--import-realm|--import-realm' docker-compose.yml; then
+  # Legacy: keycloak must NOT use --import-realm any more (drift risk).
+  # Strip comments first so an explanatory comment that names the flag
+  # does not trip the gate.
+  if sed 's/#.*$//' docker-compose.yml \
+      | grep -qE 'start-dev[[:space:]]*--import-realm|--import-realm'; then
     fail "keycloak still uses --import-realm — migrate to keycloak-config-cli sidecar"
   else
     pass "keycloak no longer uses --import-realm (config-cli owns realm config)"

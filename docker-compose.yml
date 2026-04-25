@@ -1,0 +1,158 @@
+# docker-compose.yml — local-intg full stack.
+#
+# !!! LOCAL-INTG ONLY — DO NOT REUSE FOR STAGING / PRODUCTION !!!
+# Keycloak runs in `start-dev` mode (HTTP, ephemeral signing keys, dev
+# defaults) and the keycloak-config sidecar authenticates with the master
+# realm admin credentials. Both are appropriate for local-intg only.
+# Staging/prod are deployed via Terraform (02c2) + Ansible (02c3) — that
+# path uses `start --optimized` with HTTPS, an explicit hostname, and a
+# scoped realm-admin service account; it does NOT consume this compose
+# file. The shared artefact across environments is infra/keycloak/realm.yaml.
+#
+# Usage: docker compose up
+# Starts: postgres + keycloak + keycloak-config (sidecar) + business-service + bff
+# Browser: http://localhost:8080  (BFF serves Vue SPA + handles OAuth)
+# Business Service API (internal only): http://localhost:8081  (not for browser use)
+# Keycloak admin (debug only):          http://localhost:8180
+# All host-published ports are bound to 127.0.0.1 so the local-intg stack
+# is not reachable from the LAN even if the workstation has no firewall.
+#
+# Prereq for first run (one-time):
+#   ./ai-scripts/00b-generate-bff-key.sh        # creates infra/docker/keys/bff-signing-key.pem
+#
+# To re-run the Postgres init script after editing it: docker compose down -v
+# (the script only runs on an empty data volume — see infra/postgres/init/01-init-dbs.sh).
+services:
+  postgres:
+    image: postgres:17-alpine
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Runs ONLY on first boot of postgres-data (empty volume). If you
+      # change 01-init-dbs.sh, run `docker compose down -v` to re-run it.
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    environment:
+      # Admin role used ONLY for provisioning (docker-entrypoint init).
+      # Application services never log in as it.
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:-changeme}
+      POSTGRES_DB: postgres
+      # Per-role passwords consumed by 01-init-dbs.sh to create LOGIN roles.
+      BFF_DB_PASSWORD: ${BFF_DB_PASSWORD:-bff}
+      BUSINESS_DB_PASSWORD: ${BUSINESS_DB_PASSWORD:-business_service}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.1
+    # No --import-realm. Realm config is applied declaratively by the
+    # keycloak-config sidecar below (reads infra/keycloak/realm.yaml).
+    command: start-dev
+    ports: ["127.0.0.1:8180:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      # Master-realm admin credentials. Defaults are LOCAL-INTG ONLY (see
+      # the file header). The :- form keeps `docker compose config` working
+      # without a .env file (used by the verification gate); .env.example
+      # ships a real value developers should override.
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HEALTH_ENABLED: "true"
+      KC_METRICS_ENABLED: "true"
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB_NAME:-keycloak}
+      KC_DB_USERNAME: ${KEYCLOAK_DB_USER:-keycloak}
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+
+  # Short-lived sidecar: applies infra/keycloak/realm.yaml against the live
+  # Keycloak admin endpoint. Idempotent (create-or-update). The same YAML
+  # is reused by Ansible in staging/prod (see ai-scripts/02c3-ansible.md).
+  keycloak-config:
+    image: docker.io/adorsys/keycloak-config-cli:latest-26.6.1
+    depends_on:
+      keycloak: { condition: service_healthy }
+    restart: "no"
+    volumes:
+      - ./infra/keycloak:/config:ro
+    # BFF_BASE_URL / BFF_JWKS_URL come from the per-env file (single
+    # source of truth shared with Ansible). The remaining variables are
+    # secrets/credentials that don't belong in a committed env file.
+    env_file:
+      - ./infra/keycloak/env/local-intg.env
+    environment:
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_USER: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KEYCLOAK_AVAILABILITYCHECK_ENABLED: "true"
+      KEYCLOAK_AVAILABILITYCHECK_TIMEOUT: 120s
+      # Base realm + local-intg user overlay. The overlay is local-intg
+      # only and is NEVER imported by Ansible in staging/prod.
+      IMPORT_FILES_LOCATIONS: /config/realm.yaml,/config/realm.users.local-intg.yaml
+      IMPORT_VAR_SUBSTITUTION_ENABLED: "true"
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-demo123}
+
+  business-service:
+    build:
+      context: .
+      dockerfile: business-service/Dockerfile
+    ports: ["127.0.0.1:8081:8081"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/actuator/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    environment:
+      SPRING_PROFILES_ACTIVE: local-intg
+      DATABASE_URL: jdbc:postgresql://postgres:5432/${BUSINESS_DB_NAME:-boatapp}
+      DATABASE_USERNAME: ${BUSINESS_DB_USER:-business_service}
+      DATABASE_PASSWORD: ${BUSINESS_DB_PASSWORD:-business_service}
+      KEYCLOAK_ISSUER_URI: http://keycloak:8080/realms/boat-app
+
+  bff:
+    build:
+      context: .
+      dockerfile: bff/Dockerfile
+    ports: ["127.0.0.1:8080:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      business-service: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+    environment:
+      SPRING_PROFILES_ACTIVE: local-intg
+      # BFF's own bff_session database (owned by role `bff`). Liquibase in
+      # BFF creates SPRING_SESSION on startup. No access to boatapp or
+      # keycloak DBs (per-DB CONNECT grants in 01-init-dbs.sh).
+      DATABASE_URL: jdbc:postgresql://postgres:5432/${BFF_DB_NAME:-bff_session}
+      DATABASE_USERNAME: ${BFF_DB_USER:-bff}
+      DATABASE_PASSWORD: ${BFF_DB_PASSWORD:-bff}
+      BUSINESS_SERVICE_URL: http://business-service:8081
+      KEYCLOAK_ISSUER_URI: http://keycloak:8080/realms/boat-app
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-boat-app-confidential}
+      # private_key_jwt — no shared secret. The PEM is mounted as a Docker
+      # secret and the public half is served by the BFF at
+      # /.well-known/jwks.json for Keycloak (use.jwks.url=true on the
+      # client) to fetch.
+      BFF_SIGNING_KEY_PATH: /run/secrets/bff-signing-key.pem
+      BFF_SIGNING_KEY_ID: ${BFF_SIGNING_KEY_ID:-bff-key-1}
+    secrets:
+      - bff-signing-key
+
+volumes:
+  postgres-data:
+
+secrets:
+  bff-signing-key:
+    # Generated by ai-scripts/00b-generate-bff-key.sh (gitignored).
+    file: ./infra/docker/keys/bff-signing-key.pem

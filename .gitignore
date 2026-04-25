@@ -19,5 +19,6 @@ infra/ansible/*.retry
 .env.*.local
 *.pem
 *.key
+infra/docker/keys/
 frontend/src/services/api-client/
 **/generated-sources/

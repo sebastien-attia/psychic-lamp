@@ -1,0 +1,21 @@
+# infra/keycloak/realm.users.local-intg.yaml
+#
+# LOCAL-INTG ONLY user overlay. Imported alongside realm.yaml by the
+# `keycloak-config` sidecar in docker-compose.yml so developers can
+# `make up` and log in without first creating a user in the admin UI.
+#
+# This file MUST NEVER be referenced by Ansible in staging/prod
+# (see ai-scripts/02c3-ansible.md): the username `demo` is well-known
+# and would be a credential-stuffing target on a public realm.
+#
+# DEMO_PASSWORD is resolved from the keycloak-config service's env at
+# import time (default `demo123`, override via .env / shell).
+realm: boat-app
+users:
+  - username: demo
+    enabled: true
+    credentials:
+      - type: password
+        value: "${DEMO_PASSWORD}"
+        temporary: false
+    realmRoles: [user]

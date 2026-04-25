@@ -1,0 +1,48 @@
+# docker-compose.dev.yml — fast iteration mode (NO BFF, NO Keycloak).
+#
+# Usage: docker compose -f docker-compose.dev.yml up
+# Starts: postgres-dev + business-service-dev (auth bypass — dev profile
+#         uses permitAll(), no JWT validation, dummy user auto-created).
+# For frontend dev:
+#   cd frontend && npm run dev    # Vite proxies /api to localhost:8081
+#
+# No BFF, no Keycloak needed in dev mode. The same Postgres init script
+# (infra/postgres/init/01-init-dbs.sh) runs and creates all 3 databases;
+# dev only uses `boatapp`, the extras are harmless and keep the init
+# script single-source between dev and local-intg.
+services:
+  postgres-dev:
+    image: postgres:17-alpine
+    ports: ["127.0.0.1:5432:5432"]
+    environment:
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD:-changeme}
+      POSTGRES_DB: postgres
+      BFF_DB_PASSWORD: ${BFF_DB_PASSWORD:-bff}
+      BUSINESS_DB_PASSWORD: ${BUSINESS_DB_PASSWORD:-business_service}
+      KEYCLOAK_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+    volumes:
+      - postgres-dev-data:/var/lib/postgresql/data
+      - ./infra/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  business-service-dev:
+    build:
+      context: .
+      dockerfile: business-service/Dockerfile
+    ports: ["127.0.0.1:8081:8081"]
+    depends_on:
+      postgres-dev: { condition: service_healthy }
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      DATABASE_URL: jdbc:postgresql://postgres-dev:5432/${BUSINESS_DB_NAME:-boatapp}
+      DATABASE_USERNAME: ${BUSINESS_DB_USER:-business_service}
+      DATABASE_PASSWORD: ${BUSINESS_DB_PASSWORD:-business_service}
+      # No KEYCLOAK_ISSUER_URI — dev profile uses permitAll(), no JWT validation.
+
+volumes:
+  postgres-dev-data:
