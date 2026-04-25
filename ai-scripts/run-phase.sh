@@ -92,7 +92,7 @@ print_phase_intro() {
       artefacts=(
         "Pure-Java domain in business-service: Boat, AppUser, BoatAudit, BoatId, UserId, ServiceResponse"
         "Inbound + outbound ports as records/interfaces; PageResult<T> (no Spring Page)"
-        "Persistence adapter: JPA entities + MapStruct mappers + repository adapters"
+        "Persistence adapter: JPA entities + hand-written @Component mappers + repository adapters"
         "Liquibase: BFF (SPRING_SESSION); BS (APP_USER, BOATS, BOAT_AUDIT)"
       )
       invariant="business-service/.../domain/ contains ZERO Spring or Jakarta imports — ArchUnit will enforce in 02a5."

@@ -27,32 +27,44 @@
       must contain ZERO Spring/Jakarta annotations. Only java.* and domain.* imports.
       JPA annotations (@Entity, @Column, @Version, @Table) belong ONLY in
       adapter.out.persistence.entity — NOT in domain.model.
-      The domain model and JPA entity are SEPARATE classes, mapped by MapStruct.
+      The domain model and JPA entity are SEPARATE classes, mapped by hand-written
+      @Component classes. Domain models are immutable records — no setters; updates
+      rebuild a fresh record via the canonical constructor. NO MapStruct, NO
+      annotation processor for mapping.
     </hexagonal-rule>
     <scope>only modify files under business-service/</scope>
   </context>
 
   <instructions>
     <step order="1">
-      Create DOMAIN MODELS (ch.owt.boatapp.domain.model) — PURE JAVA:
+      Create DOMAIN MODELS (ch.owt.boatapp.domain.model) — PURE JAVA RECORDS:
+
+      Domain models are immutable records. No setters. Updates rebuild a
+      fresh record via the canonical constructor (see step 2: ManageBoatsUseCase
+      semantics). Compact constructors stay empty — length / nullability
+      invariants live in SyntacticValidator and run BEFORE construction, so
+      reconstitution from persistence pays no re-validation cost.
 
       Boat.java:
-      - UUID id, String name (max 64), String description (max 256, nullable)
-      - java.time.OffsetDateTime createdAt, Long version
-      - Constructor, getters, setters (or use a plain class — NOT a record if mutable)
+        public record Boat(UUID id, String name, String description,
+                           java.time.OffsetDateTime createdAt, Long version) {}
+      - name ≤ 64 chars, description ≤ 256 chars, nullability — enforced by
+        SyntacticValidator (see step 3), NOT in the compact constructor.
       - NO annotations from Spring, Jakarta, Lombok, JPA. ONLY java.* imports.
 
       AppUser.java:
-      - UUID id, String keycloakId, String username, String email
-      - String firstName, String lastName
-      - OffsetDateTime firstLogin, OffsetDateTime lastLogin
-      - Pure Java.
+        public record AppUser(UUID id, String keycloakId, String username, String email,
+                              String firstName, String lastName,
+                              java.time.OffsetDateTime firstLogin,
+                              java.time.OffsetDateTime lastLogin) {}
+      - Pure Java record.
 
       BoatAudit.java:
-      - Long id, UUID boatId, String action (CREATED/UPDATED/DELETED)
-      - String name, String description, Long version (snapshots)
-      - UUID performedByUserId, OffsetDateTime performedAt
-      - Pure Java.
+        public record BoatAudit(Long id, UUID boatId, AuditAction action,
+                                String name, String description, Long version,
+                                UUID performedByUserId,
+                                java.time.OffsetDateTime performedAt) {}
+      - Pure Java record. The action component uses the AuditAction enum (next).
 
       AuditAction.java (enum): CREATED, UPDATED, DELETED — pure Java.
 
@@ -159,6 +171,14 @@
       - void                  deleteBoat(DeleteBoatCommand command)
       Note: listBoats, getBoat, deleteBoat throw domain exceptions (BoatNotFoundException) — no ServiceResponse needed.
 
+      Implementation note (records): updateBoat MUST rebuild a fresh Boat
+      via the canonical constructor — never mutate. Carry over `id` and
+      `createdAt` from the loaded record; take `name`, `description` from
+      the command; set `version` to `command.expectedVersion()` so Hibernate
+      detects a stale write at flush time. Same pattern for
+      UserDomainService.refresh: carry over `id`, `keycloakId`, `firstLogin`
+      from the loaded record and bump `lastLogin` to `now`.
+
       GetUserUseCase.java:
       - AppUser syncUser(SyncUserCommand command)
       - AppUser getUserByKeycloakId(String keycloakId)   // single-arg lookup — primitive acceptable
@@ -233,10 +253,32 @@
       - @Entity @Table(name = "boat_audit")
       - @ManyToOne for performedBy → AppUserJpaEntity
 
-      mapper/BoatPersistenceMapper.java (MapStruct):
-      - toDomain(BoatJpaEntity) → Boat (domain model)
-      - toJpaEntity(Boat) → BoatJpaEntity
-      - Similar for AppUser and BoatAudit
+      mapper/BoatPersistenceMapper.java (hand-written @Component, no MapStruct):
+        @Component
+        public class BoatPersistenceMapper {
+            public Boat toDomain(BoatJpaEntity e) {
+                if (e == null) return null;
+                return new Boat(e.getId(), e.getName(), e.getDescription(),
+                                e.getCreatedAt(), e.getVersion());
+            }
+            public BoatJpaEntity toJpaEntity(Boat b) {
+                if (b == null) return null;
+                return new BoatJpaEntity(b.id(), b.name(), b.description(),
+                                         b.createdAt(), b.version());
+            }
+        }
+      - Same shape for AppUserPersistenceMapper.
+      - BoatAuditPersistenceMapper.toDomain(BoatAuditJpaEntity) flattens
+        `entity.getPerformedBy().getId()` → `performedByUserId` (reading the
+        proxy id does NOT trigger a SELECT — the FK column is in memory).
+        toJpaEntity takes two args: `(BoatAudit audit, AppUserJpaEntity performedBy)`,
+        so the adapter resolves the lazy reference via getReferenceById and
+        passes it in. JPA entities stay mutable POJOs (Hibernate requires
+        no-arg ctor + setters); domain records do not.
+
+      Rationale: hand-written mappers are ~60 lines total across the three
+      mappers. We trade that against zero annotation-processor magic, real
+      jump-to-definition in the IDE, and one fewer build dependency.
 
       repository/BoatJpaRepository.java:
       - extends JpaRepository&lt;BoatJpaEntity, UUID&gt;
@@ -303,7 +345,7 @@
     - Domain validators: SyntacticValidator (name/description rules), SemanticValidator (placeholder)
     - ManageBoatsUseCase.createBoat/updateBoat now return ServiceResponse<Boat>
     - Outbound ports: repository port interfaces (pure Java)
-    - Persistence adapter: JPA entities (separate), MapStruct mappers, Spring Data repos
+    - Persistence adapter: JPA entities (separate, mutable), hand-written @Component mappers, Spring Data repos
     - Liquibase (business-service → boatapp): APP_USER, BOATS, BOAT_AUDIT
     - Liquibase (BFF → bff_session): SPRING_SESSION, SPRING_SESSION_ATTRIBUTES (spring.session.jdbc.initialize-schema: never)"
     ```

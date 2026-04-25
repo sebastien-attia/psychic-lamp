@@ -164,7 +164,7 @@
         invariant checks (02a2) fire.
       - Example:
         ```java
-        // adapter.in.web.mapper.BoatCommandMapper (plain Java — no MapStruct needed, handful of fields)
+        // adapter.in.web.mapper.BoatCommandMapper (hand-written — the project uses no MapStruct anywhere)
         static CreateBoatCommand toCreateCommand(BoatCreateRequest dto, UUID currentUserId) {
             return new CreateBoatCommand(dto.getName(), dto.getDescription(), new UserId(currentUserId));
         }

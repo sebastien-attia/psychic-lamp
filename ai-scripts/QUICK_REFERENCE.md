@@ -101,7 +101,7 @@ business-service/
 │   │   └── mapper/                (web ↔ domain)
 │   └── out/persistence/           ← Spring Data JPA (implements domain.port.out)
 │       ├── entity/                JPA @Entity (separate from domain model)
-│       ├── mapper/                (JPA entity ↔ domain model — MapStruct)
+│       ├── mapper/                (JPA entity ↔ domain record — hand-written @Component)
 │       └── repository/            JpaRepository + RepositoryAdapter
 └── infrastructure/
     ├── config/                    BeanConfig (wires pure-Java domain beans)

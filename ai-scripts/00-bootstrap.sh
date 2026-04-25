@@ -261,7 +261,7 @@ paths: ["business-service/**/*.java", "business-service/pom.xml"]
   - ONLY java.* and domain.* imports allowed
 - adapter.in.web → Spring @RestController, stateless, depends on infrastructure.service
 - adapter.out.persistence → Spring Data JPA, implements domain.port.out
-  - JPA entities here (separate from domain models), with MapStruct mappers
+  - JPA entities here (separate from domain records), with hand-written @Component mappers — no MapStruct, no annotation processor
 - infrastructure.config → Spring @Configuration beans, wiring ports to adapters
 - infrastructure.security → ResourceServerSecurityConfig (JWT), DevSecurityConfig (dev bypass)
 - infrastructure.service → BoatApplicationService (@Service @Transactional, bridge layer)

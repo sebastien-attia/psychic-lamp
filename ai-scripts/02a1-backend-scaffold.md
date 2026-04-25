@@ -247,9 +247,9 @@
 
       Add these extra dependencies that Initializr does not offer:
       - springdoc-openapi-starter-webmvc-ui
-      - mapstruct + mapstruct-processor
       - archunit-junit5 (test scope)
       - spring-security-test (test)
+      (NO MapStruct — persistence mappers are hand-written @Component classes; see 02a2.)
 
       NOTE: NO spring-session-jdbc (Business Service is stateless — no session)
       NOTE: NO spring-boot-starter-oauth2-client (resource server only, never OAuth2 client)
