@@ -43,7 +43,7 @@ defineEmits<{
     <button
       v-if="ctaLabel"
       type="button"
-      class="mt-6 inline-flex items-center rounded-md bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500"
+      class="mt-6 inline-flex items-center rounded-md bg-amber-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700"
       @click="$emit('cta')"
     >
       {{ ctaLabel }}

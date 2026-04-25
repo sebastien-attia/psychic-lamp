@@ -39,15 +39,26 @@ public final class SpaCsrfTokenRequestHandler implements CsrfTokenRequestHandler
      * Make the {@link CsrfToken} available as a request attribute and write
      * the XOR-masked value to the {@code XSRF-TOKEN} cookie.
      *
+     * <p>Spring Security 6+ defaults the CSRF token to a deferred {@link
+     * Supplier} so the token is only materialized when something reads the
+     * request attribute. SPAs that talk to the API via {@code fetch} never
+     * touch a server-rendered template and therefore never trigger that
+     * read — the cookie is never written and the JavaScript client cannot
+     * echo it on the next state-changing call. We force materialization by
+     * calling {@code csrfToken.get()} here so {@link
+     * org.springframework.security.web.csrf.CookieCsrfTokenRepository}
+     * emits {@code Set-Cookie: XSRF-TOKEN} on every response.
+     *
      * @param request   the inbound request — passed through to the XOR handler
      * @param response  the outbound response — receives the {@code Set-Cookie}
-     * @param csrfToken supplier that materializes the deferred token only
-     *                  when first read
+     * @param csrfToken supplier that materializes the deferred token; we
+     *                  invoke it eagerly to drive cookie emission
      */
     @Override
     public void handle(HttpServletRequest request, HttpServletResponse response,
                        Supplier<CsrfToken> csrfToken) {
         this.xor.handle(request, response, csrfToken);
+        csrfToken.get();
     }
 
     /**

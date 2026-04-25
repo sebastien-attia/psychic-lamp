@@ -51,14 +51,44 @@ services:
     # No --import-realm. Realm config is applied declaratively by the
     # keycloak-config sidecar below (reads infra/keycloak/realm.yaml).
     command: start-dev
-    ports: ["127.0.0.1:8180:8080"]
+    # Two narrow bindings:
+    # - 127.0.0.1 lets the host browser reach Keycloak via
+    #   http://localhost:8180 (and via keycloak.localtest.me:8180,
+    #   which public DNS resolves to 127.0.0.1).
+    # - 172.17.0.1 is the address that `extra_hosts: host-gateway`
+    #   resolves to from inside the BFF / business-service containers
+    #   on a default Linux Docker bridge, so they can fetch OIDC
+    #   discovery from the same KC_HOSTNAME the browser uses (Spring
+    #   requires a single issuer URI for both paths).
+    # Avoid binding 0.0.0.0 — Keycloak admin would then be reachable
+    # from any external interface on the dev box.
+    #
+    # PORTABILITY: 172.17.0.1 is Linux-default-bridge specific. On
+    # Docker Desktop (macOS / Windows) and on Linux installs that have
+    # changed the default bridge subnet, this bind will fail with
+    # "cannot assign requested address". For those environments,
+    # override the second binding via your own compose override file
+    # (e.g. compose.override.yml) or replace it with the gateway IP
+    # reported by `docker network inspect bridge | jq '.[0].IPAM.Config[0].Gateway'`.
+    ports:
+      - "127.0.0.1:8180:8080"
+      - "172.17.0.1:8180:8080"
     depends_on:
       postgres: { condition: service_healthy }
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health/ready || exit 1"]
+      # Keycloak 26.x exposes /health/* on the Quarkus management interface
+      # (port 9000), not on the request port 8080. The image ships without
+      # curl/wget, so probe via bash's /dev/tcp builtin (CMD form, not
+      # CMD-SHELL — /bin/sh on UBI does not implement /dev/tcp).
+      test:
+        - CMD
+        - bash
+        - -c
+        - 'exec 3<>/dev/tcp/localhost/9000 && printf "GET /health/ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3 && grep -q ''"status": "UP"'' <&3'
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 30s
     environment:
       # Master-realm admin credentials. Defaults are LOCAL-INTG ONLY (see
       # the file header). The :- form keeps `docker compose config` working
@@ -72,6 +102,34 @@ services:
       KC_DB_URL: jdbc:postgresql://postgres:5432/${KEYCLOAK_DB_NAME:-keycloak}
       KC_DB_USERNAME: ${KEYCLOAK_DB_USER:-keycloak}
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-keycloak}
+      # Frontchannel hostname seen by the *browser* in OIDC discovery
+      # metadata, the `iss` claim, and OAuth2 redirects. The browser runs
+      # on the developer's host and reaches Keycloak through the
+      # published port mapping `127.0.0.1:8180:8080` below — Docker's
+      # internal DNS name `keycloak` is unreachable outside the compose
+      # network, so without this override the SPA gets ERR_NAME_NOT_RESOLVED
+      # the moment the BFF redirects it through Spring's authorization-uri.
+      #
+      # Why `keycloak.localtest.me` and not `localhost`? Spring's OAuth2
+      # client requires its configured `issuer-uri` to equal the issuer
+      # field returned by OIDC discovery (= KC_HOSTNAME). The BFF must
+      # therefore *also* be able to reach this URL from inside its
+      # container so it can fetch /.well-known/openid-configuration at
+      # startup. `localhost` is already pinned to 127.0.0.1 by the base
+      # /etc/hosts in the JRE image and `extra_hosts` cannot dislodge
+      # that first match — the BFF would resolve `localhost` to its own
+      # loopback (where nothing listens on 8180) and crash with
+      # ConnectException at startup. `keycloak.localtest.me` resolves to
+      # 127.0.0.1 globally via public DNS (so the browser is happy) AND
+      # is unknown to /etc/hosts (so the BFF's `extra_hosts` mapping to
+      # the host gateway wins cleanly). One name, both paths.
+      KC_HOSTNAME: http://keycloak.localtest.me:8180
+      # Backchannel-dynamic = true keeps in-network calls (BFF → Keycloak
+      # for token-exchange, JWKS, userinfo) on the request URL
+      # `http://keycloak:8080`, so we don't have to round-trip every
+      # backchannel request through the host's loopback. Frontchannel
+      # URLs (auth, end-session, iss) still use KC_HOSTNAME above.
+      KC_HOSTNAME_BACKCHANNEL_DYNAMIC: "true"
 
   # Short-lived sidecar: applies infra/keycloak/realm.yaml against the live
   # Keycloak admin endpoint. Idempotent (create-or-update). The same YAML
@@ -97,7 +155,21 @@ services:
       # Base realm + local-intg user overlay. The overlay is local-intg
       # only and is NEVER imported by Ansible in staging/prod.
       IMPORT_FILES_LOCATIONS: /config/realm.yaml,/config/realm.users.local-intg.yaml
-      IMPORT_VAR_SUBSTITUTION_ENABLED: "true"
+      # Property is `import.var-substitution.enabled` (kebab-case). Spring
+      # relaxed binding maps it to `IMPORT_VARSUBSTITUTION_ENABLED` — note
+      # NO underscore between VAR and SUBSTITUTION. The plausible-looking
+      # `IMPORT_VAR_SUBSTITUTION_ENABLED` is silently ignored, leaving the
+      # default (false), which causes ${BFF_BASE_URL} to be POSTed to
+      # Keycloak verbatim and rejected as "invalid_input: A redirect URI
+      # is not a valid URI".
+      IMPORT_VARSUBSTITUTION_ENABLED: "true"
+      # Default delimiters in keycloak-config-cli are `$(`/`)`. Override to
+      # the conventional `${...}` syntax used in realm.yaml so the same file
+      # reads naturally as a shell/Spring template.
+      # `$$` escapes the dollar so compose passes a literal `${` through to
+      # the container (compose's own variable interpolation runs first).
+      IMPORT_VARSUBSTITUTION_PREFIX: '$${'
+      IMPORT_VARSUBSTITUTION_SUFFIX: '}'
       DEMO_PASSWORD: ${DEMO_PASSWORD:-demo123}
 
   business-service:
@@ -108,6 +180,15 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       keycloak: { condition: service_healthy }
+    # Spring resource-server validates the JWT `iss` claim against
+    # whatever Keycloak announces via KC_HOSTNAME — the same URL the
+    # browser uses for the auth dialog. That URL must resolve from
+    # inside the container so Spring can fetch OIDC discovery at
+    # startup. The host-gateway remap routes the lookup to the host's
+    # published port (127.0.0.1:8180:8080) — see the KC_HOSTNAME comment
+    # in the keycloak service for why we cannot use `localhost` here.
+    extra_hosts:
+      - "keycloak.localtest.me:host-gateway"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8081/actuator/health || exit 1"]
       interval: 10s
@@ -115,10 +196,18 @@ services:
       retries: 10
     environment:
       SPRING_PROFILES_ACTIVE: local-intg
+      # Force IPv4: public DNS returns AAAA `::1` for keycloak.localtest.me
+      # in addition to the A record `127.0.0.1`. The container's
+      # extra_hosts override above injects only an IPv4 entry into
+      # /etc/hosts, so the IPv6 AAAA still leaks in via DNS and the JVM
+      # prefers it — Java then connects to ::1:8180 (the container's own
+      # IPv6 loopback) and gets ECONNREFUSED. preferIPv4Stack=true
+      # silences the AAAA path entirely.
+      JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
       DATABASE_URL: jdbc:postgresql://postgres:5432/${BUSINESS_DB_NAME:-boatapp}
       DATABASE_USERNAME: ${BUSINESS_DB_USER:-business_service}
       DATABASE_PASSWORD: ${BUSINESS_DB_PASSWORD:-business_service}
-      KEYCLOAK_ISSUER_URI: http://keycloak:8080/realms/boat-app
+      KEYCLOAK_ISSUER_URI: http://keycloak.localtest.me:8180/realms/boat-app
 
   bff:
     build:
@@ -129,8 +218,16 @@ services:
       postgres: { condition: service_healthy }
       business-service: { condition: service_healthy }
       keycloak: { condition: service_healthy }
+    # See business-service: same KEYCLOAK_ISSUER_URI = localhost:8180
+    # alignment with KC_HOSTNAME, same /etc/hosts override so Spring's
+    # OAuth2 client can fetch OIDC discovery from the announced issuer.
+    extra_hosts:
+      - "keycloak.localtest.me:host-gateway"
     environment:
       SPRING_PROFILES_ACTIVE: local-intg
+      # See business-service for why preferIPv4Stack=true is required
+      # alongside the keycloak.localtest.me extra_hosts override.
+      JAVA_TOOL_OPTIONS: "-Djava.net.preferIPv4Stack=true"
       # BFF's own bff_session database (owned by role `bff`). Liquibase in
       # BFF creates SPRING_SESSION on startup. No access to boatapp or
       # keycloak DBs (per-DB CONNECT grants in 01-init-dbs.sh).
@@ -138,7 +235,10 @@ services:
       DATABASE_USERNAME: ${BFF_DB_USER:-bff}
       DATABASE_PASSWORD: ${BFF_DB_PASSWORD:-bff}
       BUSINESS_SERVICE_URL: http://business-service:8081
-      KEYCLOAK_ISSUER_URI: http://keycloak:8080/realms/boat-app
+      # Must match Keycloak's KC_HOSTNAME so Spring's discovery
+      # validation (configured issuer == discovery issuer) succeeds.
+      # The browser uses this URL too — single source of truth.
+      KEYCLOAK_ISSUER_URI: http://keycloak.localtest.me:8180/realms/boat-app
       KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-boat-app-confidential}
       # private_key_jwt — no shared secret. The PEM is mounted as a Docker
       # secret and the public half is served by the BFF at
@@ -147,7 +247,17 @@ services:
       BFF_SIGNING_KEY_PATH: /run/secrets/bff-signing-key.pem
       BFF_SIGNING_KEY_ID: ${BFF_SIGNING_KEY_ID:-bff-key-1}
     secrets:
-      - bff-signing-key
+      # Long-form mount: short-form `- bff-signing-key` would target
+      # `/run/secrets/bff-signing-key` (no .pem extension), which
+      # mismatches BFF_SIGNING_KEY_PATH above and crashes
+      # BffConfig.bffSigningJwk with NoSuchFileException at startup.
+      # Note: uid/gid/mode keys are Swarm-only and silently ignored
+      # by `docker compose`; the BFF container runs as `spring`
+      # (uid 1001, see bff/Dockerfile) so the host PEM must be
+      # world-readable. ai-scripts/00b-generate-bff-key.sh enforces
+      # mode 0644 on the local-intg dev key for that reason.
+      - source: bff-signing-key
+        target: bff-signing-key.pem
 
 volumes:
   postgres-data:

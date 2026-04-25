@@ -74,7 +74,7 @@ function resolveConfirmClasses(tone: 'danger' | 'primary' | undefined): string {
 
 <template>
   <TransitionRoot as="template" :show="open">
-    <Dialog as="div" class="relative z-20" @close="loading ? undefined : emit('cancel')">
+    <Dialog as="div" class="fixed inset-0 z-20" @close="loading ? undefined : emit('cancel')">
       <TransitionChild
         as="template"
         enter="ease-out duration-200"

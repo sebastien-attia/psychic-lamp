@@ -83,16 +83,19 @@ public class SecurityConfig {
                                 PathPatternRequestMatcher.withDefaults().matcher("/v3/api-docs/**"),
                                 PathPatternRequestMatcher.withDefaults().matcher("/login/**"),
                                 PathPatternRequestMatcher.withDefaults().matcher("/oauth2/**"),
-                                PathPatternRequestMatcher.withDefaults().matcher("/logout")
+                                PathPatternRequestMatcher.withDefaults().matcher("/logout"),
+                                PathPatternRequestMatcher.withDefaults().matcher("/api/logout")
                         ).permitAll()
                         .anyRequest().authenticated())
                 .oauth2Login(login -> {})
                 .logout(logout -> logout
-                        // Limit the logout filter to POST so that an unauthenticated
-                        // browser hitting /logout via a stale link does not trigger
-                        // an OIDC redirect just to log out a non-existent session.
+                        // Limit the logout filter to POST so an unauthenticated
+                        // browser hitting /logout via a stale link does not
+                        // trigger an OIDC redirect just to log out a non-
+                        // existent session. The SPA posts to /api/logout
+                        // (its axios baseURL is /api), so accept both paths.
                         .logoutRequestMatcher(PathPatternRequestMatcher.withDefaults()
-                                .matcher(HttpMethod.POST, "/logout"))
+                                .matcher(HttpMethod.POST, "/api/logout"))
                         .logoutSuccessHandler(oidcLogoutSuccessHandler(clientRegistrationRepository))
                         .invalidateHttpSession(true)
                         .deleteCookies("SESSION", "XSRF-TOKEN"))

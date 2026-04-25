@@ -36,6 +36,13 @@ clients:
       use.jwks.url: "true"
       jwks.url: "${BFF_JWKS_URL}"
       token.endpoint.auth.signing.alg: RS256
+      # OIDC RP-initiated logout: the BFF's
+      # OidcClientInitiatedLogoutSuccessHandler sends Keycloak a
+      # post_logout_redirect_uri pointing at "{baseUrl}" of the BFF.
+      # Without this attribute Keycloak rejects the redirect and the
+      # browser is left on the previous page, so the SPA never sees the
+      # sign-out land — see SecurityConfig.oidcLogoutSuccessHandler().
+      post.logout.redirect.uris: "${BFF_BASE_URL}/*"
     redirectUris:
       - "${BFF_BASE_URL}/*"
     webOrigins:

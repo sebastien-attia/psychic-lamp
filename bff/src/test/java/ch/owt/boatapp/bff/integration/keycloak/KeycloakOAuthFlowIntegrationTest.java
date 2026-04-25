@@ -1,56 +1,136 @@
 package ch.owt.boatapp.bff.integration.keycloak;
 
+import com.nimbusds.jose.util.JSONObjectUtils;
+import com.nimbusds.jwt.JWTClaimsSet;
+import com.nimbusds.jwt.SignedJWT;
 import dasniko.testcontainers.keycloak.KeycloakContainer;
-import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
+import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
+
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Placeholder for the live OAuth2 authorization-code flow against a real
- * Keycloak instance.
+ * Live smoke test that proves the BFF's OAuth2 wiring talks to a real Keycloak
+ * server, end-to-end across realm import → token issuance → JWT signing.
  *
- * <p>Currently {@link Disabled} pending phase 02c1, which produces the
- * canonical {@code infra/keycloak/realm.yaml}. Until then, the realm
- * fixture lives at {@code src/test/resources/test-realm.json} (a deliberate
- * test-only stand-in — see {@code README-test-realm.md}).
+ * <p>The bulk of BFF security behaviour (RFC 9457 forwarding, CSRF, session,
+ * token attachment) is covered by faster MockMvc + WireMock + {@code
+ * oauth2Login()} mock tests under {@code ../}. What WireMock cannot reproduce
+ * — and what only a real Keycloak can validate — is that the issuer URI,
+ * realm import, and JWT signing are all wired correctly. This test catches
+ * regressions there and nothing else.
  *
- * <p>The {@link KeycloakContainer} is declared so the wiring compiles
- * (and the verification gate's {@code KeycloakContainer} grep passes), but
- * the test method is disabled because the live flow additionally requires:
- * <ul>
- *   <li>{@code Testcontainers.exposeHostPorts(bffPort)} so the
- *       {@code use.jwks.url=true} client can fetch the BFF's JWKS from
- *       inside the Keycloak container;</li>
- *   <li>a browser-driving helper or direct password-grant token exchange
- *       to drive the authorization-code flow end-to-end.</li>
- * </ul>
- *
- * <p>The MockMvc + WireMock + {@code oauth2Login()} test suite under
- * {@code ../} provides equivalent coverage of the BFF behavior (RFC 9457
- * forwarding, short-circuit, token attachment, CSRF, security) without the
- * brittleness of a live OAuth2 flow.
+ * <p>Realm fixture: {@code src/test/resources/boat-app-realm.json} (Keycloak
+ * 26.6 enforces {@code <realm>-realm.json} naming on import). The fixture is
+ * a simplified mirror of {@code infra/keycloak/realm.yaml} that swaps {@code
+ * client-jwt} for {@code client-secret-basic} and enables direct access
+ * grants so we can fetch a token without driving an authorization-code flow.
+ * The full {@code private_key_jwt} dance against the real {@code
+ * boat-app-confidential} client is exercised by the Playwright E2E suite
+ * against {@code make up}.
  */
 @Testcontainers
-@Disabled("Live OAuth2 flow deferred to phase 02c1 (canonical realm.yaml). " +
-        "test-realm.json under src/test/resources/ is a test-only stand-in.")
 class KeycloakOAuthFlowIntegrationTest {
 
+    private static final String REALM = "boat-app";
+    private static final String CLIENT_ID = "boat-app-test";
+    private static final String CLIENT_SECRET = "test-secret";
+    private static final String USERNAME = "demo";
+    private static final String PASSWORD = "demo123";
+
+    /*
+     * Wait for the Quarkus "Listening on:" log line instead of the
+     * default HTTP probe on the request port. Keycloak 26 exposes
+     * `/health/*` only on the management interface (port 9000), so the
+     * library's default HttpWaitStrategy aimed at the request port
+     * (8080) times out with ECONNREFUSED — which is what makes the
+     * container appear "failed to start" even though it is healthy.
+     */
     @Container
-    static KeycloakContainer keycloak = new KeycloakContainer("quay.io/keycloak/keycloak:26.0")
-            .withRealmImportFile("/test-realm.json");
+    static KeycloakContainer keycloak = new KeycloakContainer("quay.io/keycloak/keycloak:26.6.1")
+            .withRealmImportFile("/boat-app-realm.json")
+            .waitingFor(Wait.forLogMessage(".*Listening on:.*", 1)
+                    .withStartupTimeout(Duration.ofMinutes(2)));
 
     /**
-     * Disabled placeholder for the end-to-end authorization-code flow.
-     * Implementation deferred to phase 02c1.
+     * Requests an access token via the resource-owner password grant against
+     * the realm imported from {@code boat-app-realm.json}, then parses the
+     * JWT and verifies the issuer + subject claims match what Keycloak
+     * should have minted for the seeded {@code demo} user.
+     *
+     * <p>Failure modes this catches: realm import broke (no token), wrong
+     * realm name in the URL (404 from Keycloak), Keycloak version
+     * incompatibility with the realm JSON (5xx), JWT signing pipeline broken
+     * (parse failure), claims pipeline broken (missing {@code
+     * preferred_username}).
      */
     @Test
-    void user_can_complete_authorization_code_flow() {
-        // Trivial assertion: if this test is ever accidentally enabled before
-        // the live flow is implemented, it should still fail loudly rather
-        // than silently pass with zero assertions.
-        assertThat(keycloak).isNotNull();
+    void issues_signed_jwt_with_expected_claims_for_demo_user() throws Exception {
+        String accessToken = fetchAccessTokenViaPasswordGrant();
+
+        SignedJWT jwt = SignedJWT.parse(accessToken);
+        JWTClaimsSet claims = jwt.getJWTClaimsSet();
+
+        assertThat(claims.getIssuer())
+                .isEqualTo(keycloak.getAuthServerUrl() + "/realms/" + REALM);
+        assertThat(claims.getStringClaim("preferred_username")).isEqualTo(USERNAME);
+        assertThat(claims.getStringClaim("azp")).isEqualTo(CLIENT_ID);
+        assertThat(claims.getExpirationTime()).isAfter(claims.getIssueTime());
+    }
+
+    /**
+     * POSTs to the Keycloak token endpoint with {@code grant_type=password}
+     * and returns the raw access_token string from the JSON response.
+     */
+    private String fetchAccessTokenViaPasswordGrant() throws Exception {
+        String tokenEndpoint = keycloak.getAuthServerUrl()
+                + "/realms/" + REALM + "/protocol/openid-connect/token";
+        String body = formEncode(Map.of(
+                "grant_type", "password",
+                "client_id", CLIENT_ID,
+                "client_secret", CLIENT_SECRET,
+                "username", USERNAME,
+                "password", PASSWORD));
+
+        try (HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(10))
+                .build()) {
+            HttpResponse<String> resp = client.send(
+                    HttpRequest.newBuilder()
+                            .uri(URI.create(tokenEndpoint))
+                            .header("Content-Type", "application/x-www-form-urlencoded")
+                            .timeout(Duration.ofSeconds(10))
+                            .POST(HttpRequest.BodyPublishers.ofString(body, StandardCharsets.UTF_8))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+
+            assertThat(resp.statusCode())
+                    .as("token endpoint response: %s", resp.body())
+                    .isEqualTo(200);
+            return JSONObjectUtils.parse(resp.body()).get("access_token").toString();
+        }
+    }
+
+    /**
+     * Encodes a key/value map as {@code application/x-www-form-urlencoded}
+     * with proper percent-encoding for both keys and values.
+     */
+    private static String formEncode(Map<String, String> kv) {
+        return kv.entrySet().stream()
+                .map(e -> URLEncoder.encode(e.getKey(), StandardCharsets.UTF_8)
+                        + "=" + URLEncoder.encode(e.getValue(), StandardCharsets.UTF_8))
+                .collect(Collectors.joining("&"));
     }
 }

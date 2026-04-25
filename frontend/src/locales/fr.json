@@ -52,9 +52,9 @@
         "prev": "Précédent",
         "next": "Suivant",
         "pageSize": "Bateaux par page",
-        "pageSizeOption": "{size} / page",
+        "pageSizeOption": "{'{size}'} / page",
         "summary": "Affichage de {from}–{to} sur {total}",
-        "pageOf": "Page {current} sur {total}"
+        "pageOf": "Page {'{current}'} sur {'{total}'}"
       }
     },
     "card": {

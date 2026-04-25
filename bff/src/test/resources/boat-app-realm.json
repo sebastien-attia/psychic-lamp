@@ -1,5 +1,5 @@
 {
-  "realm": "boatapp",
+  "realm": "boat-app",
   "enabled": true,
   "registrationAllowed": false,
   "resetPasswordAllowed": false,
@@ -8,18 +8,17 @@
   "accessTokenLifespan": 300,
   "clients": [
     {
-      "clientId": "bff-test",
+      "clientId": "boat-app-test",
       "enabled": true,
       "publicClient": false,
       "standardFlowEnabled": true,
       "directAccessGrantsEnabled": true,
       "serviceAccountsEnabled": false,
-      "clientAuthenticatorType": "client-jwt",
+      "clientAuthenticatorType": "client-secret",
+      "secret": "test-secret",
       "redirectUris": ["http://localhost:*/*"],
       "webOrigins": ["+"],
       "attributes": {
-        "use.jwks.url": "true",
-        "jwks.url": "http://host.testcontainers.internal:0/.well-known/jwks.json",
         "use.refresh.tokens": "true"
       },
       "protocolMappers": [
@@ -45,7 +44,7 @@
       "email": "demo@example.test",
       "firstName": "Demo",
       "lastName": "User",
-      "emailVerified": true,
+      "emailVerified": false,
       "credentials": [
         { "type": "password", "value": "demo123", "temporary": false }
       ]

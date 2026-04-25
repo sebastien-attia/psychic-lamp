@@ -52,9 +52,9 @@
         "prev": "Previous",
         "next": "Next",
         "pageSize": "Boats per page",
-        "pageSizeOption": "{size} / page",
+        "pageSizeOption": "{'{size}'} / page",
         "summary": "Showing {from}–{to} of {total}",
-        "pageOf": "Page {current} of {total}"
+        "pageOf": "Page {'{current}'} of {'{total}'}"
       }
     },
     "card": {

@@ -313,7 +313,7 @@ function refetch(): void {
       </div>
       <RouterLink
         :to="{ name: 'boats.create' }"
-        class="inline-flex items-center gap-2 rounded-md bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500"
+        class="inline-flex items-center gap-2 rounded-md bg-amber-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700"
       >
         <PlusIcon class="h-4 w-4" aria-hidden="true" />
         {{ t('boats.list.newBoat') }}

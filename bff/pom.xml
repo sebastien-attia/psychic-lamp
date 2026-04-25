@@ -31,7 +31,7 @@
 		<archunit.version>1.4.1</archunit.version>
 		<springdoc.version>2.8.13</springdoc.version>
 		<wiremock-standalone.version>3.3.1</wiremock-standalone.version>
-		<testcontainers-keycloak.version>3.7.0</testcontainers-keycloak.version>
+		<testcontainers-keycloak.version>4.2.1</testcontainers-keycloak.version>
 		<openapi-generator.version>7.11.0</openapi-generator.version>
 		<nimbus-jose-jwt.version>10.0.2</nimbus-jose-jwt.version>
 		<jacoco.version>0.8.13</jacoco.version>

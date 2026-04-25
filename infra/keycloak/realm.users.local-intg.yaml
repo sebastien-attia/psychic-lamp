@@ -14,6 +14,16 @@ realm: boat-app
 users:
   - username: demo
     enabled: true
+    # Profile fields are populated up-front so Keycloak's default
+    # `VERIFY_PROFILE` required action does not interrupt the
+    # authorization-code flow on first login. Without these, the SPA
+    # gets bounced to `/login-actions/required-action?execution=VERIFY_PROFILE`
+    # after credential entry and the E2E tests time out waiting for the
+    # `/boats` redirect.
+    firstName: Demo
+    lastName: User
+    email: demo@example.invalid
+    emailVerified: true
     credentials:
       - type: password
         value: "${DEMO_PASSWORD}"

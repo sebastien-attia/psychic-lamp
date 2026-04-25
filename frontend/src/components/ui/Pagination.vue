@@ -167,7 +167,7 @@ function onSize(e: Event): void {
           :class="[
             'min-w-[2rem] rounded-md px-2.5 py-1 text-sm font-medium',
             p === currentPage
-              ? 'bg-amber-500 text-white shadow-sm'
+              ? 'bg-amber-700 text-white shadow-sm'
               : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800',
           ]"
           @click="goTo(p)"
