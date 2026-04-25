@@ -28,3 +28,9 @@ src/services/api-client/generated/
 
 # openapi-generator-cli local config
 openapitools.json
+
+# Playwright
+/playwright/.auth/
+/playwright-report/
+/test-results/
+/blob-report/

@@ -11,6 +11,10 @@
     "type-check": "vue-tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "e2e:headed": "playwright test --headed",
+    "e2e:report": "playwright show-report",
     "generate:api": "openapi-generator-cli generate -i ../contracts/openapi.yaml -g typescript-axios -o src/services/api-client/generated --additional-properties=supportsES6=true,withSeparateModelsAndApi=true,apiPackage=api,modelPackage=models,withInterfaces=true",
     "preview": "vite preview"
   },
@@ -27,7 +31,9 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.11.2",
     "@openapitools/openapi-generator-cli": "^2.31.1",
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/forms": "^0.5.11",
     "@types/node": "^24.12.2",
     "@vitejs/plugin-vue": "^6.0.6",
