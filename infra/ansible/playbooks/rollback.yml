@@ -4,7 +4,7 @@
 # Reverts each app to its second-most-recent revision (sorted by createdTime).
 # Liquibase rollback by tag is intentionally OUT OF SCOPE for this playbook —
 # it would require a Terraform-declared "liquibase rollback" ACA Job with the
-# changelog tag captured pre-deploy. Track in a follow-up: TODO(02c3-rollback).
+# changelog tag captured pre-deploy. Track in a follow-up: see ai-scripts/02c3-ansible.md (rollback section).
 #
 # Asks for explicit "rollback" confirmation since reverting an active revision
 # is hard to undo cleanly (the new revision keeps running on the previous

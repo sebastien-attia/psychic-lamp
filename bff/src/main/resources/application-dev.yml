@@ -5,7 +5,7 @@
 # in dev (e.g. for ad-hoc debugging) against its own bff_session DB without
 # requiring Keycloak.
 #
-# TODO(02a4): DevSecurityConfig must EITHER exclude OAuth2ClientAutoConfiguration
+# Note (02a4): DevSecurityConfig must EITHER exclude OAuth2ClientAutoConfiguration
 # from the @SpringBootApplication OR provide a stub `keycloak` registration here,
 # otherwise Boot's OAuth2 client autoconfig fails fast on missing client-id.
 spring:
