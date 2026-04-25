@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
 import { boatsApi } from '../services/api'
-import { ApiProblemError } from '../services/problem-detail'
+import { ApiProblemError, ConflictError } from '../services/problem-detail'
 import type {
   BoatCreateRequest,
   BoatResponse,
@@ -127,7 +127,11 @@ export const useBoatsStore = defineStore('boats', () => {
 
   /**
    * Update an existing boat using optimistic locking. Errors propagate
-   * for the same reason as {@link createBoat}.
+   * for the same reason as {@link createBoat}, with one specialisation:
+   * a 409 response (stale `If-Match` version) is rewrapped as
+   * {@link ConflictError} so the edit page can `instanceof`-check it
+   * and render the "modified by another user — refresh" recovery flow
+   * without inspecting raw status codes.
    *
    * @param id      UUID of the boat to update.
    * @param version `version` echoed from the previous read, sent as
@@ -142,8 +146,22 @@ export const useBoatsStore = defineStore('boats', () => {
     version: number,
     payload: BoatUpdateRequest,
   ): Promise<BoatResponse> {
-    const { data } = await boatsApi.updateBoat(id, String(version), payload)
-    return data
+    try {
+      const { data } = await boatsApi.updateBoat(id, String(version), payload)
+      return data
+    } catch (e) {
+      if (e instanceof ApiProblemError && e.status === 409) {
+        throw new ConflictError({
+          type: e.type,
+          title: e.title,
+          status: e.status,
+          instance: e.instance,
+          detail: e.detail,
+          messages: e.messages,
+        })
+      }
+      throw e
+    }
   }
 
   /**

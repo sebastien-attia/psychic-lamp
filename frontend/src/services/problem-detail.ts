@@ -71,3 +71,26 @@ export class ApiProblemError extends Error {
     return this.messages.filter((m) => !m.field).map((m) => m.message)
   }
 }
+
+/**
+ * Specialised {@link ApiProblemError} thrown for HTTP 409 responses on
+ * optimistic-locking endpoints (e.g. `PUT /api/v1/boats/{id}` when the
+ * `If-Match` version is stale).
+ *
+ * Pages can `instanceof`-check `ConflictError` to render the
+ * "modified by another user — refresh" recovery flow without
+ * inspecting the raw `status` code at every call site. The store
+ * (`stores/boats.ts`) is responsible for upgrading a generic 409
+ * `ApiProblemError` to this subclass.
+ */
+export class ConflictError extends ApiProblemError {
+  /**
+   * @param problem the parsed `ProblemDetail` body — must carry
+   *                `status === 409`. The constructor does not
+   *                re-validate that; the caller (the store) does.
+   */
+  constructor(problem: ProblemDetail) {
+    super(problem)
+    this.name = 'ConflictError'
+  }
+}

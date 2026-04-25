@@ -19,10 +19,11 @@ export interface ToastEntry {
 /**
  * Default time (ms) a toast stays on screen before auto-dismissing.
  *
- * Five seconds is long enough to read a single sentence aloud, short
- * enough not to obscure subsequent user actions.
+ * Four seconds is long enough to read a single sentence aloud, short
+ * enough not to obscure subsequent user actions. Tuned to the phase
+ * 02b4 spec.
  */
-const DEFAULT_TTL_MS = 5_000
+const DEFAULT_TTL_MS = 4_000
 
 let nextId = 1
 const queue = ref<ToastEntry[]>([])
@@ -46,8 +47,36 @@ export function useToast(): {
   toasts: Ref<ToastEntry[]>
   pushToast: (toast: Omit<ToastEntry, 'id'>, ttlMs?: number) => number
   dismissToast: (id: number) => void
+  showSuccess: (message: string, ttlMs?: number) => number
+  showError: (message: string, ttlMs?: number) => number
 } {
-  return { toasts: queue, pushToast, dismissToast }
+  return { toasts: queue, pushToast, dismissToast, showSuccess, showError }
+}
+
+/**
+ * Convenience wrapper around {@link pushToast} for success / info
+ * notifications. Uses `kind: 'info'` because the toast palette only
+ * distinguishes neutral from error — a green-themed success variant
+ * would require a renderer change first.
+ *
+ * @param message already-localized text shown to the user.
+ * @param ttlMs   optional override for the auto-dismiss delay.
+ * @returns the assigned toast id.
+ */
+export function showSuccess(message: string, ttlMs?: number): number {
+  return pushToast({ kind: 'info', message }, ttlMs)
+}
+
+/**
+ * Convenience wrapper around {@link pushToast} for error
+ * notifications.
+ *
+ * @param message already-localized text shown to the user.
+ * @param ttlMs   optional override for the auto-dismiss delay.
+ * @returns the assigned toast id.
+ */
+export function showError(message: string, ttlMs?: number): number {
+  return pushToast({ kind: 'error', message }, ttlMs)
 }
 
 /**

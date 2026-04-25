@@ -7,8 +7,9 @@ import { InboxIcon, MagnifyingGlassIcon, PlusIcon } from '@heroicons/vue/24/outl
 
 import { useBoatsStore } from '../stores/boats'
 import { useDebouncedRef } from '../composables/useDebouncedRef'
+import { showError, showSuccess } from '../composables/useToast'
 import BoatCard from '../components/boats/BoatCard.vue'
-import ConfirmDialog from '../components/ConfirmDialog.vue'
+import DeleteConfirmDialog from '../components/DeleteConfirmDialog.vue'
 import Badge from '../components/ui/Badge.vue'
 import EmptyState from '../components/ui/EmptyState.vue'
 import ErrorState from '../components/ui/ErrorState.vue'
@@ -226,6 +227,7 @@ function onEdit(boat: BoatResponse): void {
 
 const dialogOpen = ref(false)
 const pendingDelete = ref<BoatResponse | null>(null)
+const deleting = ref(false)
 
 /**
  * Open the confirm dialog for a boat the user wants to delete.
@@ -236,9 +238,12 @@ function askDelete(boat: BoatResponse): void {
 }
 
 /**
- * Cancel a pending delete, dismissing the dialog.
+ * Cancel a pending delete, dismissing the dialog. No-op while a
+ * delete is already in flight (the dialog renders the spinner and
+ * disables both buttons).
  */
 function cancelDelete(): void {
+  if (deleting.value) return
   dialogOpen.value = false
   pendingDelete.value = null
 }
@@ -248,23 +253,33 @@ function cancelDelete(): void {
  * removed the last boat on a non-first page) or refetch the current
  * page so totals and the visible row reconcile with the server.
  *
- * On failure (409, 5xx, network), surface the error via the page's
- * error ref instead of leaving the user with a dismissed dialog and a
- * stale row. Auth failures (401) are swallowed by the axios
+ * The dialog stays mounted while the request is in flight so the
+ * user sees the spinner; we only close it on success / failure.
+ *
+ * On failure, surface a one-shot error toast — re-using the page's
+ * fetch `error` ref would replace the grid with the "couldn't load
+ * your boats" panel and a Retry button that retries the *fetch*, not
+ * the delete. Auth failures (401) are swallowed by the axios
  * interceptor's redirect-and-toast UX; we don't double-handle them
  * here.
  */
 async function confirmDelete(): Promise<void> {
   if (!pendingDelete.value) return
   const id = pendingDelete.value.id
-  dialogOpen.value = false
-  pendingDelete.value = null
+  deleting.value = true
   try {
     await store.deleteBoat(id)
-  } catch (e) {
-    error.value = e instanceof Error ? e : new Error(String(e))
+  } catch {
+    deleting.value = false
+    dialogOpen.value = false
+    pendingDelete.value = null
+    showError(t('errors.generic'))
     return
   }
+  deleting.value = false
+  dialogOpen.value = false
+  pendingDelete.value = null
+  showSuccess(t('boats.success.deleted'))
   // Both branches go through `runFetch` so the dedup key is primed
   // either way — a future same-key write between delete and the
   // watcher's tick can't silently skip the refetch.
@@ -393,10 +408,10 @@ function refetch(): void {
       @update:page-size="onSizeChange"
     />
 
-    <ConfirmDialog
+    <DeleteConfirmDialog
       :open="dialogOpen"
-      :title="t('boats.detail.delete')"
-      :message="pendingDelete?.name ?? ''"
+      :boat-name="pendingDelete?.name ?? ''"
+      :loading="deleting"
       @cancel="cancelDelete"
       @confirm="confirmDelete"
     />

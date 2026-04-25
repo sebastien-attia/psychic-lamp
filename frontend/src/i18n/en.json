@@ -4,6 +4,7 @@
   },
   "nav": {
     "boats": "Boats",
+    "breadcrumb": "Breadcrumb",
     "newBoat": "New boat",
     "signOut": "Sign out",
     "signingOut": "Signing out…",
@@ -59,9 +60,28 @@
       "title": "Boat details",
       "edit": "Edit",
       "delete": "Delete",
+      "loading": "Loading boat…",
       "notFound": "Boat not found."
     },
-    "edit":   { "title": "Edit boat", "submit": "Save changes" },
+    "edit": {
+      "title": "Edit boat",
+      "submit": "Save changes",
+      "conflict": {
+        "title": "This boat was modified by another user.",
+        "message": "Refresh to load the latest version, then re-apply your changes.",
+        "refresh": "Refresh"
+      }
+    },
+    "delete": {
+      "title": "Delete «{name}»?",
+      "message": "This action cannot be undone.",
+      "button": "Delete"
+    },
+    "success": {
+      "created": "Boat created.",
+      "updated": "Boat updated.",
+      "deleted": "Boat deleted."
+    },
     "fields": {
       "name": "Name",
       "description": "Description",
@@ -78,6 +98,7 @@
   "actions": {
     "cancel": "Cancel",
     "confirm": "Confirm",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "back": "Back"
   }
 }

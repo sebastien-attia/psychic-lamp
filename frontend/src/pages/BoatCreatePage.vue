@@ -3,6 +3,7 @@ import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import BoatForm from '../components/BoatForm.vue'
 import { useBoatsStore } from '../stores/boats'
+import { showSuccess } from '../composables/useToast'
 import type {
   BoatCreateRequest,
   BoatResponse,
@@ -10,8 +11,8 @@ import type {
 
 /**
  * Create-boat page. Delegates field rendering to `BoatForm`; the submit
- * handler invokes the boats store and redirects to the new boat's
- * detail page on success.
+ * handler invokes the boats store, surfaces a success toast, and
+ * redirects to the new boat's detail page on success.
  */
 const router = useRouter()
 const store = useBoatsStore()
@@ -27,15 +28,26 @@ async function submit(payload: BoatCreateRequest): Promise<BoatResponse> {
 }
 
 /**
- * `BoatForm` `@saved` handler: navigates to the new boat's detail page.
+ * `BoatForm` `@saved` handler: shows a success toast and navigates to
+ * the new boat's detail page.
  */
 function onSaved(boat: BoatResponse): void {
+  showSuccess(t('boats.success.created'))
   void router.push({ name: 'boats.detail', params: { id: boat.id } })
+}
+
+/**
+ * `BoatForm` `@cancel` handler: returns the user to the list view.
+ * `router.back()` would also work, but a deep-link directly to
+ * `/boats/new` would otherwise reset the SPA.
+ */
+function onCancel(): void {
+  void router.push({ name: 'boats.list' })
 }
 </script>
 
 <template>
-  <section class="mx-auto max-w-2xl">
+  <section class="mx-auto max-w-xl px-4">
     <h1 class="text-2xl font-bold text-slate-900 dark:text-slate-100">
       {{ t('boats.create.title') }}
     </h1>
@@ -44,6 +56,7 @@ function onSaved(boat: BoatResponse): void {
         :submit="submit"
         :submit-label="t('boats.create.submit')"
         @saved="onSaved"
+        @cancel="onCancel"
       />
     </div>
   </section>

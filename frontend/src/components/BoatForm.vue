@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useForm } from 'vee-validate'
 import { toTypedSchema } from '@vee-validate/zod'
 import { z } from 'zod'
@@ -15,7 +15,15 @@ import type {
  * zod and surfaces server-side `ProblemDetail` findings: per-field
  * messages flow into vee-validate, global messages and unexpected
  * errors render as a top-of-form banner.
+ *
+ * Validation timing — vee-validate's defaults already match the
+ * "blur + after first submit" UX we want: blur triggers a single
+ * field validation; once `submitCount > 0`, validation switches to
+ * eager-on-input. No extra config is required.
  */
+const NAME_MAX = 64
+const DESCRIPTION_MAX = 256
+
 const props = defineProps<{
   /** Pre-fill values when editing; omitted when creating. */
   initial?: BoatResponse
@@ -33,6 +41,11 @@ const props = defineProps<{
 const emit = defineEmits<{
   /** Fired with the persisted boat after a successful save. */
   (e: 'saved', boat: BoatResponse): void
+  /**
+   * Fired when the user clicks the form's Cancel button. Pages decide
+   * what to do (typically `router.back()` or navigate to the list).
+   */
+  (e: 'cancel'): void
 }>()
 
 const { t } = useI18n()
@@ -49,10 +62,10 @@ const schema = toTypedSchema(
     name: z
       .string()
       .min(1, t('errors.required'))
-      .max(64, t('errors.tooLong', { max: 64 })),
+      .max(NAME_MAX, t('errors.tooLong', { max: NAME_MAX })),
     description: z
       .string()
-      .max(256, t('errors.tooLong', { max: 256 }))
+      .max(DESCRIPTION_MAX, t('errors.tooLong', { max: DESCRIPTION_MAX }))
       .optional()
       .or(z.literal('')),
   }),
@@ -68,6 +81,11 @@ const { handleSubmit, errors, defineField, setErrors, isSubmitting } = useForm({
 
 const [name, nameAttrs] = defineField('name')
 const [description, descriptionAttrs] = defineField('description')
+
+/** Live character count for the name input — used by the "X/64" counter. */
+const nameLength = computed(() => name.value?.length ?? 0)
+/** Live character count for the description textarea — "X/256". */
+const descriptionLength = computed(() => description.value?.length ?? 0)
 
 const onSubmit = handleSubmit(async (values) => {
   formError.value = null
@@ -105,21 +123,29 @@ const onSubmit = handleSubmit(async (values) => {
     </div>
 
     <div>
-      <label
-        for="boat-name"
-        class="block text-sm font-medium text-slate-700 dark:text-slate-200"
-      >
-        {{ t('boats.fields.name') }}
-      </label>
+      <div class="flex items-baseline justify-between">
+        <label
+          for="boat-name"
+          class="block text-sm font-medium text-slate-700 dark:text-slate-200"
+        >
+          {{ t('boats.fields.name') }}
+        </label>
+        <span
+          aria-hidden="true"
+          class="text-xs tabular-nums text-slate-500 dark:text-slate-400"
+        >
+          {{ nameLength }}/{{ NAME_MAX }}
+        </span>
+      </div>
       <input
         id="boat-name"
         v-model="name"
         v-bind="nameAttrs"
         type="text"
-        maxlength="64"
+        :maxlength="NAME_MAX"
         :aria-invalid="!!errors.name"
-        aria-describedby="boat-name-error"
-        class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-nautical-500 focus:ring-nautical-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+        :aria-describedby="errors.name ? 'boat-name-error' : undefined"
+        class="mt-1 block w-full rounded-md border-slate-300 py-2.5 shadow-sm focus:border-nautical-500 focus:ring-nautical-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
       />
       <p
         id="boat-name-error"
@@ -132,20 +158,28 @@ const onSubmit = handleSubmit(async (values) => {
     </div>
 
     <div>
-      <label
-        for="boat-description"
-        class="block text-sm font-medium text-slate-700 dark:text-slate-200"
-      >
-        {{ t('boats.fields.description') }}
-      </label>
+      <div class="flex items-baseline justify-between">
+        <label
+          for="boat-description"
+          class="block text-sm font-medium text-slate-700 dark:text-slate-200"
+        >
+          {{ t('boats.fields.description') }}
+        </label>
+        <span
+          aria-hidden="true"
+          class="text-xs tabular-nums text-slate-500 dark:text-slate-400"
+        >
+          {{ descriptionLength }}/{{ DESCRIPTION_MAX }}
+        </span>
+      </div>
       <textarea
         id="boat-description"
         v-model="description"
         v-bind="descriptionAttrs"
         rows="3"
-        maxlength="256"
+        :maxlength="DESCRIPTION_MAX"
         :aria-invalid="!!errors.description"
-        aria-describedby="boat-description-error"
+        :aria-describedby="errors.description ? 'boat-description-error' : undefined"
         class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-nautical-500 focus:ring-nautical-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
       />
       <p
@@ -158,12 +192,43 @@ const onSubmit = handleSubmit(async (values) => {
       </p>
     </div>
 
-    <div class="flex justify-end gap-2">
+    <div
+      class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end"
+    >
+      <button
+        type="button"
+        :disabled="isSubmitting"
+        class="inline-flex w-full items-center justify-center rounded-md border border-slate-300 px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 sm:w-auto dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
+        @click="emit('cancel')"
+      >
+        {{ t('actions.cancel') }}
+      </button>
       <button
         type="submit"
         :disabled="isSubmitting"
-        class="inline-flex justify-center rounded-md bg-nautical-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-nautical-700 focus:outline-none focus:ring-2 focus:ring-nautical-500 disabled:opacity-50"
+        class="inline-flex w-full items-center justify-center gap-2 rounded-md bg-nautical-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-nautical-700 focus:outline-none focus:ring-2 focus:ring-nautical-500 disabled:opacity-50 sm:w-auto"
       >
+        <svg
+          v-if="isSubmitting"
+          class="h-4 w-4 animate-spin"
+          viewBox="0 0 24 24"
+          fill="none"
+          aria-hidden="true"
+        >
+          <circle
+            class="opacity-25"
+            cx="12"
+            cy="12"
+            r="10"
+            stroke="currentColor"
+            stroke-width="4"
+          />
+          <path
+            class="opacity-75"
+            fill="currentColor"
+            d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4z"
+          />
+        </svg>
         {{ submitLabel }}
       </button>
     </div>
