@@ -1,0 +1,62 @@
+# Creates BOAT_AUDIT — an INSERT-ONLY audit trail of every boat mutation.
+# The application layer never issues UPDATE or DELETE on this table; the
+# constraint is enforced at the BoatAuditRepositoryPort (domain-side) and
+# documented here.
+databaseChangeLog:
+  - changeSet:
+      id: 003-create-boat-audit-table
+      author: boatapp
+      changes:
+        - createTable:
+            tableName: boat_audit
+            columns:
+              - column:
+                  name: id
+                  type: BIGSERIAL
+                  autoIncrement: true
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: boat_id
+                  type: UUID
+                  constraints:
+                    nullable: false
+              - column:
+                  name: action
+                  type: VARCHAR(20)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: name
+                  type: VARCHAR(64)
+              - column:
+                  name: description
+                  type: VARCHAR(256)
+              - column:
+                  name: version
+                  type: BIGINT
+              - column:
+                  name: performed_by_user_id
+                  type: UUID
+                  constraints:
+                    nullable: false
+                    foreignKeyName: fk_boat_audit_performed_by_user
+                    references: app_user(id)
+              - column:
+                  name: performed_at
+                  type: TIMESTAMP WITH TIME ZONE
+                  constraints:
+                    nullable: false
+        - createIndex:
+            indexName: ix_boat_audit_boat_id
+            tableName: boat_audit
+            columns:
+              - column:
+                  name: boat_id
+        - createIndex:
+            indexName: ix_boat_audit_performed_at
+            tableName: boat_audit
+            columns:
+              - column:
+                  name: performed_at

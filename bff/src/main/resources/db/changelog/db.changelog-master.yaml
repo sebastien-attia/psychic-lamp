@@ -1,4 +1,7 @@
-# BFF master changelog — owns the `bff_session` database (SPRING_SESSION,
-# SPRING_SESSION_ATTRIBUTES). Migration is added in step 02a2 step 5b:
-#   include: changes/001-spring-session.yaml
-databaseChangeLog: []
+# BFF master changelog — owns the `bff_session` database
+# (SPRING_SESSION, SPRING_SESSION_ATTRIBUTES). Numbering restarts at 001
+# under BFF ownership: this is a fresh, BFF-owned migration history,
+# distinct from the business-service `boatapp` changelog.
+databaseChangeLog:
+  - include:
+      file: db/changelog/changes/001-create-spring-session-tables.yaml

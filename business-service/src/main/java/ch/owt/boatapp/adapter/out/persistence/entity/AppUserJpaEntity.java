@@ -1,47 +1,68 @@
-package ch.owt.boatapp.domain.model;
+package ch.owt.boatapp.adapter.out.persistence.entity;
+
+import jakarta.persistence.Column;
+import jakarta.persistence.Entity;
+import jakarta.persistence.Id;
+import jakarta.persistence.Table;
 
 import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
- * Pure-Java domain model for an authenticated application user, synced from
- * the JWT claims (sub, preferred_username, email, given_name, family_name)
- * on every request.
+ * JPA entity mirroring the {@code APP_USER} table.
  *
- * <p>Lives in {@code domain.model} — no Spring, no Jakarta. The
- * {@code keycloakId} field stores the JWT {@code sub} claim and is the
- * upsert key.
+ * <p>Lives in {@code adapter.out.persistence.entity}. {@code keycloakId}
+ * stores the JWT {@code sub} claim and is the upsert key (UNIQUE in the
+ * database).
  */
-public class AppUser {
+@Entity
+@Table(name = "app_user")
+public class AppUserJpaEntity {
 
+    @Id
+    @Column(name = "id", nullable = false, updatable = false)
     private UUID id;
+
+    @Column(name = "keycloak_id", nullable = false, unique = true, length = 255)
     private String keycloakId;
+
+    @Column(name = "username", nullable = false, length = 255)
     private String username;
+
+    @Column(name = "email", nullable = false, length = 320)
     private String email;
+
+    @Column(name = "first_name", length = 255)
     private String firstName;
+
+    @Column(name = "last_name", length = 255)
     private String lastName;
+
+    @Column(name = "first_login", nullable = false)
     private OffsetDateTime firstLogin;
+
+    @Column(name = "last_login", nullable = false)
     private OffsetDateTime lastLogin;
 
-    /** No-arg constructor required for mutable reconstitution by mappers. */
-    public AppUser() {
+    /** No-arg constructor required by JPA. */
+    public AppUserJpaEntity() {
     }
 
     /**
-     * All-args constructor used by domain services and persistence mappers.
+     * All-args constructor for convenience in tests and adapters.
      *
-     * @param id         unique identifier (assigned by the domain on first sync)
-     * @param keycloakId JWT {@code sub} claim — the upsert key
+     * @param id         row identifier (assigned by the domain on first sync)
+     * @param keycloakId JWT {@code sub} claim — upsert key
      * @param username   {@code preferred_username} claim
      * @param email      {@code email} claim
      * @param firstName  {@code given_name} claim, may be {@code null}
      * @param lastName   {@code family_name} claim, may be {@code null}
-     * @param firstLogin timestamp of the user's first observed login
-     * @param lastLogin  timestamp of the user's most recent login
+     * @param firstLogin first-login timestamp in UTC
+     * @param lastLogin  last-login timestamp in UTC
      */
-    public AppUser(UUID id, String keycloakId, String username, String email,
-                   String firstName, String lastName,
-                   OffsetDateTime firstLogin, OffsetDateTime lastLogin) {
+    public AppUserJpaEntity(UUID id, String keycloakId, String username, String email,
+                            String firstName, String lastName,
+                            OffsetDateTime firstLogin, OffsetDateTime lastLogin) {
         this.id = id;
         this.keycloakId = keycloakId;
         this.username = username;
@@ -52,17 +73,17 @@ public class AppUser {
         this.lastLogin = lastLogin;
     }
 
-    /** @return the user's unique identifier */
+    /** @return the row identifier */
     public UUID getId() {
         return id;
     }
 
-    /** @param id the new identifier */
+    /** @param id the new row identifier */
     public void setId(UUID id) {
         this.id = id;
     }
 
-    /** @return the JWT {@code sub} claim — the upsert key */
+    /** @return the JWT {@code sub} claim */
     public String getKeycloakId() {
         return keycloakId;
     }
@@ -112,7 +133,7 @@ public class AppUser {
         this.lastName = lastName;
     }
 
-    /** @return the timestamp of the user's first observed login */
+    /** @return the first-login timestamp in UTC */
     public OffsetDateTime getFirstLogin() {
         return firstLogin;
     }
@@ -122,7 +143,7 @@ public class AppUser {
         this.firstLogin = firstLogin;
     }
 
-    /** @return the timestamp of the user's most recent login */
+    /** @return the last-login timestamp in UTC */
     public OffsetDateTime getLastLogin() {
         return lastLogin;
     }

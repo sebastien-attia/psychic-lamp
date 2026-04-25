@@ -10,7 +10,7 @@ spring:
     store-type: jdbc
     jdbc:
       # SPRING_SESSION schema is created by the BFF's own Liquibase changelog
-      # (see db/changelog/changes/001-spring-session.yaml from step 02a2).
+      # (see db/changelog/changes/001-create-spring-session-tables.yaml).
       # Keeping Spring Session from auto-initializing avoids a duplicate-create race.
       initialize-schema: never
   liquibase:
