@@ -26,6 +26,7 @@ import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.net.URI;
 import java.util.List;
@@ -229,6 +230,36 @@ public class GlobalExceptionHandler {
                 "Authentication required", detail, req);
         log.warn("401 from interceptor at {} {} — {}",
                 req.getMethod(), req.getRequestURI(), ex.getMessage());
+        return responseFor(problem, locale);
+    }
+
+    // ── 404 for stray static-resource probes (e.g. Chrome DevTools, .well-known) ─
+
+    /**
+     * Convert Spring MVC's {@link NoResourceFoundException} (raised when a
+     * request fails to match any controller and there is no matching static
+     * resource) into a clean RFC 9457 404 instead of letting it fall through
+     * to {@link #handleFallback(Exception, HttpServletRequest)} as a 500.
+     *
+     * <p>Common offender: Chromium-based browsers probe
+     * {@code /.well-known/appspecific/com.chrome.devtools.json} on every page
+     * load. Mapping it here keeps the access logs honest (no spurious 500s)
+     * and avoids flooding the error log with stack traces for what is, by
+     * definition, a routine miss.
+     *
+     * @param ex  the no-resource exception raised by Spring MVC
+     * @param req the inbound request — used for {@code instance} and logging
+     * @return RFC 9457 404 with no {@code messages}
+     */
+    @ExceptionHandler(NoResourceFoundException.class)
+    public ResponseEntity<ProblemDetail> handleNoResourceFound(
+            NoResourceFoundException ex, HttpServletRequest req) {
+        Locale locale = LocaleContextHolder.getLocale();
+        String code = "not.found.resource";
+        String detail = messageSource.getMessage(code, new Object[0], code, locale);
+        ProblemDetail problem = baseProblem(HttpStatus.NOT_FOUND, ProblemTypes.NOT_FOUND,
+                "Resource not found", detail, req);
+        log.debug("404 no static resource at {} {}", req.getMethod(), req.getRequestURI());
         return responseFor(problem, locale);
     }
 
