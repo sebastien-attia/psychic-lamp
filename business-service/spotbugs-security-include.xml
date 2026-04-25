@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  SpotBugs include filter — surface only SECURITY-category findings.
+
+  The SECURITY category is contributed by the FindSecBugs detector pack
+  loaded as a plugin in pom.xml; restricting the build gate to this
+  category keeps the signal focused on supply-chain / app-sec issues
+  and avoids style-only SpotBugs noise.
+-->
+<FindBugsFilter xmlns="https://github.com/spotbugs/filter/3.0.0">
+  <Match><Category name="SECURITY"/></Match>
+</FindBugsFilter>

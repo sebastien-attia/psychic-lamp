@@ -82,6 +82,37 @@ docker compose up
 - Business Service auth: stateless JWT Bearer token validation (spring-oauth2-resource-server)
 - dev profile: no auth at all, dummy user auto-created — for fast iteration without Keycloak
 
+## Security build gates
+
+Three layers of supply-chain tooling run on every build:
+
+- **SAST** — `spotbugs-maven-plugin` + `findsecbugs-plugin` fire during
+  `./mvnw verify` (goal `check`, `failOnError=true`). Only the
+  `SECURITY` FindBugs category is raised; OpenAPI-generated code plus
+  documented framework-noise patterns are suppressed via
+  `spotbugs-exclude-generated.xml` (each suppression carries a WHY
+  comment).
+- **SBOM** — `cyclonedx-maven-plugin` emits `target/bom.json` +
+  `target/bom.xml` on `mvn package`.
+- **SCA** — Primary scan runs in CI via the `google/osv-scanner-action`
+  GitHub Action (wired in a later phase); it fails on `HIGH` +
+  `CRITICAL` findings. Local devs can opt-in via `./mvnw -Posv verify`
+  after installing the OSV-Scanner binary.
+- **Governance** — `dependency-track-maven-plugin` uploads the
+  CycloneDX BOM to Dependency-Track on the `deploy` phase. Both modules
+  are jar-packaged with no Maven release target, so CI invokes the
+  upload goal directly:
+  ```bash
+  ./mvnw -B package dependency-track:upload-bom \
+      -Ddtrack.skip=false \
+      -Ddependency-track.url="${DTRACK_URL}" \
+      -Ddependency-track.apiKey="${DTRACK_API_KEY}"
+  ```
+  Default for local builds: `dtrack.skip=true` so a stray `mvn deploy`
+  cannot reach a server. Required GitHub repository secrets (staging +
+  prod environments only): `DTRACK_URL`, `DTRACK_API_KEY` — CI
+  translates them into the `-D` flags above.
+
 # Project conventions
 
 ## Code review policy

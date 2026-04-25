@@ -32,6 +32,14 @@
 		<springdoc.version>2.8.13</springdoc.version>
 		<openapi-generator.version>7.11.0</openapi-generator.version>
 		<jacoco.version>0.8.13</jacoco.version>
+		<!--
+		    Dependency-Track upload — defaults to a no-op for local builds.
+		    CI overrides via -Ddtrack.skip=false -Ddependency-track.url=...
+		    -Ddependency-track.apiKey=... in staging / prod environments.
+		-->
+		<dtrack.skip>true</dtrack.skip>
+		<dependency-track.url>https://dtrack.example.invalid</dependency-track.url>
+		<dependency-track.apiKey>unset</dependency-track.apiKey>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -277,7 +285,131 @@
 					</execution>
 				</executions>
 			</plugin>
+
+			<!--
+			    SpotBugs + FindSecBugs — SAST gate.
+			    Bound to `verify` (goal: check). Only the SECURITY category is
+			    surfaced (see spotbugs-security-include.xml); OpenAPI-generated
+			    classes are excluded from analysis (spotbugs-exclude-generated.xml).
+			    failOnError=true means findings fail the build.
+			-->
+			<plugin>
+				<groupId>com.github.spotbugs</groupId>
+				<artifactId>spotbugs-maven-plugin</artifactId>
+				<version>4.9.8.3</version>
+				<configuration>
+					<effort>Max</effort>
+					<threshold>Low</threshold>
+					<failOnError>true</failOnError>
+					<includeFilterFile>spotbugs-security-include.xml</includeFilterFile>
+					<excludeFilterFile>spotbugs-exclude-generated.xml</excludeFilterFile>
+					<plugins>
+						<plugin>
+							<groupId>com.h3xstream.findsecbugs</groupId>
+							<artifactId>findsecbugs-plugin</artifactId>
+							<version>1.14.0</version>
+						</plugin>
+					</plugins>
+				</configuration>
+				<executions>
+					<execution>
+						<id>spotbugs-check</id>
+						<phase>verify</phase>
+						<goals><goal>check</goal></goals>
+					</execution>
+				</executions>
+			</plugin>
+
+			<!--
+			    CycloneDX — Software Bill of Materials.
+			    Emits target/bom.json + target/bom.xml on `package` so every
+			    artifact can be traced back to its dependency graph.
+			-->
+			<plugin>
+				<groupId>org.cyclonedx</groupId>
+				<artifactId>cyclonedx-maven-plugin</artifactId>
+				<version>2.9.1</version>
+				<configuration>
+					<outputFormat>all</outputFormat>
+					<outputName>bom</outputName>
+					<schemaVersion>1.5</schemaVersion>
+					<includeBomSerialNumber>true</includeBomSerialNumber>
+					<includeLicenseText>false</includeLicenseText>
+				</configuration>
+				<executions>
+					<execution>
+						<id>make-sbom</id>
+						<phase>package</phase>
+						<goals><goal>makeAggregateBom</goal></goals>
+					</execution>
+				</executions>
+			</plugin>
+
+			<!--
+			    Dependency-Track upload — supply-chain governance.
+			    Skipped by default (dtrack.skip=true) so local `mvn deploy`
+			    does not try to contact a server. CI overrides the property
+			    plus dependency-track.url / apiKey via -D flags.
+			-->
+			<plugin>
+				<groupId>io.github.pmckeown</groupId>
+				<artifactId>dependency-track-maven-plugin</artifactId>
+				<version>1.11.0</version>
+				<configuration>
+					<dependencyTrackBaseUrl>${dependency-track.url}</dependencyTrackBaseUrl>
+					<apiKey>${dependency-track.apiKey}</apiKey>
+					<projectName>${project.artifactId}</projectName>
+					<projectVersion>${project.version}</projectVersion>
+					<bomLocation>${project.build.directory}/bom.xml</bomLocation>
+					<updateParent>true</updateParent>
+					<skip>${dtrack.skip}</skip>
+					<failOnError>true</failOnError>
+				</configuration>
+				<executions>
+					<execution>
+						<id>dtrack-upload</id>
+						<phase>deploy</phase>
+						<goals><goal>upload-bom</goal></goals>
+					</execution>
+				</executions>
+			</plugin>
 		</plugins>
 	</build>
+
+	<!--
+	    Local-only SCA convenience profile: `./mvnw -Posv verify` invokes
+	    the OSV-Scanner CLI (must be on PATH) and fails on HIGH-severity
+	    findings. Primary SCA still runs in CI via google/osv-scanner-action.
+	-->
+	<profiles>
+		<profile>
+			<id>osv</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.codehaus.mojo</groupId>
+						<artifactId>exec-maven-plugin</artifactId>
+						<version>3.5.0</version>
+						<executions>
+							<execution>
+								<id>osv-scan</id>
+								<phase>verify</phase>
+								<goals><goal>exec</goal></goals>
+								<configuration>
+									<executable>osv-scanner</executable>
+									<arguments>
+										<argument>scan</argument>
+										<argument>source</argument>
+										<argument>--fail-on-vuln=HIGH</argument>
+										<argument>${project.basedir}</argument>
+									</arguments>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
 
 </project>

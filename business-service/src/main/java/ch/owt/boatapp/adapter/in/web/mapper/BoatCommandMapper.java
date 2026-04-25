@@ -10,6 +10,7 @@ import ch.owt.boatapp.domain.port.in.GetBoatQuery;
 import ch.owt.boatapp.domain.port.in.ListBoatsQuery;
 import ch.owt.boatapp.domain.port.in.UpdateBoatCommand;
 
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -102,7 +103,9 @@ public final class BoatCommandMapper {
                 sortBy = parsedField;
             }
             if (parts.length == 2) {
-                String parsedDir = parts[1].trim().toLowerCase();
+                // Locale.ROOT keeps the lowercase deterministic across JVM
+                // locales (Turkish 'I' would otherwise become 'ı', not 'i').
+                String parsedDir = parts[1].trim().toLowerCase(Locale.ROOT);
                 if ("asc".equals(parsedDir) || "desc".equals(parsedDir)) {
                     sortDir = parsedDir;
                 }

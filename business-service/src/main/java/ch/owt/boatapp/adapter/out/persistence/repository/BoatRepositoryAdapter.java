@@ -12,6 +12,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -73,7 +74,10 @@ public class BoatRepositoryAdapter implements BoatRepositoryPort {
     }
 
     private Sort sortOf(String sortBy, String sortDir) {
-        Sort.Direction direction = "desc".equalsIgnoreCase(sortDir)
+        // Locale.ROOT-lowercase first to keep direction parsing deterministic
+        // across JVM locales (Turkish would otherwise mangle the comparison).
+        String dir = sortDir == null ? "" : sortDir.toLowerCase(Locale.ROOT);
+        Sort.Direction direction = "desc".equals(dir)
                 ? Sort.Direction.DESC
                 : Sort.Direction.ASC;
         // Always append a stable secondary sort on `id` so paging is deterministic
