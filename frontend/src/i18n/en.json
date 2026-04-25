@@ -1,0 +1,43 @@
+{
+  "app": {
+    "title": "The Boat App"
+  },
+  "nav": {
+    "boats": "Boats",
+    "newBoat": "New boat",
+    "signOut": "Sign out",
+    "toggleDarkMode": "Toggle dark mode",
+    "menu": "Menu"
+  },
+  "boats": {
+    "list": {
+      "title": "Boats",
+      "empty": "No boats yet — create your first one.",
+      "loading": "Loading boats…"
+    },
+    "create": { "title": "Create a new boat", "submit": "Create" },
+    "detail": {
+      "title": "Boat details",
+      "edit": "Edit",
+      "delete": "Delete",
+      "notFound": "Boat not found."
+    },
+    "edit":   { "title": "Edit boat", "submit": "Save changes" },
+    "fields": {
+      "name": "Name",
+      "description": "Description",
+      "createdAt": "Created at",
+      "version": "Version"
+    }
+  },
+  "errors": {
+    "generic": "Something went wrong. Please try again.",
+    "validation": "Please correct the highlighted fields.",
+    "required": "This field is required.",
+    "tooLong": "Must be at most {max} characters."
+  },
+  "actions": {
+    "cancel": "Cancel",
+    "confirm": "Confirm"
+  }
+}
