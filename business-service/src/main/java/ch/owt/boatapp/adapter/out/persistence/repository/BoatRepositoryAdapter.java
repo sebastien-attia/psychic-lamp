@@ -58,7 +58,12 @@ public class BoatRepositoryAdapter implements BoatRepositoryPort {
 
     @Override
     public Boat save(Boat boat) {
-        BoatJpaEntity persisted = jpaRepository.save(mapper.toJpaEntity(boat));
+        // saveAndFlush (vs save) so Hibernate increments @Version *before*
+        // we map back to the immutable domain record. Otherwise the merged
+        // entity returned by save() carries the pre-flush version, the
+        // controller serializes that into the ETag header, and the next
+        // PUT (using that ETag as If-Match) would deterministically conflict.
+        BoatJpaEntity persisted = jpaRepository.saveAndFlush(mapper.toJpaEntity(boat));
         return mapper.toDomain(persisted);
     }
 

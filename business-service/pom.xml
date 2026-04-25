@@ -28,9 +28,10 @@
 	</scm>
 	<properties>
 		<java.version>25</java.version>
-		<archunit.version>1.3.0</archunit.version>
+		<archunit.version>1.4.1</archunit.version>
 		<springdoc.version>2.8.13</springdoc.version>
 		<openapi-generator.version>7.11.0</openapi-generator.version>
+		<jacoco.version>0.8.13</jacoco.version>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -250,6 +251,29 @@
 								</path>
 							</annotationProcessorPaths>
 						</configuration>
+					</execution>
+				</executions>
+			</plugin>
+
+			<!--
+			    JaCoCo — code coverage agent + report. Attached to `verify` so
+			    `./mvnw verify` produces target/site/jacoco/index.html.
+			    No coverage thresholds enforced in this phase; the gate only
+			    checks the plugin is declared.
+			-->
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+				<version>${jacoco.version}</version>
+				<executions>
+					<execution>
+						<id>prepare-agent</id>
+						<goals><goal>prepare-agent</goal></goals>
+					</execution>
+					<execution>
+						<id>report</id>
+						<phase>verify</phase>
+						<goals><goal>report</goal></goals>
 					</execution>
 				</executions>
 			</plugin>
