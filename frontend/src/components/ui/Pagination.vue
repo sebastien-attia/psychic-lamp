@@ -82,9 +82,14 @@ const pages = computed<(number | 'gap')[]>(() => {
   const out: (number | 'gap')[] = [0]
   const start = Math.max(1, current - WINDOW_RADIUS)
   const end = Math.min(total - 2, current + WINDOW_RADIUS)
-  if (start > 1) out.push('gap')
+  // Only emit a gap if it would skip ≥ 2 numbers — collapsing a
+  // single missing page into "…" looks like a bug, so we render it
+  // inline instead.
+  if (start > 2) out.push('gap')
+  else for (let i = 1; i < start; i++) out.push(i)
   for (let i = start; i <= end; i++) out.push(i)
-  if (end < total - 2) out.push('gap')
+  if (end < total - 3) out.push('gap')
+  else for (let i = end + 1; i < total - 1; i++) out.push(i)
   out.push(total - 1)
   return out
 })

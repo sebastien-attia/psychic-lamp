@@ -265,15 +265,15 @@ async function confirmDelete(): Promise<void> {
     error.value = e instanceof Error ? e : new Error(String(e))
     return
   }
-  if (boats.value.length === 1 && queryState.value.page > 0) {
-    pushQuery({
-      page: queryState.value.page - 1,
-      size: queryState.value.size,
-      search: queryState.value.search,
-    })
-  } else {
-    void runFetch(queryState.value)
-  }
+  // Both branches go through `runFetch` so the dedup key is primed
+  // either way — a future same-key write between delete and the
+  // watcher's tick can't silently skip the refetch.
+  const next =
+    boats.value.length === 1 && queryState.value.page > 0
+      ? { ...queryState.value, page: queryState.value.page - 1 }
+      : queryState.value
+  pushQuery(next)
+  void runFetch(next)
 }
 
 /**
