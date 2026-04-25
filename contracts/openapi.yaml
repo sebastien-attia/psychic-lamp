@@ -1,0 +1,790 @@
+openapi: 3.0.3
+info:
+  title: Boat App API
+  version: 1.0.0
+  description: |
+    REST API for **The Boat App** — a fleet-management application for
+    authenticated users.
+
+    ## Architecture
+
+    From the browser's perspective the API is same-origin behind the BFF
+    (`http://localhost:8080`) and the session cookie is sent automatically.
+    The BFF proxies `/api/v1/**` to the Business Service (`:8081`),
+    forwarding the OAuth2 access token as a Bearer header on the internal
+    hop. That hop is **not** part of this contract, which is why no
+    `securitySchemes` are declared here.
+
+    ## Errors
+
+    All non-2xx responses follow **RFC 9457 — Problem Details for HTTP
+    APIs** (which obsoletes RFC 7807). Errors use the
+    `application/problem+json` media type, share the single
+    `ProblemDetail` schema, and carry a stable `type` URI from the
+    registry on `ProblemDetail`. Multi-error problems (Bean Validation,
+    domain-rule failures) are surfaced through the `messages[]` extension
+    member rather than a separate envelope.
+
+    ## Authentication
+
+    All endpoints require an authenticated session. The BFF performs the
+    OAuth2 Authorization-Code flow against Keycloak and stores the
+    OidcUser in an HttpOnly `JSESSIONID` cookie; the browser sends this
+    cookie automatically. There is no Bearer scheme on this contract.
+
+servers:
+  - url: http://localhost:8080
+    description: Local BFF (proxies `/api/v1/**` to the Business Service on :8081).
+
+tags:
+  - name: BusinessService
+    description: |
+      Endpoints hosted by the Business Service and proxied transparently
+      by the BFF. Drives the generated `BusinessServiceApi` (server) and
+      `BusinessServiceClient` (BFF outbound) interfaces.
+  - name: User
+    description: |
+      BFF-only endpoints that read from the OAuth2 session. Not proxied
+      to the Business Service and not generated into the BFF outbound
+      client; emitted only into the frontend TypeScript client.
+
+paths:
+
+  /api/v1/boats:
+    get:
+      tags: [BusinessService]
+      operationId: listBoats
+      summary: List boats (paginated, optional search)
+      description: |
+        Returns a page of boats owned/visible to the authenticated user.
+        Requires an authenticated session.
+      parameters:
+        - $ref: '#/components/parameters/PageParam'
+        - $ref: '#/components/parameters/SizeParam'
+        - $ref: '#/components/parameters/SortParam'
+        - $ref: '#/components/parameters/SearchParam'
+      responses:
+        '200':
+          description: Page of boats.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PageBoatResponse'
+              example:
+                content:
+                  - id: 11111111-1111-1111-1111-111111111111
+                    name: Black Pearl
+                    description: Captain Jack's flagship.
+                    createdAt: '2026-04-22T14:30:00Z'
+                    version: 0
+                  - id: 22222222-2222-2222-2222-222222222222
+                    name: Flying Dutchman
+                    description: null
+                    createdAt: '2026-04-23T09:15:00Z'
+                    version: 2
+                totalElements: 2
+                totalPages: 1
+                size: 10
+                number: 0
+                first: true
+                last: true
+                empty: false
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+    post:
+      tags: [BusinessService]
+      operationId: createBoat
+      summary: Create a new boat
+      description: |
+        Creates a boat owned by the authenticated user. Returns 201 with
+        a `Location` header pointing at the new resource and an `ETag`
+        header carrying the initial version. Requires an authenticated
+        session.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BoatCreateRequest'
+            example:
+              name: Black Pearl
+              description: Captain Jack's flagship.
+      responses:
+        '201':
+          description: Boat created.
+          headers:
+            Location:
+              $ref: '#/components/headers/Location'
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoatResponse'
+              example:
+                id: 11111111-1111-1111-1111-111111111111
+                name: Black Pearl
+                description: Captain Jack's flagship.
+                createdAt: '2026-04-22T14:30:00Z'
+                version: 0
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/v1/boats/{id}:
+    get:
+      tags: [BusinessService]
+      operationId: getBoat
+      summary: Get a boat by id
+      description: |
+        Returns the boat with the given UUID. The response carries an
+        `ETag` header whose value is the current `version`; clients send
+        it back as `If-Match` on subsequent updates. Requires an
+        authenticated session.
+      parameters:
+        - $ref: '#/components/parameters/BoatIdParam'
+      responses:
+        '200':
+          description: Boat found.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoatResponse'
+              example:
+                id: 11111111-1111-1111-1111-111111111111
+                name: Black Pearl
+                description: Captain Jack's flagship.
+                createdAt: '2026-04-22T14:30:00Z'
+                version: 3
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+    put:
+      tags: [BusinessService]
+      operationId: updateBoat
+      summary: Update an existing boat
+      description: |
+        Updates the boat with the given UUID. The client MUST send the
+        current `version` in the `If-Match` header — the server returns
+        `409 Conflict` on version mismatch and `428 Precondition
+        Required` if the header is missing. Requires an authenticated
+        session.
+      parameters:
+        - $ref: '#/components/parameters/BoatIdParam'
+        - $ref: '#/components/parameters/IfMatchHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BoatUpdateRequest'
+            example:
+              name: Black Pearl
+              description: Refurbished after the Tortuga incident.
+      responses:
+        '200':
+          description: Boat updated.
+          headers:
+            ETag:
+              $ref: '#/components/headers/ETag'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoatResponse'
+              example:
+                id: 11111111-1111-1111-1111-111111111111
+                name: Black Pearl
+                description: Refurbished after the Tortuga incident.
+                createdAt: '2026-04-22T14:30:00Z'
+                version: 4
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '428': { $ref: '#/components/responses/PreconditionRequired' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+    delete:
+      tags: [BusinessService]
+      operationId: deleteBoat
+      summary: Delete a boat
+      description: |
+        Deletes the boat with the given UUID. Requires an authenticated
+        session.
+      parameters:
+        - $ref: '#/components/parameters/BoatIdParam'
+      responses:
+        '204':
+          description: Boat deleted.
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/me:
+    get:
+      tags: [User]
+      operationId: getCurrentUser
+      summary: Current authenticated user's profile
+      description: |
+        Returns the profile of the authenticated user, read from the
+        BFF's OAuth2 session (`OidcUser`). In the `dev` profile (no
+        Keycloak), returns the dummy dev user. This endpoint is hosted
+        by the BFF and is **not** proxied to the Business Service.
+        Requires an authenticated session.
+      responses:
+        '200':
+          description: Current user profile.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfoResponse'
+              example:
+                id: 99999999-9999-9999-9999-999999999999
+                username: jsparrow
+                email: jack.sparrow@example.com
+                firstName: Jack
+                lastName: Sparrow
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+components:
+
+  parameters:
+    PageParam:
+      name: page
+      in: query
+      required: false
+      description: Zero-based page index.
+      schema:
+        type: integer
+        format: int32
+        default: 0
+        minimum: 0
+        example: 0
+    SizeParam:
+      name: size
+      in: query
+      required: false
+      description: Page size (1..100).
+      schema:
+        type: integer
+        format: int32
+        default: 10
+        minimum: 1
+        maximum: 100
+        example: 10
+    SortParam:
+      name: sort
+      in: query
+      required: false
+      description: |
+        Sort directive in Spring Data form `<field>,<asc|desc>`,
+        defaults to `createdAt,desc`.
+      schema:
+        type: string
+        default: createdAt,desc
+        example: createdAt,desc
+    SearchParam:
+      name: search
+      in: query
+      required: false
+      description: Free-text filter applied to `name` and `description`.
+      schema:
+        type: string
+        example: pearl
+    BoatIdParam:
+      name: id
+      in: path
+      required: true
+      description: Boat identifier (UUID).
+      schema:
+        type: string
+        format: uuid
+        example: 11111111-1111-1111-1111-111111111111
+    IfMatchHeader:
+      name: If-Match
+      in: header
+      required: true
+      description: |
+        Current `version` of the boat for optimistic locking. Clients
+        copy the value from the `ETag` header of the previous GET.
+
+        By convention this contract uses the **bare integer version**
+        (e.g. `3`) rather than the RFC 7232 quoted entity-tag form
+        (`"3"`). The Business Service parses it as `Long`. Both the
+        `ETag` response header and the `If-Match` request header use
+        the same bare-integer form so the round-trip is symmetric.
+      schema:
+        type: string
+        example: '3'
+
+  headers:
+    ETag:
+      description: |
+        Entity tag carrying the current `version` of the boat. Clients
+        echo this value in `If-Match` on the next PUT.
+      schema:
+        type: string
+        example: '3'
+    Location:
+      description: |
+        Relative URI of the newly created boat
+        (e.g. `/api/v1/boats/{uuid}`).
+      schema:
+        type: string
+        format: uri-reference
+        example: /api/v1/boats/11111111-1111-1111-1111-111111111111
+    ContentLanguage:
+      description: |
+        Language of the human-readable parts of the response
+        (`detail`, `messages[].message`). Negotiated against the
+        request's `Accept-Language` header.
+      schema:
+        type: string
+        example: en
+
+  responses:
+
+    BadRequest:
+      description: |
+        Syntactic validation failure or malformed JSON. Body follows
+        RFC 9457; `messages[]` lists each offending field.
+      headers:
+        Content-Language:
+          $ref: '#/components/headers/ContentLanguage'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+          examples:
+            syntactic-validation:
+              summary: Bean Validation failure on POST /api/v1/boats
+              value:
+                type: https://boatapp.owt.ch/problems/validation
+                title: Request validation failed
+                status: 400
+                detail: One or more fields failed validation.
+                instance: /api/v1/boats
+                messages:
+                  - severity: ERROR
+                    code: field.required
+                    field: name
+                    message: name is required
+                  - severity: ERROR
+                    code: field.size.invalid
+                    field: description
+                    message: description must be at most 256 characters
+
+    Unauthorized:
+      description: |
+        Session expired or absent. The browser should redirect the user
+        to the BFF's OAuth2 login endpoint.
+      headers:
+        Content-Language:
+          $ref: '#/components/headers/ContentLanguage'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+          example:
+            type: https://boatapp.owt.ch/problems/auth-required
+            title: Authentication required
+            status: 401
+            detail: No authenticated session — log in via the BFF.
+            instance: /api/v1/boats
+
+    NotFound:
+      description: Boat not found.
+      headers:
+        Content-Language:
+          $ref: '#/components/headers/ContentLanguage'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+          example:
+            type: https://boatapp.owt.ch/problems/not-found
+            title: Boat not found
+            status: 404
+            detail: No boat exists with id 11111111-1111-1111-1111-111111111111.
+            instance: /api/v1/boats/11111111-1111-1111-1111-111111111111
+
+    Conflict:
+      description: |
+        Optimistic-locking conflict — the supplied `If-Match` version
+        does not match the current `version` on the server.
+      headers:
+        Content-Language:
+          $ref: '#/components/headers/ContentLanguage'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+          example:
+            type: https://boatapp.owt.ch/problems/concurrency-conflict
+            title: Concurrent modification
+            status: 409
+            detail: The boat was modified by another request — reload and retry.
+            instance: /api/v1/boats/11111111-1111-1111-1111-111111111111
+
+    UnprocessableEntity:
+      description: |
+        Semantic / business-rule failure. Body follows RFC 9457;
+        `messages[]` lists each violated rule.
+      headers:
+        Content-Language:
+          $ref: '#/components/headers/ContentLanguage'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+          examples:
+            semantic-validation:
+              summary: Domain-rule failure on POST /api/v1/boats
+              value:
+                type: https://boatapp.owt.ch/problems/validation
+                title: Business rule violated
+                status: 422
+                detail: One or more domain rules were violated.
+                instance: /api/v1/boats
+                messages:
+                  - severity: ERROR
+                    code: boat.name.duplicate
+                    field: name
+                    message: A boat with this name already exists.
+
+    PreconditionRequired:
+      description: |
+        `If-Match` header missing on a write that requires optimistic
+        locking.
+      headers:
+        Content-Language:
+          $ref: '#/components/headers/ContentLanguage'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+          example:
+            type: https://boatapp.owt.ch/problems/precondition-required
+            title: If-Match header required
+            status: 428
+            detail: PUT requires an If-Match header carrying the current version.
+            instance: /api/v1/boats/11111111-1111-1111-1111-111111111111
+
+    InternalServerError:
+      description: Unexpected server-side error.
+      headers:
+        Content-Language:
+          $ref: '#/components/headers/ContentLanguage'
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetail'
+          example:
+            type: https://boatapp.owt.ch/problems/internal
+            title: Internal server error
+            status: 500
+            detail: An unexpected error occurred — see server logs for details.
+            instance: /api/v1/boats
+
+  schemas:
+
+    BoatResponse:
+      type: object
+      description: A boat as returned by the API.
+      required: [id, name, createdAt, version]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique identifier, generated server-side.
+          example: 11111111-1111-1111-1111-111111111111
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Boat name (1..64 characters).
+          example: Black Pearl
+        description:
+          type: string
+          nullable: true
+          maxLength: 256
+          description: Optional free-text description (≤256 characters).
+          example: Captain Jack's flagship.
+        createdAt:
+          type: string
+          format: date-time
+          description: Creation timestamp in UTC (ISO 8601).
+          example: 2026-04-22T14:30:00Z
+        version:
+          type: integer
+          format: int64
+          description: |
+            Optimistic-locking version. Echoed in the `ETag` response
+            header; clients send it back via `If-Match` on PUT.
+          example: 3
+
+    BoatCreateRequest:
+      type: object
+      description: Payload for `POST /api/v1/boats`.
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Boat name (1..64 characters).
+          example: Black Pearl
+        description:
+          type: string
+          nullable: true
+          maxLength: 256
+          description: Optional description (≤256 characters).
+          example: Captain Jack's flagship.
+
+    BoatUpdateRequest:
+      type: object
+      description: Payload for `PUT /api/v1/boats/{id}`.
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Boat name (1..64 characters).
+          example: Black Pearl
+        description:
+          type: string
+          nullable: true
+          maxLength: 256
+          description: Optional description (≤256 characters).
+          example: Refurbished after the Tortuga incident.
+
+    PageBoatResponse:
+      type: object
+      description: |
+        Paginated wrapper around `BoatResponse[]`. Mirrors the subset of
+        Spring Data's `Page` we expose to the frontend.
+      required: [content, totalElements, totalPages, size, number, first, last, empty]
+      properties:
+        content:
+          type: array
+          description: Boats on the current page.
+          items:
+            $ref: '#/components/schemas/BoatResponse'
+        totalElements:
+          type: integer
+          format: int64
+          description: Total number of boats across all pages.
+          example: 42
+        totalPages:
+          type: integer
+          format: int32
+          description: Total number of pages.
+          example: 5
+        size:
+          type: integer
+          format: int32
+          description: Page size used to compute the response.
+          example: 10
+        number:
+          type: integer
+          format: int32
+          description: Zero-based index of the current page.
+          example: 0
+        first:
+          type: boolean
+          description: True if this is the first page.
+          example: true
+        last:
+          type: boolean
+          description: True if this is the last page.
+          example: false
+        empty:
+          type: boolean
+          description: True if this page contains no elements.
+          example: false
+
+    Severity:
+      type: string
+      description: |
+        Severity of a `ValidationMessageResponse`. Aligned with the
+        domain enum so no mapper bridge is needed between the generated
+        DTOs and the domain.
+      enum:
+        - ERROR
+        - WARNING
+        - INFO
+      example: ERROR
+
+    ValidationMessageResponse:
+      type: object
+      description: |
+        A single validation finding inside `ProblemDetail.messages`.
+        Used for both syntactic (HTTP 400) and semantic (HTTP 422)
+        failures, and reserved for future WARNING/INFO surfacing on 2xx
+        responses.
+      required: [severity, code, message]
+      properties:
+        severity:
+          allOf:
+            - $ref: '#/components/schemas/Severity'
+          description: |
+            Severity of this finding. Always `ERROR` for HTTP 400 and
+            422 responses; reserved for `WARNING` / `INFO` on future
+            2xx advisory responses.
+        code:
+          type: string
+          description: |
+            Stable, machine-readable application code (e.g.
+            `field.required`, `field.size.invalid`,
+            `boat.name.duplicate`, `request.body.malformed`,
+            `internal.error`). MUST NOT leak Jakarta constraint names
+            like `NotBlank` or `Size`.
+          example: field.required
+        field:
+          type: string
+          nullable: true
+          description: |
+            JSON pointer or dotted path to the offending field
+            (e.g. `name`, `lines[2].quantity`). Omitted for global
+            errors.
+          example: name
+        message:
+          type: string
+          description: |
+            Human-readable, localized message — content negotiated
+            against the request's `Accept-Language` header.
+          example: name is required
+
+    ProblemDetail:
+      type: object
+      description: |
+        **RFC 9457 — Problem Details for HTTP APIs** (obsoletes RFC
+        7807). The single error shape returned by every non-2xx
+        response on this contract, served as
+        `application/problem+json`.
+
+        ### Problem-type URI registry (authoritative)
+
+        | Status | `type` URI                                                | Trigger                                  |
+        |--------|-----------------------------------------------------------|------------------------------------------|
+        | 400    | `https://boatapp.owt.ch/problems/validation`              | Bean Validation or malformed JSON        |
+        | 401    | `https://boatapp.owt.ch/problems/auth-required`           | No / expired session                     |
+        | 404    | `https://boatapp.owt.ch/problems/not-found`               | `BoatNotFoundException`                  |
+        | 409    | `https://boatapp.owt.ch/problems/concurrency-conflict`    | `OptimisticLockException`                |
+        | 422    | `https://boatapp.owt.ch/problems/validation`              | `ValidationFailureException` (domain)    |
+        | 428    | `https://boatapp.owt.ch/problems/precondition-required`   | Missing `If-Match` header                |
+        | 500    | `https://boatapp.owt.ch/problems/internal`                | Fallback `Exception`                     |
+        | 502    | `https://boatapp.owt.ch/problems/upstream-failure`        | BFF only — 5xx from Business Service     |
+
+        `type` MUST be drawn from this registry; the RFC 9457 default
+        placeholder is never used because every response carries the
+        `instance` extension member (per RFC 9457 §4.1).
+
+        ### `messages[]` extension
+
+        `messages[]` is an RFC 9457 §4.1 extension member used to
+        surface multiple validation findings:
+
+        - HTTP **400** — populated with one `ERROR` entry per offending
+          field from Bean Validation / JSON parsing.
+        - HTTP **422** — populated with one `ERROR` entry per violated
+          domain rule.
+        - **`success-with-warnings` (2xx)** — reserved: future
+          endpoints may include `messages[]` with `WARNING` or `INFO`
+          entries on a 2xx response to surface non-fatal advisories
+          (e.g. soft deprecations) without changing the response shape.
+
+      required: [type, title, status, instance]
+      properties:
+        type:
+          type: string
+          format: uri
+          description: |
+            Stable URI identifying the problem category. Drawn from the
+            registry above; the RFC 9457 default placeholder is never
+            used.
+          example: https://boatapp.owt.ch/problems/validation
+        title:
+          type: string
+          description: |
+            Short, human-readable summary, stable across occurrences of
+            the same `type`.
+          example: Request validation failed
+        status:
+          type: integer
+          format: int32
+          description: HTTP status code, mirrored in the response.
+          example: 400
+        detail:
+          type: string
+          nullable: true
+          description: |
+            Occurrence-specific human-readable explanation; safe to
+            localize against `Accept-Language`.
+          example: One or more fields failed validation.
+        instance:
+          type: string
+          format: uri-reference
+          description: |
+            Relative URI identifying this specific occurrence —
+            typically the request path. Declared as `uri-reference`
+            (RFC 3986) so relative paths pass strict format validation.
+          example: /api/v1/boats/11111111-1111-1111-1111-111111111111
+        messages:
+          type: array
+          description: |
+            Validation findings. Populated for HTTP 400 and 422;
+            absent (omitted from the JSON body) otherwise. See the
+            `success-with-warnings` note above for forward-looking
+            2xx use. Modeled as a non-nullable array — when there are
+            no findings the property is left out entirely (Jackson
+            `@JsonInclude(NON_NULL)`) rather than serialized as
+            `null`, so consumers only handle absent vs. populated.
+          items:
+            $ref: '#/components/schemas/ValidationMessageResponse'
+
+    UserInfoResponse:
+      type: object
+      description: |
+        Current authenticated user's profile, returned by `GET /api/me`
+        (BFF-only, read from the OAuth2 session). In the `dev` profile
+        the BFF is not started and the dummy dev user is returned by
+        the frontend dev proxy fallback.
+      required: [id, username, email, firstName, lastName]
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: |
+            `AppUser` id in the Business Service (synced from JWT
+            claims on each request); the dummy dev user's id in the
+            `dev` profile.
+          example: 99999999-9999-9999-9999-999999999999
+        username:
+          type: string
+          description: Keycloak `preferred_username` claim.
+          example: jsparrow
+        email:
+          type: string
+          description: Keycloak `email` claim.
+          example: jack.sparrow@example.com
+        firstName:
+          type: string
+          description: Keycloak `given_name` claim.
+          example: Jack
+        lastName:
+          type: string
+          description: Keycloak `family_name` claim.
+          example: Sparrow
