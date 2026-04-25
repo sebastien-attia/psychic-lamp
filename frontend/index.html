@@ -5,6 +5,37 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>The Boat App</title>
+    <!--
+      No-FOUC bootstrap: read the persisted `boatapp.theme` and
+      `boatapp.locale` cookies (with sensible fallbacks) and apply the
+      `dark` class plus the `<html lang>` synchronously, before the
+      Vue module loads. Tailwind's `darkMode: 'class'` picks the class
+      up so the very first paint is in the correct theme; assistive
+      tech sees the right `lang` from the very first frame too.
+    -->
+    <script>
+      (function () {
+        try {
+          var t = document.cookie.match(/(?:^|; )boatapp\.theme=(dark|light)/)
+          var dark = t
+            ? t[1] === 'dark'
+            : window.matchMedia('(prefers-color-scheme: dark)').matches
+          if (dark) document.documentElement.classList.add('dark')
+
+          var l = document.cookie.match(/(?:^|; )boatapp\.locale=(en|fr)/)
+          var locale = l
+            ? l[1]
+            : (navigator.language || 'en').slice(0, 2).toLowerCase()
+          if (locale === 'en' || locale === 'fr') {
+            document.documentElement.lang = locale
+          }
+        } catch (_) {
+          // Defensive: a broken cookie or matchMedia call must not
+          // block the SPA from loading. Falling through leaves the
+          // page in light mode with `lang="en"`, which is acceptable.
+        }
+      })()
+    </script>
   </head>
   <body>
     <div id="app"></div>

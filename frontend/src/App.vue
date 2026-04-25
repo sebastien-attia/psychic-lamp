@@ -17,8 +17,12 @@ import { useAuthStore } from './stores/auth'
  * - While loading, a full-screen spinner stands in for the layout so
  *   no page flashes anonymous content before the router guard has
  *   decided whether to redirect to Keycloak.
- * - Once loaded, the shared `MainLayout` wraps the matched route and
- *   the global `<Toast>` overlay is mounted so the 401 interceptor
+ * - Once loaded, the shared `MainLayout` wraps the matched route. The
+ *   `<RouterView>` is wrapped in a 150 ms cross-fade (`name="page"`)
+ *   so route changes get a small visual cushion; the fade is disabled
+ *   automatically when `prefers-reduced-motion: reduce` is set (see
+ *   `assets/main.css`).
+ * - The global `<Toast>` overlay is mounted so the 401 interceptor
  *   can surface session-expiry messages anywhere in the app.
  */
 const auth = useAuthStore()
@@ -37,6 +41,10 @@ const { t } = useI18n()
     <span>{{ t('auth.loading') }}</span>
   </div>
   <MainLayout v-else>
-    <RouterView />
+    <RouterView v-slot="{ Component }">
+      <transition name="page" mode="out-in">
+        <component :is="Component" />
+      </transition>
+    </RouterView>
   </MainLayout>
 </template>

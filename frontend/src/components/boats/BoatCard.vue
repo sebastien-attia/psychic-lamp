@@ -79,17 +79,17 @@ const relativeCreatedAt = computed(() => {
 
 <template>
   <article
-    class="relative flex flex-col rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-nautical-300 hover:shadow-md focus-within:ring-2 focus-within:ring-nautical-500 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-nautical-400"
+    class="relative flex flex-col rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-nautical-300 hover:shadow-md focus-within:ring-2 focus-within:ring-nautical-500 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-nautical-400"
   >
     <div class="flex items-start justify-between gap-2">
-      <h3 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
+      <h2 class="text-lg font-semibold text-slate-900 dark:text-slate-100">
         <RouterLink
           :to="{ name: 'boats.detail', params: { id: boat.id } }"
           class="rounded-sm focus:outline-none after:absolute after:inset-0 after:rounded-lg after:content-['']"
         >
           {{ boat.name }}
         </RouterLink>
-      </h3>
+      </h2>
       <div class="relative z-10 flex shrink-0 gap-1">
         <button
           type="button"

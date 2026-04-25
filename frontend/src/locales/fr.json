@@ -1,0 +1,111 @@
+{
+  "app": {
+    "title": "L'app des bateaux"
+  },
+  "nav": {
+    "boats": "Bateaux",
+    "breadcrumb": "Fil d'Ariane",
+    "newBoat": "Nouveau bateau",
+    "signOut": "Se déconnecter",
+    "signingOut": "Déconnexion en cours…",
+    "toggleDarkMode": "Basculer le mode sombre",
+    "menu": "Menu",
+    "skipToContent": "Aller au contenu principal",
+    "language": "Langue"
+  },
+  "locale": {
+    "en": "English",
+    "fr": "Français",
+    "selected": "sélectionné"
+  },
+  "auth": {
+    "loading": "Chargement de votre session…",
+    "sessionExpired": "Votre session a expiré. Veuillez vous reconnecter."
+  },
+  "boats": {
+    "list": {
+      "title": "Bateaux",
+      "loading": "Chargement des bateaux…",
+      "newBoat": "Nouveau bateau",
+      "count": "aucun bateau | 1 bateau | {count} bateaux",
+      "search": {
+        "label": "Rechercher des bateaux",
+        "placeholder": "Rechercher un bateau par nom ou description…",
+        "clear": "Effacer la recherche"
+      },
+      "empty": {
+        "title": "Aucun bateau dans votre flotte",
+        "message": "Ajoutez votre premier bateau pour commencer le suivi de votre flotte.",
+        "cta": "Créer votre premier bateau"
+      },
+      "noResults": {
+        "title": "Aucun bateau ne correspond à votre recherche",
+        "message": "Essayez un autre mot-clé ou effacez la recherche."
+      },
+      "error": {
+        "title": "Impossible de charger vos bateaux",
+        "message": "Vérifiez votre connexion et réessayez.",
+        "retry": "Réessayer"
+      },
+      "pagination": {
+        "nav": "Pagination",
+        "prev": "Précédent",
+        "next": "Suivant",
+        "pageSize": "Bateaux par page",
+        "pageSizeOption": "{size} / page",
+        "summary": "Affichage de {from}–{to} sur {total}",
+        "pageOf": "Page {current} sur {total}"
+      }
+    },
+    "card": {
+      "edit": "Modifier le bateau",
+      "delete": "Supprimer le bateau",
+      "createdRelative": "Créé {relative}"
+    },
+    "create": { "title": "Créer un nouveau bateau", "submit": "Créer" },
+    "detail": {
+      "title": "Détails du bateau",
+      "edit": "Modifier",
+      "delete": "Supprimer",
+      "loading": "Chargement du bateau…",
+      "notFound": "Bateau introuvable."
+    },
+    "edit": {
+      "title": "Modifier le bateau",
+      "submit": "Enregistrer les modifications",
+      "conflict": {
+        "title": "Ce bateau a été modifié par un autre utilisateur.",
+        "message": "Actualisez pour charger la dernière version, puis ré-appliquez vos changements.",
+        "refresh": "Actualiser"
+      }
+    },
+    "delete": {
+      "title": "Supprimer «{name}» ?",
+      "message": "Cette action est irréversible.",
+      "button": "Supprimer"
+    },
+    "success": {
+      "created": "Bateau créé.",
+      "updated": "Bateau mis à jour.",
+      "deleted": "Bateau supprimé."
+    },
+    "fields": {
+      "name": "Nom",
+      "description": "Description",
+      "createdAt": "Créé le",
+      "version": "Version"
+    }
+  },
+  "errors": {
+    "generic": "Une erreur est survenue. Veuillez réessayer.",
+    "validation": "Veuillez corriger les champs en surbrillance.",
+    "required": "Ce champ est obligatoire.",
+    "tooLong": "Doit contenir au maximum {max} caractères."
+  },
+  "actions": {
+    "cancel": "Annuler",
+    "confirm": "Confirmer",
+    "dismiss": "Ignorer",
+    "back": "Retour"
+  }
+}

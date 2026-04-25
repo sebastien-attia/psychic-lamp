@@ -9,7 +9,14 @@
     "signOut": "Sign out",
     "signingOut": "Signing out…",
     "toggleDarkMode": "Toggle dark mode",
-    "menu": "Menu"
+    "menu": "Menu",
+    "skipToContent": "Skip to main content",
+    "language": "Language"
+  },
+  "locale": {
+    "en": "English",
+    "fr": "Français",
+    "selected": "selected"
   },
   "auth": {
     "loading": "Loading your session…",

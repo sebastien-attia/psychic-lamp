@@ -1,3 +1,4 @@
+/// <reference types="vitest" />
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 
@@ -20,8 +21,10 @@ const DEV_DUMMY_USER = {
 }
 
 /**
- * Vite configuration with two operating modes.
+ * Vite + Vitest configuration with two operating modes for the dev
+ * server, and a single shared test config for component tests.
  *
+ * Dev server modes:
  * - `dev` (default, `npm run dev`):
  *     proxy `/api/**` → `http://localhost:8081` (Business Service, `permitAll`).
  *     `/api/me` is intercepted and answered with `DEV_DUMMY_USER`.
@@ -31,6 +34,13 @@ const DEV_DUMMY_USER = {
  *     proxy `/api,/oauth2,/login,/logout` → `http://localhost:8080` (BFF).
  *     The BFF performs the OAuth2 Authorization-Code flow, sets the
  *     session cookie, and forwards Bearer tokens to the Business Service.
+ *
+ * Test config:
+ * - `happy-dom` is faster than `jsdom` for component tests and supports
+ *   the DOM APIs the SPA actually exercises (cookies, matchMedia,
+ *   Headless UI's focus management).
+ * - `globals: true` — `describe` / `it` / `expect` / `vi` are imported
+ *   automatically; tsconfig.app.json adds the matching ambient types.
  */
 export default defineConfig(({ mode }) => {
   const isLocalIntg = mode === 'local-intg'
@@ -60,6 +70,12 @@ export default defineConfig(({ mode }) => {
               },
             },
           },
+    },
+    test: {
+      environment: 'happy-dom',
+      globals: true,
+      setupFiles: ['./src/__tests__/setup.ts'],
+      include: ['src/**/*.{test,spec}.ts'],
     },
   }
 })

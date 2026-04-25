@@ -13,3 +13,41 @@
     @apply bg-slate-900 text-slate-100;
   }
 }
+
+/*
+ * Route-change transition for the top-level <RouterView>.
+ *
+ * A 150 ms cross-fade — short enough not to feel laggy, long enough to
+ * cushion an instant route swap. No translate/slide so the transition
+ * stays subtle and does not fight the dialog/menu animations Headless
+ * UI already runs.
+ */
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 150ms ease-out;
+}
+.page-enter-from,
+.page-leave-to {
+  opacity: 0;
+}
+
+/*
+ * Honour the user's OS-level "reduced motion" preference: disable the
+ * page-fade and the button/card scale effects entirely. Headless UI
+ * primitives respect their own prop-driven transitions, but page-level
+ * decoration is the bigger offender for vestibular sensitivity.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .page-enter-active,
+  .page-leave-active {
+    transition: none;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

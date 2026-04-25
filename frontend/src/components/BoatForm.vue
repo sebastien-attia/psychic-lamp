@@ -206,7 +206,7 @@ const onSubmit = handleSubmit(async (values) => {
       <button
         type="submit"
         :disabled="isSubmitting"
-        class="inline-flex w-full items-center justify-center gap-2 rounded-md bg-nautical-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-nautical-700 focus:outline-none focus:ring-2 focus:ring-nautical-500 disabled:opacity-50 sm:w-auto"
+        class="inline-flex w-full items-center justify-center gap-2 rounded-md bg-nautical-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-transform hover:bg-nautical-700 focus:outline-none focus:ring-2 focus:ring-nautical-500 active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100 sm:w-auto"
       >
         <svg
           v-if="isSubmitting"

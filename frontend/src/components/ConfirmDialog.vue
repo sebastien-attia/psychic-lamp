@@ -123,7 +123,7 @@ function resolveConfirmClasses(tone: 'danger' | 'primary' | undefined): string {
                 type="button"
                 :disabled="loading"
                 :class="[
-                  'inline-flex w-full items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium text-white shadow-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50 sm:w-auto',
+                  'inline-flex w-full items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-transform focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100 sm:w-auto',
                   resolveConfirmClasses(tone),
                 ]"
                 @click="emit('confirm')"

@@ -2,7 +2,7 @@ import axios, { AxiosError, type AxiosInstance } from 'axios'
 import { ApiProblemError } from './problem-detail'
 import { isProblemDetail } from '../types/problem-detail'
 import { pushToast } from '../composables/useToast'
-import { i18n } from '../i18n'
+import { i18n } from '../locales'
 
 /**
  * URL the frontend redirects to when a non-bootstrap call returns 401.
@@ -51,8 +51,9 @@ let redirecting = false
  *
  * - `baseURL: ''` — same-origin requests only; the Vite dev proxy (or, in
  *   production, the BFF static handler) routes `/api/**` to the backend.
- * - `withCredentials: true` — required to send the `JSESSIONID` session
- *   cookie set by the BFF after OAuth2 login.
+ * - `withCredentials: true` — required to send the `SESSION` cookie
+ *   set by the BFF after OAuth2 login (Spring Session JDBC names the
+ *   cookie `SESSION`, not `JSESSIONID`).
  * - `xsrfCookieName` / `xsrfHeaderName` — make axios echo the BFF's CSRF
  *   cookie back as a header on mutating requests, matching Spring Security's
  *   `CookieCsrfTokenRepository` defaults.

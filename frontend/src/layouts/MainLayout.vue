@@ -9,17 +9,22 @@ import { Bars3Icon, XMarkIcon } from '@heroicons/vue/24/outline'
 import { useI18n } from 'vue-i18n'
 import UserMenu from '../components/UserMenu.vue'
 import DarkModeToggle from '../components/DarkModeToggle.vue'
+import LanguageSwitcher from '../components/LanguageSwitcher.vue'
+import SkipToContent from '../components/SkipToContent.vue'
 
 /**
  * Top-level chrome wrapping every page. Provides a responsive nav bar
  * (hamburger on mobile via Headless UI `Disclosure`), the dark-mode
- * toggle, and the user dropdown.
+ * toggle, the language switcher, and the user dropdown. The first
+ * focusable child is a `SkipToContent` link so keyboard users can jump
+ * straight to `<main id="main-content">` past the nav landmark.
  */
 const { t } = useI18n()
 </script>
 
 <template>
   <div class="min-h-screen bg-slate-50 dark:bg-slate-900">
+    <SkipToContent />
     <Disclosure as="nav" class="bg-white shadow dark:bg-slate-800" v-slot="{ open }">
       <div class="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
         <div class="flex h-16 items-center justify-between">
@@ -47,6 +52,7 @@ const { t } = useI18n()
           </div>
 
           <div class="hidden sm:flex sm:items-center sm:gap-2">
+            <LanguageSwitcher />
             <DarkModeToggle />
             <UserMenu />
           </div>
@@ -79,15 +85,22 @@ const { t } = useI18n()
           </RouterLink>
         </div>
         <div class="border-t border-slate-200 px-4 py-3 dark:border-slate-700">
-          <div class="flex items-center justify-between">
+          <div class="flex items-center justify-between gap-2">
             <UserMenu />
-            <DarkModeToggle />
+            <div class="flex items-center gap-2">
+              <LanguageSwitcher />
+              <DarkModeToggle />
+            </div>
           </div>
         </div>
       </DisclosurePanel>
     </Disclosure>
 
-    <main class="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
+    <main
+      id="main-content"
+      tabindex="-1"
+      class="mx-auto max-w-7xl px-4 py-8 focus:outline-none sm:px-6 lg:px-8"
+    >
       <slot />
     </main>
   </div>
