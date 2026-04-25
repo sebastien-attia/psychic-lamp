@@ -1,0 +1,17 @@
+---
+# Galaxy collections required by the Boat App Ansible playbooks.
+# Install with: ansible-galaxy collection install -r requirements.yml
+
+collections:
+  # Azure resource modules (azure_rm_keyvaultsecret_info, etc.).
+  - name: azure.azcollection
+    version: ">=2.4.0"
+  # PostgreSQL roles / ownership / privileges (bootstrap-db-roles.yml).
+  - name: community.postgresql
+    version: ">=3.4.0"
+  # Run keycloak-config-cli as a one-shot container, build & push images.
+  - name: community.docker
+    version: ">=3.10.0"
+  # uri / pause / assert helpers used in health-check.yml.
+  - name: ansible.posix
+    version: ">=1.5.0"

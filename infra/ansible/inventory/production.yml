@@ -1,0 +1,15 @@
+---
+# Production inventory — single localhost runner.
+#
+# Same shape as staging.yml, see that file for the runner / network model.
+# The production runner MUST live inside the production VNet's container-apps
+# subnet and have its managed identity granted `Key Vault Secrets User` via
+# Terraform's `additional_kv_consumer_principal_ids = { ansible_runner = ... }`.
+
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  vars:
+    target_env: production

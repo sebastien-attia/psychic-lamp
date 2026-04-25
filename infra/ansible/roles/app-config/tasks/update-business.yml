@@ -1,0 +1,33 @@
+---
+# Update the business-service Container App: new image tag + env vars.
+#
+# Same dual-naming scheme as update-bff.yml — see comment there. Drop the
+# duplicate set when Terraform↔Spring drift is resolved.
+
+- name: Update business-service Container App revision
+  ansible.builtin.command:
+    argv:
+      - az
+      - containerapp
+      - update
+      - --name
+      - "{{ container_app_business_service }}"
+      - --resource-group
+      - "{{ resource_group }}"
+      - --image
+      - "{{ acr_login_server }}/{{ acr_repository_business }}:{{ business_service_image_tag }}"
+      - --set-env-vars
+      - "SPRING_PROFILES_ACTIVE={{ spring_profiles_active }}"
+      - "KEYCLOAK_ISSUER_URI=https://{{ keycloak_fqdn }}/realms/{{ keycloak_realm }}"
+      # Names application-prod.yml reads:
+      - "POSTGRES_FQDN={{ postgres_fqdn }}"
+      - "BUSINESS_DB_NAME=boatapp"
+      - "BUSINESS_DB_USER=business_service"
+      - "BUSINESS_DB_PASSWORD={{ kv_secrets['business-db-password'] }}"
+      # Names matching Terraform's env block:
+      - "DATABASE_URL={{ jdbc_urls['boatapp'] }}"
+      - "DATABASE_USERNAME=business_service"
+      - "DATABASE_PASSWORD={{ kv_secrets['business-db-password'] }}"
+  register: business_update
+  changed_when: business_update.rc == 0
+  no_log: true

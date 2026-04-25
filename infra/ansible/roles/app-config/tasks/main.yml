@@ -1,0 +1,20 @@
+---
+# app-config role entrypoint.
+#
+# Reads runtime secrets from Azure Key Vault (over the private endpoint when
+# the runner is in-VNet) and updates each Container App's image and env vars.
+# Build/push of images is a separate task file invoked by the orchestrator
+# (build-and-push.yml) so callers can run image promotion without rebuilding.
+
+- name: Read application secrets from Key Vault
+  ansible.builtin.import_tasks: read-secrets.yml
+
+- name: Update bff Container App image + env
+  ansible.builtin.import_tasks: update-bff.yml
+
+- name: Update business-service Container App image + env
+  ansible.builtin.import_tasks: update-business.yml
+
+- name: Update keycloak Container App image + env
+  ansible.builtin.import_tasks: update-keycloak.yml
+  when: app_config_update_keycloak | bool

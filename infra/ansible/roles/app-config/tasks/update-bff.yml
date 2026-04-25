@@ -1,0 +1,47 @@
+---
+# Update the bff Container App: new image tag + env vars.
+#
+# Env-var naming: this task sets BOTH the names declared in Terraform's env
+# block (DATABASE_URL/USERNAME/PASSWORD) AND the names application-prod.yml
+# actually reads (POSTGRES_FQDN, BFF_DB_*). See infra/ansible/README.md for
+# the rationale (Terraform↔Spring drift). The two sets are duplicative; once
+# the drift is resolved (Terraform updated to use POSTGRES_FQDN+BFF_DB_*, or
+# application-prod.yml updated to use DATABASE_URL), drop the unused half.
+#
+# Secrets reach the container as plain env vars, NOT as Container App secrets,
+# because `az containerapp update --set-env-vars` overrides without preserving
+# Terraform's secret refs. This is acceptable because (a) the values come from
+# Key Vault every deploy, (b) no_log redacts them from Ansible logs, and
+# (c) Container Apps env vars are encrypted at rest in the platform.
+
+- name: Update bff Container App revision
+  ansible.builtin.command:
+    argv:
+      - az
+      - containerapp
+      - update
+      - --name
+      - "{{ container_app_bff }}"
+      - --resource-group
+      - "{{ resource_group }}"
+      - --image
+      - "{{ acr_login_server }}/{{ acr_repository_bff }}:{{ bff_image_tag }}"
+      - --set-env-vars
+      - "SPRING_PROFILES_ACTIVE={{ spring_profiles_active }}"
+      - "BUSINESS_SERVICE_URL={{ app_config_business_service_url }}"
+      - "KEYCLOAK_ISSUER_URI=https://{{ keycloak_fqdn }}/realms/{{ keycloak_realm }}"
+      - "KEYCLOAK_CLIENT_ID={{ keycloak_client_id }}"
+      - "BFF_SIGNING_KEY_PATH={{ bff_signing_key_path }}"
+      - "BFF_SIGNING_KEY_ID={{ bff_signing_key_id }}"
+      # Names application-prod.yml reads:
+      - "POSTGRES_FQDN={{ postgres_fqdn }}"
+      - "BFF_DB_NAME=bff_session"
+      - "BFF_DB_USER=bff"
+      - "BFF_DB_PASSWORD={{ kv_secrets['bff-db-password'] }}"
+      # Names matching Terraform's env block (kept for parity until drift is fixed):
+      - "DATABASE_URL={{ jdbc_urls['bff_session'] }}"
+      - "DATABASE_USERNAME=bff"
+      - "DATABASE_PASSWORD={{ kv_secrets['bff-db-password'] }}"
+  register: bff_update
+  changed_when: bff_update.rc == 0
+  no_log: true

@@ -1,0 +1,40 @@
+---
+# ssl-setup role.
+#
+# Binds a custom domain to the bff Container App and provisions a Container
+# Apps Managed Certificate (free, auto-renewed). business-service has internal
+# ingress only (Terraform sets external_enabled = false), so no SSL setup is
+# needed there.
+#
+# Skipped entirely unless ssl_setup_enabled is true.
+
+- name: Skip ssl-setup when disabled
+  ansible.builtin.meta: end_play
+  when: not (ssl_setup_enabled | bool)
+
+- name: Assert custom domain is configured
+  ansible.builtin.assert:
+    that:
+      - ssl_setup_bff_custom_domain | length > 0
+    fail_msg: "ssl_setup_bff_custom_domain must be set when ssl_setup_enabled is true"
+
+- name: Bind custom hostname to bff Container App (managed certificate)
+  ansible.builtin.command:
+    argv:
+      - az
+      - containerapp
+      - hostname
+      - bind
+      - --name
+      - "{{ container_app_bff }}"
+      - --resource-group
+      - "{{ resource_group }}"
+      - --hostname
+      - "{{ ssl_setup_bff_custom_domain }}"
+      - --validation-method
+      - "{{ ssl_setup_validation_method }}"
+  register: hostname_bind
+  changed_when: hostname_bind.rc == 0
+  failed_when:
+    - hostname_bind.rc != 0
+    - "'already exists' not in (hostname_bind.stderr | default(''))"

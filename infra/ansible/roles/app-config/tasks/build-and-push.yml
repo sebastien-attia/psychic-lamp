@@ -1,0 +1,43 @@
+---
+# Build and push the bff and business-service Docker images to ACR.
+#
+# Triggered by playbooks/deploy.yml under the `build,push` tags. Uses
+# `az acr login` to obtain a short-lived AAD token (no admin creds), then
+# delegates the build to `community.docker.docker_image`.
+#
+# Image tags come from {{ bff_image_tag }} / {{ business_service_image_tag }}
+# in group_vars/all.yml, which default to the IMAGE_TAG env var (or `latest`).
+# Promote a single immutable tag through both services in one deploy.
+
+- name: Log in to ACR with AAD token (no admin creds)
+  ansible.builtin.command:
+    cmd: "az acr login --name {{ acr_login_server | regex_replace('\\..*', '') }}"
+  changed_when: false
+
+- name: Build and push BFF image (3-stage Dockerfile)
+  community.docker.docker_image:
+    name: "{{ acr_login_server }}/{{ acr_repository_bff }}"
+    tag: "{{ bff_image_tag }}"
+    build:
+      # Repo root is 3 levels up from infra/ansible/playbooks/.
+      path: "{{ playbook_dir }}/../../../"
+      dockerfile: bff/Dockerfile
+      pull: true
+    source: build
+    push: true
+    force_source: true        # rebuild even if a local image exists with this tag
+
+- name: Build and push business-service image (2-stage Dockerfile)
+  community.docker.docker_image:
+    name: "{{ acr_login_server }}/{{ acr_repository_business }}"
+    tag: "{{ business_service_image_tag }}"
+    build:
+      # Build context is REPO ROOT — business-service/Dockerfile does
+      # `COPY business-service/.mvn …` so `business-service/` must sit at
+      # the context root.
+      path: "{{ playbook_dir }}/../../../"
+      dockerfile: business-service/Dockerfile
+      pull: true
+    source: build
+    push: true
+    force_source: true

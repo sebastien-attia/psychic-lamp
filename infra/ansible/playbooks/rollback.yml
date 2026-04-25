@@ -1,0 +1,105 @@
+---
+# Roll back the Boat App to its previous Container App revision.
+#
+# Reverts each app to its second-most-recent revision (sorted by createdTime).
+# Liquibase rollback by tag is intentionally OUT OF SCOPE for this playbook —
+# it would require a Terraform-declared "liquibase rollback" ACA Job with the
+# changelog tag captured pre-deploy. Track in a follow-up: TODO(02c3-rollback).
+#
+# Asks for explicit "rollback" confirmation since reverting an active revision
+# is hard to undo cleanly (the new revision keeps running on the previous
+# image with current env until the next deploy).
+
+- name: Boat App — rollback to previous revision
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_prompt:
+    - name: confirm_rollback
+      prompt: "Type 'rollback' to revert to the previous revision"
+      private: false
+  tasks:
+    - name: Abort if confirmation does not match
+      ansible.builtin.fail:
+        msg: "Rollback aborted — confirmation string did not match."
+      when: confirm_rollback != "rollback"
+
+    - name: Ensure terraform_outputs is loaded
+      when: terraform_outputs is not defined
+      block:
+        - name: Load Terraform outputs
+          ansible.builtin.command:
+            cmd: "terraform -chdir={{ playbook_dir }}/../../terraform output -json"
+          register: tf_out_local
+          changed_when: false
+
+        - name: Register terraform_outputs fact
+          ansible.builtin.set_fact:
+            terraform_outputs: "{{ tf_out_local.stdout | from_json }}"
+
+    - name: List revisions for each Container App (newest first)
+      ansible.builtin.command:
+        argv:
+          - az
+          - containerapp
+          - revision
+          - list
+          - --name
+          - "{{ item }}"
+          - --resource-group
+          - "{{ resource_group }}"
+          - --query
+          - "[].{name: name, createdTime: properties.createdTime, active: properties.active}"
+          - --output
+          - json
+      loop:
+        - "{{ container_app_bff }}"
+        - "{{ container_app_business_service }}"
+        - "{{ container_app_keycloak }}"
+      register: revs
+      changed_when: false
+
+    - name: Activate the second-most-recent revision per app
+      ansible.builtin.command:
+        argv:
+          - az
+          - containerapp
+          - revision
+          - activate
+          - --revision
+          - "{{ ((item.stdout | from_json) | sort(attribute='createdTime'))[-2].name }}"
+          - --resource-group
+          - "{{ resource_group }}"
+      loop: "{{ revs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: ((item.stdout | from_json) | length) >= 2
+      changed_when: true
+
+    - name: Deactivate the most-recent revision per app (single-revision-mode swap)
+      # Container Apps in revision_mode = "Single" (Terraform default) keep
+      # only one active revision. Activating the previous one above and then
+      # deactivating the latest converges to a single known-good state. If
+      # the platform already auto-deactivated the latest, this is a no-op.
+      ansible.builtin.command:
+        argv:
+          - az
+          - containerapp
+          - revision
+          - deactivate
+          - --revision
+          - "{{ ((item.stdout | from_json) | sort(attribute='createdTime'))[-1].name }}"
+          - --resource-group
+          - "{{ resource_group }}"
+      loop: "{{ revs.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: ((item.stdout | from_json) | length) >= 2
+      register: deactivate_result
+      changed_when: deactivate_result.rc == 0
+      failed_when:
+        - deactivate_result.rc != 0
+        - "'is not active' not in (deactivate_result.stderr | default(''))"
+
+# Re-run health checks after the activation has propagated.
+- import_playbook: health-check.yml

@@ -1,0 +1,66 @@
+---
+# Post-deploy health verification.
+#
+# Probes the externally-reachable surfaces (BFF + Keycloak) and falls back
+# to a BFF-passthrough probe for the business-service (which has internal
+# ingress only). Each probe retries with a fixed interval — close to the
+# spec's "exponential backoff" intent without compounding delays.
+
+- name: Boat App — post-deploy health checks
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Announce target env
+      ansible.builtin.debug:
+        msg: "Health-check target: {{ target_env | default('unknown') }}"
+
+    - name: Initial delay for revision to become active
+      ansible.builtin.pause:
+        seconds: "{{ healthcheck_initial_delay_seconds }}"
+
+    - name: BFF /actuator/health → UP
+      ansible.builtin.uri:
+        url: "https://{{ bff_public_fqdn }}/actuator/health"
+        return_content: true
+        status_code: 200
+      register: bff_health
+      until: (bff_health.json.status | default('')) == "UP"
+      retries: "{{ healthcheck_max_retries }}"
+      delay: "{{ healthcheck_retry_delay_seconds }}"
+
+    - name: BFF / → 200 (Vue SPA index served from bff/src/main/resources/static/)
+      ansible.builtin.uri:
+        url: "https://{{ bff_public_fqdn }}/"
+        status_code: 200
+      register: bff_index
+      until: bff_index.status == 200
+      retries: "{{ healthcheck_max_retries }}"
+      delay: "{{ healthcheck_retry_delay_seconds }}"
+
+    - name: Keycloak /health/ready → 200
+      ansible.builtin.uri:
+        url: "https://{{ keycloak_fqdn }}/health/ready"
+        status_code: 200
+      register: kc_health
+      until: kc_health.status == 200
+      retries: "{{ healthcheck_max_retries }}"
+      delay: "{{ healthcheck_retry_delay_seconds }}"
+
+    - name: Business Service health (via bff passthrough — internal ingress only)
+      ansible.builtin.uri:
+        url: "https://{{ bff_public_fqdn }}/actuator/health/business"
+        status_code: 200
+      register: bs_health
+      until: bs_health.status == 200
+      retries: "{{ healthcheck_max_retries }}"
+      delay: "{{ healthcheck_retry_delay_seconds }}"
+      ignore_errors: true       # only present if BFF exposes the proxy probe
+
+    - name: Health-check summary
+      ansible.builtin.debug:
+        msg:
+          - "BFF actuator: {{ bff_health.json.status | default('?') }}"
+          - "BFF index:    HTTP {{ bff_index.status }}"
+          - "Keycloak:     HTTP {{ kc_health.status }}"
+          - "Business:     HTTP {{ bs_health.status | default('skipped') }}"

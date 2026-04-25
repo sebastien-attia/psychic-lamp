@@ -1,0 +1,94 @@
+---
+# Apply Liquibase changelogs via Azure Container Apps Jobs.
+#
+# Two jobs run in parallel-then-poll:
+#   - liquibase_job_names.bff              → applies BFF changelog against bff_session (role bff)
+#   - liquibase_job_names.business_service → applies BS  changelog against boatapp     (role business_service)
+#
+# Keycloak is NOT migrated here — it manages its own schema at startup.
+#
+# Execution model is ACA Jobs (Terraform-declared azurerm_container_app_job),
+# NOT ACI / standalone Liquibase containers. Jobs share VNet integration,
+# private endpoint reachability, system-assigned MI, and AcrPull with the
+# long-running apps. Passwords never appear in Ansible — the job's MI pulls
+# the Key Vault secret directly per Terraform's job declaration.
+
+- name: Apply Liquibase changelogs via ACA Jobs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    jobs:
+      - { key: bff,              name: "{{ liquibase_job_names.bff }}" }
+      - { key: business_service, name: "{{ liquibase_job_names.business_service }}" }
+  tasks:
+    - name: Ensure terraform_outputs is loaded (allow standalone invocation)
+      when: terraform_outputs is not defined
+      block:
+        - name: Load Terraform outputs
+          ansible.builtin.command:
+            cmd: "terraform -chdir={{ playbook_dir }}/../../terraform output -json"
+          register: tf_out_local
+          changed_when: false
+
+        - name: Register terraform_outputs fact
+          ansible.builtin.set_fact:
+            terraform_outputs: "{{ tf_out_local.stdout | from_json }}"
+
+    # Both jobs are kicked off back-to-back (each `az containerapp job start`
+    # is a fast control-plane POST), then polled in parallel against their
+    # registered execution names.
+    - name: Start Liquibase ACA Job
+      ansible.builtin.command:
+        cmd: >-
+          az containerapp job start
+          --name {{ item.name }}
+          --resource-group {{ resource_group }}
+          --output json
+      register: job_start
+      loop: "{{ jobs }}"
+      loop_control:
+        label: "{{ item.key }} ({{ item.name }})"
+      changed_when: false       # `start` is a one-shot kick-off; idempotency is moot
+      failed_when: job_start.rc != 0
+
+    - name: Poll job execution until terminal state
+      ansible.builtin.command:
+        cmd: >-
+          az containerapp job execution show
+          --name {{ item.item.name }}
+          --resource-group {{ resource_group }}
+          --job-execution-name {{ (item.stdout | from_json).name }}
+          --output json
+      register: job_exec
+      until: (job_exec.stdout | from_json).properties.status in ['Succeeded', 'Failed', 'Degraded']
+      retries: "{{ liquibase_job_poll_retries }}"
+      delay: "{{ liquibase_job_poll_interval_seconds }}"
+      loop: "{{ job_start.results }}"
+      loop_control:
+        label: "{{ item.item.key }}"
+      changed_when: false
+
+    - name: Cache parsed Liquibase job results (key → status)
+      ansible.builtin.set_fact:
+        liquibase_results: >-
+          {{
+            dict(
+              job_exec.results
+              | map(attribute='item.item.key') | list
+              | zip(
+                job_exec.results
+                | map(attribute='stdout')
+                | map('from_json')
+                | map(attribute='properties.status')
+                | list
+              )
+            )
+          }}
+
+    - name: Fail deploy if any Liquibase job did not Succeed
+      ansible.builtin.fail:
+        msg: >-
+          Liquibase job(s) ended in non-Succeeded state: {{ liquibase_results }}
+          — see ACA Environment logs for details.
+      when: liquibase_results.values() | reject('equalto', 'Succeeded') | list | length > 0

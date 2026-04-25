@@ -1,0 +1,18 @@
+---
+# Staging inventory — single localhost runner.
+#
+# Every Ansible task in this project runs `connection: local` from a runner
+# that lives INSIDE the staging VNet (container-apps subnet), so the inventory
+# is intentionally a single host. The runner authenticates to Azure via OIDC
+# (`az login --federated-token`); no client secrets are stored here.
+#
+# Per-environment values come from group_vars/staging.yml, which references
+# Terraform outputs loaded as a fact at deploy.yml pre_tasks.
+
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  vars:
+    target_env: staging

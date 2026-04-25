@@ -1,0 +1,107 @@
+---
+# Full deployment playbook for the Boat App on Azure.
+#
+# Orchestration order (selectable via tags):
+#   1. bootstrap   — bootstrap-db-roles.yml (one-time per env, idempotent)
+#   2. build,push  — build & push bff + business-service images to ACR
+#   3. deploy      — read KV secrets, update Container App revisions
+#   4. migrate     — run Liquibase ACA Jobs (BFF → bff_session, BS → boatapp)
+#   5. deploy      — reconcile Keycloak realm via keycloak-config-cli
+#   6. verify      — health-check.yml against external + internal endpoints
+#
+# Examples:
+#   ansible-playbook -i inventory/staging.yml playbooks/deploy.yml
+#   ansible-playbook -i inventory/staging.yml playbooks/deploy.yml --tags build,push
+#   ansible-playbook -i inventory/staging.yml playbooks/deploy.yml --tags deploy,migrate
+#
+# Explicitly NOT used (these are anti-patterns for this stack):
+#   - `az container create` (ACI) — migrations run as ACA Jobs
+#   - `runner_public_ip` variable — runner must be in-VNet
+#   - `az postgres flexible-server firewall-rule create` — VNet-private only
+#
+# The runner authenticates to Azure with OIDC (`az login --federated-token`)
+# before invoking this playbook. No client secrets are stored on the runner.
+
+# ── Phase 1: pre-flight (Azure auth, Terraform outputs, VNet reachability) ─
+- name: Pre-flight — verify Azure auth and load Terraform outputs
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [always]
+  tasks:
+    - name: Verify Azure CLI is authenticated (OIDC, no stored secret)
+      ansible.builtin.command:
+        argv: [az, account, show, --output, json]
+      register: az_account
+      changed_when: false
+
+    - name: Load Terraform outputs
+      ansible.builtin.command:
+        cmd: "terraform -chdir={{ playbook_dir }}/../../terraform output -json"
+      register: tf_out
+      changed_when: false
+
+    - name: Register terraform_outputs fact (persists across subsequent plays on localhost)
+      ansible.builtin.set_fact:
+        terraform_outputs: "{{ tf_out.stdout | from_json }}"
+
+    - name: Assert required Terraform outputs are present
+      ansible.builtin.assert:
+        that:
+          - terraform_outputs.postgres_fqdn is defined
+          - terraform_outputs.liquibase_job_names is defined
+          - terraform_outputs.acr_login_server is defined
+          - terraform_outputs.keyvault_uri is defined
+          - terraform_outputs.bff_fqdn is defined
+          - terraform_outputs.keycloak_fqdn is defined
+          - terraform_outputs.resource_group_name is defined
+        fail_msg: "Required Terraform outputs missing — run `terraform apply` first."
+
+    - name: Pre-flight — Docker daemon reachable on runner
+      # Required by build-and-push.yml (docker_image) and configure-keycloak.yml
+      # (docker_container). A bare ACA-Jobs runner does NOT have Docker — see
+      # README "Runner network reachability" for the supported runner types.
+      ansible.builtin.command:
+        argv: [docker, info]
+      changed_when: false
+
+    - name: Pre-flight — runner is inside the target VNet (private FQDN resolves)
+      # We do NOT ping (ICMP is blocked on Flexible Server). Resolving the
+      # privatelink FQDN against the in-VNet DNS is the reliable signal —
+      # public DNS won't return the 10.x address.
+      ansible.builtin.command:
+        argv: [getent, hosts, "{{ terraform_outputs.postgres_fqdn.value }}"]
+      register: pg_dns
+      changed_when: false
+      failed_when: pg_dns.rc != 0
+
+# ── Phase 2: bootstrap PG roles (idempotent) ──────────────────────────────
+- import_playbook: bootstrap-db-roles.yml
+  tags: [bootstrap]
+
+# ── Phase 3: build & push images, apply app config ────────────────────────
+- name: Build images and apply app config
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tasks:
+    - name: Build and push Docker images to ACR
+      ansible.builtin.include_tasks: ../roles/app-config/tasks/build-and-push.yml
+      tags: [build, push]
+
+    - name: Apply application configuration (KV secrets → Container App revisions)
+      ansible.builtin.include_role:
+        name: app-config
+      tags: [deploy]
+
+# ── Phase 4: Liquibase migrations via ACA Jobs ────────────────────────────
+- import_playbook: run-migrations.yml
+  tags: [migrate]
+
+# ── Phase 5: reconcile Keycloak realm ─────────────────────────────────────
+- import_playbook: configure-keycloak.yml
+  tags: [deploy]
+
+# ── Phase 6: post-deploy health verification ──────────────────────────────
+- import_playbook: health-check.yml
+  tags: [verify]

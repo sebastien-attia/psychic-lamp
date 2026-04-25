@@ -1,0 +1,14 @@
+---
+# Defaults for the monitoring role.
+
+# Whether to wire Container App diagnostic settings to Log Analytics.
+monitoring_enabled: true
+
+# Diagnostic settings name (per Container App). Stable so re-applies are idempotent.
+monitoring_diagnostic_settings_name: send-to-law
+
+# Log categories to ship. ContainerAppConsoleLogs is the application stdout/stderr;
+# ContainerAppSystemLogs covers platform-level events (replica restarts, etc.).
+monitoring_log_categories:
+  - ContainerAppConsoleLogs
+  - ContainerAppSystemLogs
