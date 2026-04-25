@@ -67,9 +67,14 @@ workflows.
 ### Full local-intg stack (BFF + Keycloak + Business Service + Postgres)
 
 ```bash
-./ai-scripts/00b-generate-bff-key.sh   # one-off: writes infra/docker/keys/bff-signing-key.pem
 make up                                 # or: docker compose up
 ```
+
+The BFF needs an RSA signing key for `private_key_jwt` to Keycloak; the
+`bff-keygen` init service in `docker-compose.yml` generates it on first
+boot (idempotent — skipped on every subsequent run). For the IDE-run BFF
+case (Maven directly, no compose), use
+`./ai-scripts/00b-generate-bff-key.sh OUT=./bff/src/main/resources/keys`.
 
 App: <http://localhost:8080> · Keycloak admin: <http://localhost:8180>
 

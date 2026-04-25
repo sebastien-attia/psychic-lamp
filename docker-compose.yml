@@ -17,11 +17,25 @@
 # All host-published ports are bound to 127.0.0.1 so the local-intg stack
 # is not reachable from the LAN even if the workstation has no firewall.
 #
-# Prereq for first run (one-time):
-#   ./ai-scripts/00b-generate-bff-key.sh        # creates infra/docker/keys/bff-signing-key.pem
+# Prereq for first run: NONE for the compose path. The `bff-keygen` init
+# service below generates the BFF signing key into the `bff-signing-key`
+# named volume on first `docker compose up` and is a no-op on subsequent
+# runs (idempotent). The `bff` service reads the key from the same volume
+# (mounted read-only at /run/secrets/), so ordering is enforced by
+# `depends_on: bff-keygen { condition: service_completed_successfully }`.
+# A host bind-mount cannot be used here: Compose validates `secrets: file:`
+# sources at container-create time, which runs before bff-keygen can
+# generate the file — that's why we share via a named volume instead.
+# The standalone ai-scripts/00b-generate-bff-key.sh is still kept for the
+# IDE-run BFF case (OUT=./bff/src/main/resources/keys).
 #
 # To re-run the Postgres init script after editing it: docker compose down -v
 # (the script only runs on an empty data volume — see infra/postgres/init/01-init-dbs.sh).
+#
+# To force-regenerate the BFF signing key (e.g. after a Keycloak realm
+# wipe leaves a stale JWKS reference): `docker volume rm
+# <project>_bff-signing-key` and re-run `docker compose up`. `down -v`
+# also wipes it, but that nukes the Postgres volume too.
 services:
   postgres:
     image: postgres:17-alpine
@@ -172,6 +186,41 @@ services:
       IMPORT_VARSUBSTITUTION_SUFFIX: '}'
       DEMO_PASSWORD: ${DEMO_PASSWORD:-demo123}
 
+  # One-shot init container: generates the BFF's RSA signing key on first
+  # boot if missing, then exits. Idempotent — subsequent `docker compose up`
+  # runs see the existing PEM and skip. This is what makes the project
+  # bootable with a single `docker compose up` (no manual key-gen step).
+  # Mirrors ai-scripts/00b-generate-bff-key.sh, which is retained for the
+  # IDE-run BFF case (OUT=./bff/src/main/resources/keys).
+  bff-keygen:
+    image: alpine:3.20
+    # Defence-in-depth: this short-lived container does nothing but write
+    # one PEM into a named volume — it has no business with capabilities,
+    # privilege escalation, or anything beyond a writable /keys mount.
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    volumes:
+      - bff-signing-key:/keys
+    entrypoint: ["/bin/sh", "-c"]
+    # Mode 0644 (world-readable) is intentional: the BFF container runs as
+    # uid 1001 (`spring`) which differs from this container's root uid.
+    # The named volume preserves the file mode set here. Local-intg only —
+    # staging/prod source the key from Azure Key Vault.
+    command:
+      - |
+        set -eu
+        if [ -f /keys/bff-signing-key.pem ]; then
+          echo "▸ /keys/bff-signing-key.pem already present — skipping."
+          exit 0
+        fi
+        apk add --no-cache openssl >/dev/null
+        echo "▸ Generating RSA 2048 PKCS#8 PEM at /keys/bff-signing-key.pem..."
+        openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+          -out /keys/bff-signing-key.pem
+        chmod 0644 /keys/bff-signing-key.pem
+
   business-service:
     build:
       context: .
@@ -215,9 +264,13 @@ services:
       dockerfile: bff/Dockerfile
     ports: ["127.0.0.1:8080:8080"]
     depends_on:
-      postgres: { condition: service_healthy }
+      # bff-keygen runs to completion BEFORE this container starts, so the
+      # PEM exists in the shared `bff-signing-key` named volume by the time
+      # the read-only mount below is materialised.
+      bff-keygen:       { condition: service_completed_successfully }
+      postgres:         { condition: service_healthy }
       business-service: { condition: service_healthy }
-      keycloak: { condition: service_healthy }
+      keycloak:         { condition: service_healthy }
     # See business-service: same KEYCLOAK_ISSUER_URI = localhost:8180
     # alignment with KC_HOSTNAME, same /etc/hosts override so Spring's
     # OAuth2 client can fetch OIDC discovery from the announced issuer.
@@ -240,29 +293,26 @@ services:
       # The browser uses this URL too — single source of truth.
       KEYCLOAK_ISSUER_URI: http://keycloak.localtest.me:8180/realms/boat-app
       KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-boat-app-confidential}
-      # private_key_jwt — no shared secret. The PEM is mounted as a Docker
-      # secret and the public half is served by the BFF at
+      # private_key_jwt — no shared secret. The PEM is mounted from the
+      # `bff-signing-key` named volume (populated by the bff-keygen init
+      # service) and the public half is served by the BFF at
       # /.well-known/jwks.json for Keycloak (use.jwks.url=true on the
       # client) to fetch.
-      BFF_SIGNING_KEY_PATH: /run/secrets/bff-signing-key.pem
+      BFF_SIGNING_KEY_PATH: /var/lib/bff-keys/bff-signing-key.pem
       BFF_SIGNING_KEY_ID: ${BFF_SIGNING_KEY_ID:-bff-key-1}
-    secrets:
-      # Long-form mount: short-form `- bff-signing-key` would target
-      # `/run/secrets/bff-signing-key` (no .pem extension), which
-      # mismatches BFF_SIGNING_KEY_PATH above and crashes
-      # BffConfig.bffSigningJwk with NoSuchFileException at startup.
-      # Note: uid/gid/mode keys are Swarm-only and silently ignored
-      # by `docker compose`; the BFF container runs as `spring`
-      # (uid 1001, see bff/Dockerfile) so the host PEM must be
-      # world-readable. ai-scripts/00b-generate-bff-key.sh enforces
-      # mode 0644 on the local-intg dev key for that reason.
-      - source: bff-signing-key
-        target: bff-signing-key.pem
+    volumes:
+      # Neutral mount path — deliberately NOT /run/secrets, which is the
+      # tmpfs Compose materialises any future `secrets:` entries into.
+      # Overlaying a named volume on top of that reserved path would
+      # silently shadow real secrets the next time someone adds one.
+      # The volume is populated by the `bff-keygen` init service; the BFF
+      # container runs as uid 1001 (`spring`, see bff/Dockerfile), and
+      # bff-keygen writes the PEM mode 0644 so that uid can read it.
+      - bff-signing-key:/var/lib/bff-keys:ro
 
 volumes:
   postgres-data:
-
-secrets:
+  # Shared between bff-keygen (writer) and bff (reader). Persists across
+  # `docker compose down` so the key is generated only once. Wipe with
+  # `docker compose down -v` to force regeneration.
   bff-signing-key:
-    # Generated by ai-scripts/00b-generate-bff-key.sh (gitignored).
-    file: ./infra/docker/keys/bff-signing-key.pem

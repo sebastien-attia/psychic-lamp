@@ -298,20 +298,18 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: ./.github/actions/setup-node
-      # The compose stack mounts a BFF signing-key PEM as a Docker secret;
-      # the file is .gitignored, so CI must produce it before `docker
-      # compose up` (otherwise the bff container fails to start —
-      # see infra/docker/keys/.gitignore + bff Dockerfile comments).
-      - name: Generate BFF signing key
-        run: |
-          set -euo pipefail
-          ./ai-scripts/00b-generate-bff-key.sh
-          # Assert the key actually landed where compose expects it.
-          # Without this, a silent script failure would manifest 120s
-          # later as a generic "stack failed to come healthy" timeout.
-          test -s infra/docker/keys/bff-signing-key.pem
       - name: Start local-intg stack
+        # The BFF signing-key PEM is created by the `bff-keygen` init
+        # service inside `docker compose up` itself (idempotent). We
+        # deliberately do NOT pre-generate it here so CI exercises the
+        # exact same single-command boot path documented to end users.
         run: docker compose up -d --build
+      - name: Verify bff-keygen produced the signing key
+        # Asserts that the init container actually wrote the PEM where
+        # the BFF service expects it. Without this, a silent regression
+        # in `bff-keygen` would surface 120s later as a generic
+        # "stack failed to come healthy" timeout from the wait step.
+        run: test -s infra/docker/keys/bff-signing-key.pem
       # Both health probes have docker-side healthchecks already, but the
       # SPA test framework polls these URLs from the runner host where
       # the container healthcheck status is invisible. Poll until 200.

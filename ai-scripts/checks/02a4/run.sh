@@ -34,7 +34,7 @@ if [ -f "${KEY_PATH}" ]; then
     fail "BFF signing key perms ${perms} at ${KEY_PATH} — must be 600 or 400"
   fi
 else
-  warn "BFF signing key not present at ${KEY_PATH} (generate via 00b-generate-bff-key.sh)"
+  warn "BFF signing key not present at ${KEY_PATH} (created on first \`docker compose up\` by the bff-keygen init service; for IDE-run BFF use ai-scripts/00b-generate-bff-key.sh)"
 fi
 
 # ── Security: SecurityConfigs exist and carry the right @Profile ────────────
