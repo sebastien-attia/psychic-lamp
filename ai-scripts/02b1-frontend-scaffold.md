@@ -38,6 +38,14 @@
       so the BFF serves the SPA. In dev mode, Vite dev server proxies /api directly to Business Service.
       In local-intg mode, Vite dev server proxies /api to the BFF.
     </build>
+    <toolchain-warning>
+      `@openapitools/openapi-generator-cli` is a Node wrapper that shells out to
+      `java -jar` against the OpenAPI Generator JAR. **Any environment that runs
+      `npm run generate:api` needs a JRE on `PATH`.** This rules out chaining
+      `generate:api` from a Node-only Docker stage (e.g. `node:22-alpine`) — see
+      02c1-docker.md, which uses a dedicated `openapitools/openapi-generator-cli`
+      stage and a Java-free `build:no-codegen` script for that reason.
+    </toolchain-warning>
     <dev-vs-localintg>
       Two Vite modes:
       - dev (default, npm run dev):
@@ -86,9 +94,27 @@
       same visual cue, same do-not-edit contract). Add `src/services/api-client/generated/`
       to `frontend/.gitignore`.
 
-      npm script (package.json):
+      First create `contracts/codegen-typescript-axios.json` — the **single source of
+      truth** for the typescript-axios generator options. The same file is consumed by
+      `bff/Dockerfile`'s `ts-codegen` stage (02c1-docker.md), so the npm script and the
+      Docker build cannot drift on flags:
+
       ```json
-      "generate:api": "openapi-generator-cli generate -i ../contracts/openapi.yaml -g typescript-axios -o src/services/api-client/generated --additional-properties=supportsES6=true,withSeparateModelsAndApi=true,apiPackage=api,modelPackage=models,withInterfaces=true"
+      {
+        "generatorName": "typescript-axios",
+        "additionalProperties": {
+          "supportsES6": true,
+          "withSeparateModelsAndApi": true,
+          "apiPackage": "api",
+          "modelPackage": "models",
+          "withInterfaces": true
+        }
+      }
+      ```
+
+      npm script (package.json) — `-c` references the config above:
+      ```json
+      "generate:api": "openapi-generator-cli generate -i ../contracts/openapi.yaml -c ../contracts/codegen-typescript-axios.json -o src/services/api-client/generated"
       ```
 
       Run once after scaffold: `npm run generate:api`. Re-run whenever contracts/openapi.yaml
@@ -135,16 +161,21 @@
         "scripts": {
           "dev": "npm run generate:api && vite",
           "dev:intg": "npm run generate:api && vite --mode local-intg",
-          "build": "npm run generate:api && vue-tsc && vite build",
-          "build:intg": "npm run generate:api && vite build --mode local-intg",
+          "build": "npm run generate:api && vue-tsc --noEmit && vite build",
+          "build:intg": "npm run generate:api && vue-tsc --noEmit && vite build --mode local-intg",
+          "build:no-codegen": "vue-tsc --noEmit && vite build",
           "type-check": "vue-tsc --noEmit",
-          "generate:api": "openapi-generator-cli generate -i ../contracts/openapi.yaml -g typescript-axios -o src/services/api-client/generated --additional-properties=supportsES6=true,withSeparateModelsAndApi=true,apiPackage=api,modelPackage=models,withInterfaces=true"
+          "generate:api": "openapi-generator-cli generate -i ../contracts/openapi.yaml -c ../contracts/codegen-typescript-axios.json -o src/services/api-client/generated"
         }
       }
       ```
 
-      Note: `npm run build` (used in BFF Dockerfile) builds the SPA for production.
-      The built dist/ is copied into bff/src/main/resources/static/ by the BFF Dockerfile.
+      `build:no-codegen` skips `generate:api` and builds against an already-present
+      `src/services/api-client/generated/` tree. The BFF Dockerfile (02c1-docker.md)
+      runs codegen in a separate Java-bearing stage, copies the result in, and then
+      calls `build:no-codegen` from `node:22-alpine` — which has no JRE. **Do not
+      delete this script** even if it looks redundant locally; the Docker build
+      depends on it.
     </step>
     <step order="6">
       Configure Axios instance (src/services/http.ts):

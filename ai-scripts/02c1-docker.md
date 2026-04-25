@@ -98,11 +98,39 @@
       step 4.
     </step>
     <step order="1">
-      Create bff/Dockerfile (3-stage build — frontend + BFF):
-      - Stage 1 (frontend): node:22-alpine → npm ci → npm run build → outputs dist/
-      - Stage 2 (bff-build): eclipse-temurin:25-jdk → copy frontend dist/ to bff/src/main/resources/static/ → cd bff && ./mvnw package -DskipTests
-      - Stage 3 (runtime): eclipse-temurin:25-jre → non-root user, HEALTHCHECK on /actuator/health, JVM container flags
-      Note: BFF serves the Vue SPA as static files from resources/static/.
+      Create bff/Dockerfile (4-stage build — codegen + frontend + BFF + runtime).
+
+      **Why 4 stages, not 3.** `@openapitools/openapi-generator-cli` (used by
+      `frontend/package.json` → `generate:api`) is a thin Node wrapper that shells
+      out to `java -jar`. `node:22-alpine` has no JRE, so calling `npm run build`
+      (which chains `generate:api`) from the Node stage fails with
+      `/bin/sh: java: not found`. Splitting codegen into its own JDK-bearing stage
+      keeps the Node stage Java-free and matches the layout the verification script
+      now enforces (see ai-scripts/checks/02c1/run.sh).
+
+      - **Stage 1 (ts-codegen):** `openapitools/openapi-generator-cli:v<X>` (this
+        image already bundles Java + the generator JAR). COPY `contracts/` in,
+        run the generator driven by `contracts/codegen-typescript-axios.json`
+        (the same config consumed by `npm run generate:api` — flags live in one
+        place, no drift), output to `/out`. Pin `<X>` to the version the npm
+        wrapper auto-selects in `frontend/openapitools.json` — bumping requires
+        bumping both. `RUN` does NOT inherit the image's `ENTRYPOINT`, so call
+        `/usr/local/bin/docker-entrypoint.sh generate ...` by absolute path.
+      - **Stage 2 (frontend):** `node:22-alpine` → `npm ci` →
+        `COPY --from=ts-codegen /out/ ./src/services/api-client/generated/` →
+        `npm run build:no-codegen` (defined in 02b1; skips `generate:api`).
+        Outputs `dist/`.
+      - **Stage 3 (bff-build):** `eclipse-temurin:25-jdk` → copy frontend dist/
+        into `bff/src/main/resources/static/` → `cd bff && ./mvnw package -DskipTests`.
+      - **Stage 4 (runtime):** `eclipse-temurin:25-jre` → non-root user,
+        HEALTHCHECK on `/actuator/health`, container-aware JVM flags.
+
+      Build context = repo root (compose passes `context: .`); `frontend/`,
+      `bff/`, and `contracts/` must all be present at the context root.
+
+      DO NOT install a JRE in the Node stage to "make `npm run build` work" — that
+      fattens the stage and re-introduces the drift between npm and Docker codegen
+      flags. The codegen stage is the canonical fix.
     </step>
     <step order="2">
       Create business-service/Dockerfile (2-stage build — no frontend):
@@ -382,7 +410,7 @@
     - docker-compose.yml: local-intg with bff + business-service + postgres + keycloak (4 services)
     - docker-compose.dev.yml: business-service-dev + postgres-dev (no BFF, no Keycloak, auth bypass)
     - infra/postgres/init/01-init-dbs.sh: creates 3 DBs + 3 roles on first boot, one role per DB
-    - bff/Dockerfile: 3-stage (Node frontend build + JDK BFF build + JRE runtime)
+    - bff/Dockerfile: 4-stage (TS codegen + Node frontend build + JDK BFF build + JRE runtime)
     - business-service/Dockerfile: 2-stage (JDK build + JRE runtime)
     - BFF serves Vue SPA from resources/static/ (built in Docker)
     - Keycloak issuer URI mismatch documented (internal Docker DNS vs browser localhost)

@@ -18,6 +18,24 @@ if [ -f package.json ] && command -v npm >/dev/null; then
   fi
   run_check "npm run type-check" -- npm run type-check
   run_check "npm run build" -- npm run build
+
+  # Java-free build path: required so bff/Dockerfile can run `npm run build`
+  # from node:*-alpine after COPYing the pre-generated TS client in from a
+  # dedicated ts-codegen stage (see 02c1-docker.md step 1). Also exercised
+  # here so the script is provably wired up — not just present in package.json.
+  if grep -q '"build:no-codegen"' package.json; then
+    pass "package.json declares build:no-codegen (Docker-friendly, skips generate:api)"
+    run_check "npm run build:no-codegen" -- npm run build:no-codegen
+  else
+    fail "package.json missing 'build:no-codegen' script — bff/Dockerfile cannot build the SPA from a Java-free Node stage (see 02b1 step 5)"
+  fi
+
+  # Single-source-of-truth: generate:api must reference the shared config.
+  if grep -qE '"generate:api":.*codegen-typescript-axios\.json' package.json; then
+    pass "generate:api uses contracts/codegen-typescript-axios.json (single SoT)"
+  else
+    fail "generate:api still embeds --additional-properties literals — move them to contracts/codegen-typescript-axios.json (see 02b1 step 4)"
+  fi
 else
   fail "frontend/package.json missing or npm not available"
 fi

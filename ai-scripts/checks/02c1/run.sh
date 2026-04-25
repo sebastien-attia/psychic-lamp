@@ -96,14 +96,71 @@ fi
 [ -f bff/Dockerfile ]              && pass "bff/Dockerfile present"              || fail "bff/Dockerfile missing"
 [ -f business-service/Dockerfile ] && pass "business-service/Dockerfile present" || fail "business-service/Dockerfile missing"
 
-# BFF Dockerfile: 3-stage (Node + JDK + JRE)
+# BFF Dockerfile: 4-stage (TS codegen + Node + JDK + JRE)
 if [ -f bff/Dockerfile ]; then
   stages="$(grep -cE '^FROM ' bff/Dockerfile)"
-  if [ "${stages}" -ge 3 ]; then
+  if [ "${stages}" -ge 4 ]; then
     pass "bff/Dockerfile is multi-stage (${stages} FROM)"
   else
-    warn "bff/Dockerfile has only ${stages} FROM stages (expected 3: Node frontend + JDK BFF + JRE runtime)"
+    fail "bff/Dockerfile has only ${stages} FROM stages (expected 4: ts-codegen + Node frontend + JDK BFF + JRE runtime — see 02c1-docker.md step 1)"
   fi
+
+  # Toolchain consistency guard. The OpenAPI Generator CLI is a Node wrapper
+  # that shells out to `java -jar`, so a `node:*-alpine` stage running
+  # `npm run build` (which chains `generate:api`) will fail with
+  # "/bin/sh: java: not found" at build time — the regression that added
+  # this gate. The fix is a dedicated codegen stage
+  # (openapitools/openapi-generator-cli) that produces the TS client, COPYed
+  # into the Node stage, which then runs `npm run build:no-codegen`.
+  #
+  # Flat repo-wide grep (instead of a FROM-RUN pairing awk): the codegen
+  # image never invokes `npm`, so any `npm run build` token in the file
+  # belongs to a Node stage. This matches both shell-form
+  # (`RUN npm run build`) and JSON exec-form (`RUN ["npm","run","build"]`),
+  # and is robust to `FROM --platform=…` flags and digest pins on the FROM
+  # line (which the prior awk-based pairing missed).
+  if grep -nE '(^|[^:[:alnum:]])npm["[:space:],]+run["[:space:],]+build([^:[:alnum:]]|$)' bff/Dockerfile \
+       | grep -v 'build:no-codegen' >/dev/null; then
+    fail "bff/Dockerfile: 'npm run build' invoked (chains generate:api → java in the Node stage) — switch to 'npm run build:no-codegen' and add a ts-codegen stage (see 02c1-docker.md step 1)"
+  else
+    pass "bff/Dockerfile: no 'npm run build' token (Java-free Node stage)"
+  fi
+
+  # `--platform=…` flags and digest pins are tolerated on the codegen FROM.
+  if grep -qE '^FROM ([[:space:]]*--[^[:space:]]+[[:space:]]+)*([[:alnum:].]+/)?openapitools/openapi-generator-cli' bff/Dockerfile; then
+    pass "bff/Dockerfile: dedicated ts-codegen stage present (openapitools/openapi-generator-cli)"
+  else
+    fail "bff/Dockerfile: no openapitools/openapi-generator-cli stage — TS client must be generated outside the Node stage"
+  fi
+fi
+
+# ── Codegen single-source-of-truth ─────────────────────────────────────────
+# Without a shared config file the typescript-axios flag list lives in two
+# places (frontend/package.json AND bff/Dockerfile) and silently drifts.
+if [ -f contracts/codegen-typescript-axios.json ]; then
+  pass "contracts/codegen-typescript-axios.json present (shared codegen config)"
+  if grep -q 'codegen-typescript-axios.json' frontend/package.json 2>/dev/null \
+     && grep -q 'codegen-typescript-axios.json' bff/Dockerfile 2>/dev/null; then
+    pass "codegen config referenced by both frontend/package.json and bff/Dockerfile"
+  else
+    fail "contracts/codegen-typescript-axios.json exists but is not referenced by both frontend/package.json AND bff/Dockerfile — flags will drift"
+  fi
+else
+  fail "contracts/codegen-typescript-axios.json missing — flags duplicated between npm and Docker (see 02b1-frontend-scaffold.md step 4)"
+fi
+
+# ── End-to-end build gate (the missing check) ──────────────────────────────
+# Structural greps on the Dockerfile cannot prove buildability — only an
+# actual `docker build` can. This is slow (~30-90s warm cache, several
+# minutes cold), so opt out via SKIP_DOCKER_BUILD=1 for fast iterations.
+# Phase completion REQUIRES it green; CI sets SKIP_DOCKER_BUILD=0.
+if [ "${SKIP_DOCKER_BUILD:-0}" = "1" ]; then
+  warn "SKIP_DOCKER_BUILD=1 — skipping 'docker build -f bff/Dockerfile .' (must be green before phase is done)"
+elif command -v docker >/dev/null && [ -f bff/Dockerfile ]; then
+  run_check "bff image builds end-to-end (docker build -f bff/Dockerfile .)" \
+    -- docker build -q -t boatapp/bff:checks -f bff/Dockerfile .
+else
+  warn "docker CLI not available — skipping bff image build gate"
 fi
 
 # Non-root user in runtime stage
