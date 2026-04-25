@@ -39,7 +39,7 @@ public class BoatAuditRepositoryAdapter implements BoatAuditRepositoryPort {
 
     @Override
     public BoatAudit save(BoatAudit audit) {
-        AppUserJpaEntity performedByRef = appUserJpaRepository.getReferenceById(audit.getPerformedByUserId());
+        AppUserJpaEntity performedByRef = appUserJpaRepository.getReferenceById(audit.performedByUserId());
         BoatAuditJpaEntity entity = mapper.toJpaEntity(audit, performedByRef);
         BoatAuditJpaEntity persisted = auditJpaRepository.save(entity);
         return mapper.toDomain(persisted);

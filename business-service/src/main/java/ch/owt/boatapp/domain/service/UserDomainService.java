@@ -15,8 +15,9 @@ import java.util.UUID;
  * <p>Wired by {@code BeanConfig}; no Spring annotations. Performs an upsert
  * keyed on {@code keycloakId}: on first sync, creates a new {@link AppUser}
  * with both {@code firstLogin} and {@code lastLogin} set to "now"; on
- * subsequent syncs, refreshes the mutable claim fields and bumps
- * {@code lastLogin}.
+ * subsequent syncs, rebuilds the record carrying over {@code id},
+ * {@code keycloakId} and {@code firstLogin} while refreshing the mutable
+ * claim fields and bumping {@code lastLogin}.
  */
 public final class UserDomainService implements GetUserUseCase {
 
@@ -64,11 +65,18 @@ public final class UserDomainService implements GetUserUseCase {
     }
 
     private AppUser refresh(AppUser existing, SyncUserCommand command, OffsetDateTime now) {
-        existing.setUsername(command.username());
-        existing.setEmail(command.email());
-        existing.setFirstName(command.firstName());
-        existing.setLastName(command.lastName());
-        existing.setLastLogin(now);
-        return appUserRepository.save(existing);
+        // Records are immutable: carry over id, keycloakId and firstLogin from
+        // the loaded record; refresh the mutable claim fields and bump lastLogin.
+        AppUser refreshed = new AppUser(
+                existing.id(),
+                existing.keycloakId(),
+                command.username(),
+                command.email(),
+                command.firstName(),
+                command.lastName(),
+                existing.firstLogin(),
+                now
+        );
+        return appUserRepository.save(refreshed);
     }
 }

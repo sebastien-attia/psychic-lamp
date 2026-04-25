@@ -2,27 +2,40 @@ package ch.owt.boatapp.adapter.out.persistence.mapper;
 
 import ch.owt.boatapp.adapter.out.persistence.entity.AppUserJpaEntity;
 import ch.owt.boatapp.domain.model.AppUser;
-import org.mapstruct.Mapper;
+import org.springframework.stereotype.Component;
 
 /**
- * MapStruct mapper between {@link AppUser} (domain) and
- * {@link AppUserJpaEntity} (persistence).
+ * Hand-written mapper between {@link AppUser} (immutable domain record) and
+ * {@link AppUserJpaEntity} (mutable JPA entity).
  *
- * <p>Field names match 1:1. {@code componentModel = "spring"} produces a
- * {@code @Component} implementation that the repository adapter injects.
+ * <p>Plain {@code @Component}: no annotation processor, no generated code.
  */
-@Mapper(componentModel = "spring")
-public interface AppUserPersistenceMapper {
+@Component
+public class AppUserPersistenceMapper {
 
     /**
      * @param entity the JPA entity loaded from the database
-     * @return the equivalent domain model, or {@code null} if {@code entity} is {@code null}
+     * @return the equivalent domain record, or {@code null} if {@code entity} is {@code null}
      */
-    AppUser toDomain(AppUserJpaEntity entity);
+    public AppUser toDomain(AppUserJpaEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+        return new AppUser(entity.getId(), entity.getKeycloakId(), entity.getUsername(),
+                entity.getEmail(), entity.getFirstName(), entity.getLastName(),
+                entity.getFirstLogin(), entity.getLastLogin());
+    }
 
     /**
-     * @param user the domain model to persist
+     * @param user the domain record to persist
      * @return the equivalent JPA entity, or {@code null} if {@code user} is {@code null}
      */
-    AppUserJpaEntity toJpaEntity(AppUser user);
+    public AppUserJpaEntity toJpaEntity(AppUser user) {
+        if (user == null) {
+            return null;
+        }
+        return new AppUserJpaEntity(user.id(), user.keycloakId(), user.username(),
+                user.email(), user.firstName(), user.lastName(),
+                user.firstLogin(), user.lastLogin());
+    }
 }

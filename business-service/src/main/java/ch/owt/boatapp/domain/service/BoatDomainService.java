@@ -32,6 +32,9 @@ import java.util.UUID;
  * annotations: ArchUnit forbids {@code @Service}, {@code @Component},
  * {@code @Transactional} in {@code domain.*}.
  *
+ * <p>Domain models are immutable records, so updates rebuild a fresh
+ * {@link Boat} via its canonical constructor rather than mutating in place.
+ *
  * <p>Transactional atomicity (boat mutation + audit append) is provided by
  * the bridge layer ({@code BoatApplicationService} in {@code infrastructure.service},
  * added in step 02a3); this class invokes the audit append inline so the
@@ -106,10 +109,13 @@ public final class BoatDomainService implements ManageBoatsUseCase {
         Boat existing = boatRepository.findById(command.id().value())
                 .orElseThrow(() -> new BoatNotFoundException(command.id()));
 
-        existing.setName(command.name());
-        existing.setDescription(command.description());
-        existing.setVersion(command.expectedVersion());
-        Boat saved = boatRepository.save(existing);
+        // Records are immutable: rebuild rather than mutate. `id` and
+        // `createdAt` are carried over from the loaded record; `version` is
+        // the caller-supplied expectedVersion so Hibernate can detect a
+        // stale write at flush time.
+        Boat updated = new Boat(existing.id(), command.name(), command.description(),
+                existing.createdAt(), command.expectedVersion());
+        Boat saved = boatRepository.save(updated);
         OffsetDateTime now = OffsetDateTime.now(clock);
         appendAudit(saved, AuditAction.UPDATED, command.performedBy().value(), now);
         return ServiceResponse.success(saved);
@@ -133,8 +139,8 @@ public final class BoatDomainService implements ManageBoatsUseCase {
 
     private void appendAudit(Boat boat, AuditAction action, UUID performedByUserId, OffsetDateTime performedAt) {
         BoatAudit audit = new BoatAudit(
-                null, boat.getId(), action, boat.getName(), boat.getDescription(),
-                boat.getVersion(), performedByUserId, performedAt
+                null, boat.id(), action, boat.name(), boat.description(),
+                boat.version(), performedByUserId, performedAt
         );
         boatAuditRepository.save(audit);
     }

@@ -2,28 +2,40 @@ package ch.owt.boatapp.adapter.out.persistence.mapper;
 
 import ch.owt.boatapp.adapter.out.persistence.entity.BoatJpaEntity;
 import ch.owt.boatapp.domain.model.Boat;
-import org.mapstruct.Mapper;
+import org.springframework.stereotype.Component;
 
 /**
- * MapStruct mapper between {@link Boat} (domain) and {@link BoatJpaEntity}
- * (persistence).
+ * Hand-written mapper between {@link Boat} (immutable domain record) and
+ * {@link BoatJpaEntity} (mutable JPA entity).
  *
- * <p>Field names match 1:1, so MapStruct generates trivial getter/setter
- * copy methods. {@code componentModel = "spring"} produces a
- * {@code @Component} implementation that the repository adapter injects.
+ * <p>Plain {@code @Component}: no annotation processor, no generated code —
+ * the mapping is expressed directly so it shows up under jump-to-definition,
+ * is trivially debuggable, and adds no build-time dependency.
  */
-@Mapper(componentModel = "spring")
-public interface BoatPersistenceMapper {
+@Component
+public class BoatPersistenceMapper {
 
     /**
      * @param entity the JPA entity loaded from the database
-     * @return the equivalent domain model, or {@code null} if {@code entity} is {@code null}
+     * @return the equivalent domain record, or {@code null} if {@code entity} is {@code null}
      */
-    Boat toDomain(BoatJpaEntity entity);
+    public Boat toDomain(BoatJpaEntity entity) {
+        if (entity == null) {
+            return null;
+        }
+        return new Boat(entity.getId(), entity.getName(), entity.getDescription(),
+                entity.getCreatedAt(), entity.getVersion());
+    }
 
     /**
-     * @param boat the domain model to persist
+     * @param boat the domain record to persist
      * @return the equivalent JPA entity, or {@code null} if {@code boat} is {@code null}
      */
-    BoatJpaEntity toJpaEntity(Boat boat);
+    public BoatJpaEntity toJpaEntity(Boat boat) {
+        if (boat == null) {
+            return null;
+        }
+        return new BoatJpaEntity(boat.id(), boat.name(), boat.description(),
+                boat.createdAt(), boat.version());
+    }
 }

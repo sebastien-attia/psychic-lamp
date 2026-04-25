@@ -4,131 +4,25 @@ import java.time.OffsetDateTime;
 import java.util.UUID;
 
 /**
- * Pure-Java domain model for an authenticated application user, synced from
- * the JWT claims (sub, preferred_username, email, given_name, family_name)
- * on every request.
+ * Pure-Java immutable domain record for an authenticated application user,
+ * synced from the JWT claims (sub, preferred_username, email, given_name,
+ * family_name) on every request.
  *
  * <p>Lives in {@code domain.model} — no Spring, no Jakarta. The
  * {@code keycloakId} field stores the JWT {@code sub} claim and is the
- * upsert key.
+ * upsert key. Refresh flows rebuild a fresh instance carrying over
+ * {@code id}, {@code keycloakId} and {@code firstLogin}.
+ *
+ * @param id         unique identifier (assigned by the domain on first sync)
+ * @param keycloakId JWT {@code sub} claim — the upsert key
+ * @param username   {@code preferred_username} claim
+ * @param email      {@code email} claim
+ * @param firstName  {@code given_name} claim, may be {@code null}
+ * @param lastName   {@code family_name} claim, may be {@code null}
+ * @param firstLogin timestamp of the user's first observed login
+ * @param lastLogin  timestamp of the user's most recent login
  */
-public class AppUser {
-
-    private UUID id;
-    private String keycloakId;
-    private String username;
-    private String email;
-    private String firstName;
-    private String lastName;
-    private OffsetDateTime firstLogin;
-    private OffsetDateTime lastLogin;
-
-    /** No-arg constructor required for mutable reconstitution by mappers. */
-    public AppUser() {
-    }
-
-    /**
-     * All-args constructor used by domain services and persistence mappers.
-     *
-     * @param id         unique identifier (assigned by the domain on first sync)
-     * @param keycloakId JWT {@code sub} claim — the upsert key
-     * @param username   {@code preferred_username} claim
-     * @param email      {@code email} claim
-     * @param firstName  {@code given_name} claim, may be {@code null}
-     * @param lastName   {@code family_name} claim, may be {@code null}
-     * @param firstLogin timestamp of the user's first observed login
-     * @param lastLogin  timestamp of the user's most recent login
-     */
-    public AppUser(UUID id, String keycloakId, String username, String email,
-                   String firstName, String lastName,
-                   OffsetDateTime firstLogin, OffsetDateTime lastLogin) {
-        this.id = id;
-        this.keycloakId = keycloakId;
-        this.username = username;
-        this.email = email;
-        this.firstName = firstName;
-        this.lastName = lastName;
-        this.firstLogin = firstLogin;
-        this.lastLogin = lastLogin;
-    }
-
-    /** @return the user's unique identifier */
-    public UUID getId() {
-        return id;
-    }
-
-    /** @param id the new identifier */
-    public void setId(UUID id) {
-        this.id = id;
-    }
-
-    /** @return the JWT {@code sub} claim — the upsert key */
-    public String getKeycloakId() {
-        return keycloakId;
-    }
-
-    /** @param keycloakId the new {@code sub}-derived identifier */
-    public void setKeycloakId(String keycloakId) {
-        this.keycloakId = keycloakId;
-    }
-
-    /** @return the {@code preferred_username} claim */
-    public String getUsername() {
-        return username;
-    }
-
-    /** @param username the new username */
-    public void setUsername(String username) {
-        this.username = username;
-    }
-
-    /** @return the {@code email} claim */
-    public String getEmail() {
-        return email;
-    }
-
-    /** @param email the new email */
-    public void setEmail(String email) {
-        this.email = email;
-    }
-
-    /** @return the {@code given_name} claim, or {@code null} */
-    public String getFirstName() {
-        return firstName;
-    }
-
-    /** @param firstName the new first name */
-    public void setFirstName(String firstName) {
-        this.firstName = firstName;
-    }
-
-    /** @return the {@code family_name} claim, or {@code null} */
-    public String getLastName() {
-        return lastName;
-    }
-
-    /** @param lastName the new last name */
-    public void setLastName(String lastName) {
-        this.lastName = lastName;
-    }
-
-    /** @return the timestamp of the user's first observed login */
-    public OffsetDateTime getFirstLogin() {
-        return firstLogin;
-    }
-
-    /** @param firstLogin the new first-login timestamp */
-    public void setFirstLogin(OffsetDateTime firstLogin) {
-        this.firstLogin = firstLogin;
-    }
-
-    /** @return the timestamp of the user's most recent login */
-    public OffsetDateTime getLastLogin() {
-        return lastLogin;
-    }
-
-    /** @param lastLogin the new last-login timestamp */
-    public void setLastLogin(OffsetDateTime lastLogin) {
-        this.lastLogin = lastLogin;
-    }
+public record AppUser(UUID id, String keycloakId, String username, String email,
+                      String firstName, String lastName,
+                      OffsetDateTime firstLogin, OffsetDateTime lastLogin) {
 }
