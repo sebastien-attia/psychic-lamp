@@ -1,0 +1,10 @@
+{
+  "hooks": {
+    "PostToolUse": [{
+      "matcher": "Edit|Write",
+      "hooks": [{
+        "command": "bash -c 'FILE=\"$CLAUDE_FILE\"; case \"$FILE\" in *.java) DIR=$(echo \"$FILE\" | grep -o \"^[^/]*/\"); cd \"$DIR\" && ./mvnw spotless:apply -q 2>/dev/null || true ;; *.ts|*.vue|*.js) cd frontend && npx prettier --write \"$FILE\" 2>/dev/null || true ;; esac'"
+      }]
+    }]
+  }
+}
