@@ -1,0 +1,101 @@
+# .github/actions/docker-build-push/action.yml
+#
+# Composite action that builds a Docker image and pushes it to a registry
+# under one or more tags. Used by deploy-staging.yml and deploy-production.yml
+# to publish bff and business-service images to Azure Container Registry.
+#
+# Authentication contract: this action does NOT call `az acr login`. The
+# caller workflow must run `azure/login@v2` (with `permissions: id-token:
+# write`) followed by `az acr login --name <acr>` in a preceding step,
+# so the Phase 4 verification grep finds the literal `az acr login`
+# string in the workflow YAML. The federated identity must hold the
+# `AcrPush` role on the ACR (granted by Terraform via
+# `var.ci_push_principal_id`).
+#
+# Anti-goals: registry-username / registry-password inputs. ACR admin is
+# disabled. Adding those inputs here would re-introduce the long-lived-
+# secret path the OIDC federation exists to eliminate.
+
+name: 'Docker build & push'
+description: |
+  Builds a Docker image from a Dockerfile and pushes it to a registry
+  under every tag in `tags`. Caller is responsible for `azure/login@v2`
+  and `az acr login` BEFORE invoking this action.
+
+inputs:
+  context:
+    description: 'Docker build context (default: repo root, matching docker-compose.yml).'
+    required: false
+    default: '.'
+  dockerfile:
+    description: 'Path to the Dockerfile, relative to the build context.'
+    required: true
+  image:
+    description: 'Fully-qualified image reference WITHOUT tag (e.g. boatappstagingacr.azurecr.io/bff).'
+    required: true
+  tags:
+    description: 'Newline-separated list of tags to apply and push (e.g. "staging\nstaging-abcdef0").'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    # Build once with the first tag, then `docker tag` for the remainder
+    # and `docker push` each. Keeping all steps in plain shell (rather
+    # than docker/build-push-action) means the build, tag and push paths
+    # are easy to audit against the Phase 4 verification regexes and
+    # avoid pulling in another third-party action.
+    - name: Build, tag and push image
+      shell: bash
+      env:
+        DBP_CONTEXT: ${{ inputs.context }}
+        DBP_DOCKERFILE: ${{ inputs.dockerfile }}
+        DBP_IMAGE: ${{ inputs.image }}
+        DBP_TAGS: ${{ inputs.tags }}
+      run: |
+        set -euo pipefail
+
+        # Read tags into an array; tolerate Windows line endings just in case.
+        mapfile -t TAGS < <(printf '%s\n' "${DBP_TAGS}" | tr -d '\r' | sed '/^$/d')
+        if [ "${#TAGS[@]}" -eq 0 ]; then
+          echo "::error::docker-build-push: 'tags' input is empty" >&2
+          exit 1
+        fi
+
+        # Validate each tag against the OCI / docker reference grammar
+        # (https://docs.docker.com/reference/cli/docker/image/tag/):
+        # 1–128 chars, must start with [a-zA-Z0-9_], rest from
+        # [a-zA-Z0-9._-]. Catches accidents like a trailing space in a
+        # release tag pasted into the GitHub UI, which `docker push`
+        # would otherwise reject mid-loop after earlier tags succeeded —
+        # leaving the registry in an inconsistent state.
+        TAG_REGEX='^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$'
+        for t in "${TAGS[@]}"; do
+          if [[ ! "${t}" =~ ${TAG_REGEX} ]]; then
+            echo "::error::docker-build-push: invalid docker tag '${t}'" >&2
+            exit 1
+          fi
+        done
+
+        FIRST_TAG="${TAGS[0]}"
+        echo "::group::docker build ${DBP_IMAGE}:${FIRST_TAG}"
+        docker build \
+          --file "${DBP_DOCKERFILE}" \
+          --tag "${DBP_IMAGE}:${FIRST_TAG}" \
+          "${DBP_CONTEXT}"
+        echo "::endgroup::"
+
+        # Apply every additional tag from the same image ID — no rebuild.
+        for TAG in "${TAGS[@]:1}"; do
+          echo "::group::docker tag ${DBP_IMAGE}:${TAG}"
+          docker tag "${DBP_IMAGE}:${FIRST_TAG}" "${DBP_IMAGE}:${TAG}"
+          echo "::endgroup::"
+        done
+
+        # Push every tag. `docker push` uses the credentials installed by
+        # the caller's preceding `az acr login` step.
+        for TAG in "${TAGS[@]}"; do
+          echo "::group::docker push ${DBP_IMAGE}:${TAG}"
+          docker push "${DBP_IMAGE}:${TAG}"
+          echo "::endgroup::"
+        done

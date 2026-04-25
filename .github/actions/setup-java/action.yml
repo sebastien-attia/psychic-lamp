@@ -1,0 +1,39 @@
+# .github/actions/setup-java/action.yml
+#
+# Composite action that installs Temurin JDK 25 and primes the Maven
+# dependency cache. Used by every CI/deploy job that runs `./mvnw`.
+#
+# Why a composite action: the same three steps (setup-java + cache-key
+# computation + cache restore) recur across the bff, business-service and
+# Dependency-Track-upload jobs. Centralising them keeps the JDK version,
+# the cache path and the cache-key strategy in one place.
+#
+# Inputs: none — Java version is pinned to match the project (CLAUDE.md
+# specifies Java 25). If a future phase needs a parameter, add it here
+# rather than letting individual workflows drift.
+
+name: 'Setup Java (Temurin 25) + Maven cache'
+description: 'Installs Temurin JDK 25 and restores the ~/.m2 Maven cache.'
+
+runs:
+  using: composite
+  steps:
+    # Pinned to v4 (latest major). Renovate / Dependabot can bump the
+    # patch via PR; do NOT float to @main here — third-party action
+    # supply-chain risk.
+    - name: Setup Temurin JDK 25
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '25'
+
+    # Cache key bound to every pom.xml in the repo (both modules).
+    # Restore-keys give a partial-hit fallback when only one module's
+    # pom changed.
+    - name: Cache Maven local repository
+      uses: actions/cache@v4
+      with:
+        path: ~/.m2/repository
+        key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+        restore-keys: |
+          ${{ runner.os }}-maven-

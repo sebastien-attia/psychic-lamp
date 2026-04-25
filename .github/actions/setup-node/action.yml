@@ -1,0 +1,24 @@
+# .github/actions/setup-node/action.yml
+#
+# Composite action that installs Node 22 and configures npm caching for
+# the frontend workspace. Used by every CI/deploy job that runs `npm`.
+#
+# Why a composite action: the project pins Node 22 (CLAUDE.md) and
+# `frontend/package-lock.json` is the cache key — repeating that boilerplate
+# in every job invites drift. Inputs are intentionally absent for the same
+# reason as setup-java.
+
+name: 'Setup Node 22 + npm cache'
+description: 'Installs Node 22 and primes the npm cache against frontend/package-lock.json.'
+
+runs:
+  using: composite
+  steps:
+    # `cache: npm` plus `cache-dependency-path` makes setup-node manage the
+    # npm cache directly — no separate actions/cache step required.
+    - name: Setup Node 22
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: frontend/package-lock.json

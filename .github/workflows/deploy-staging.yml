@@ -1,0 +1,246 @@
+# .github/workflows/deploy-staging.yml
+#
+# Auto-deploy to the staging environment on every push to the `staging`
+# branch. No manual approval — staging is the safety net for production.
+#
+# Pipeline order
+#   1. Reuse ci.yml end-to-end (lint, SCA, build, test, docker sanity, E2E).
+#   2. Authenticate to Azure via OIDC federation (`azure/login@v2` + the
+#      Federated Identity Credential created by ai-scripts/00d-bootstrap-
+#      azure.sh — uses OIDC federation, so no client secret is required).
+#   3. `az acr login` — installs a short-lived ACR token derived from the
+#      federated identity. The literal `az acr login` string is required
+#      by the Phase 4 verification gate (see ai-scripts/checks/4/run.sh).
+#   4. Build, tag and push bff + business-service images to ACR via the
+#      composite docker-build-push action. Tags: `staging` (rolling) and
+#      `staging-<short-sha>` (immutable for rollback / debugging).
+#   5. `terraform apply` against environments/staging — passes the SHA tag
+#      so the Container App revision flips to the freshly-pushed image.
+#   6. Ansible post-deploy: `--tags migrate,configure,health` runs
+#      Liquibase ACA Jobs, reconciles the Keycloak realm, and verifies the
+#      stack is healthy. `build,push,deploy,bootstrap` are skipped because
+#      this workflow handles all of those directly above.
+#   7. Smoke health-check from the runner against the staging BFF FQDN.
+#   8. Upload the CycloneDX BOM for each module to Dependency-Track —
+#      governance gate from CLAUDE.md > Security build gates.
+#
+# Required environment-scoped secrets (GitHub → Settings → Environments →
+# staging) — see .github/ENVIRONMENTS.md for full list:
+#   TF_VAR_postgres_admin_password
+#   TF_VAR_bff_db_password
+#   TF_VAR_business_db_password
+#   TF_VAR_keycloak_db_password
+#   TF_VAR_keycloak_admin_password
+#   DTRACK_URL
+#   DTRACK_API_KEY
+
+name: Deploy to Staging
+
+on:
+  push:
+    branches: [staging]
+
+# `id-token: write` is what `azure/login@v2` needs to mint the OIDC token
+# the federated identity exchanges for an Entra ID access token. `contents:
+# read` is the minimum to fetch the repo.
+permissions:
+  id-token: write
+  contents: read
+
+# Serialize staging deploys but DO NOT cancel in-flight ones — cancelling
+# a `terraform apply` mid-flight risks leaving state mid-mutation.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI (reuse ci.yml)
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy
+    needs: [ci]
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      # Sensitive Terraform inputs come in as TF_VAR_* env vars — the
+      # `terraform` CLI picks them up automatically, no `-var` flag needed
+      # and no value lands in the run logs.
+      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
+      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
+      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
+      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
+      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Azure login (OIDC, no client secret)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # The federated SP's object ID is needed by Terraform to grant
+      # `AcrPush` (modules/container-registry) and `Key Vault Secrets
+      # Officer` (modules/keyvault) on apply. Resolve at runtime so we
+      # don't need yet-another secret.
+      - name: Resolve federated SP object ID
+        # AZURE_CLIENT_ID is fed via env to keep the secret value off the
+        # process command line (`ps -ef` from a parallel step would
+        # otherwise see it briefly before GitHub's masking kicks in).
+        env:
+          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRINCIPAL_ID=$(az ad sp show --id "${AZ_CLIENT_ID}" --query id -o tsv)
+          echo "TF_VAR_ci_push_principal_id=${PRINCIPAL_ID}"  >> "$GITHUB_ENV"
+          echo "TF_VAR_tf_apply_principal_id=${PRINCIPAL_ID}" >> "$GITHUB_ENV"
+
+      - name: Compute image references and tags
+        run: |
+          set -euo pipefail
+          ACR_LOGIN=$(az acr show -n "${{ vars.ACR_NAME }}" --query loginServer -o tsv)
+          SHA_TAG="staging-${GITHUB_SHA:0:8}"
+          {
+            echo "ACR_LOGIN=${ACR_LOGIN}"
+            echo "BFF_IMAGE=${ACR_LOGIN}/bff"
+            echo "BUSINESS_IMAGE=${ACR_LOGIN}/business-service"
+            echo "IMAGE_TAG_SHA=${SHA_TAG}"
+          } >> "$GITHUB_ENV"
+
+      # OIDC-federated ACR token (no admin creds, no docker login -u/-p).
+      # The federated identity holds AcrPush, granted by Terraform via
+      # var.ci_push_principal_id (modules/container-registry).
+      - name: ACR login
+        run: az acr login --name "${{ vars.ACR_NAME }}"
+
+      - name: Build & push bff image
+        uses: ./.github/actions/docker-build-push
+        with:
+          dockerfile: bff/Dockerfile
+          image: ${{ env.BFF_IMAGE }}
+          tags: |
+            staging
+            ${{ env.IMAGE_TAG_SHA }}
+
+      - name: Build & push business-service image
+        uses: ./.github/actions/docker-build-push
+        with:
+          dockerfile: business-service/Dockerfile
+          image: ${{ env.BUSINESS_IMAGE }}
+          tags: |
+            staging
+            ${{ env.IMAGE_TAG_SHA }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+
+      # Backend storage-account / resource-group are sourced from secrets
+      # (set by 00d-bootstrap-azure.sh). The state-file key is hardcoded
+      # in environments/staging/backend.tf and matches the container the
+      # bootstrap created (`staging`).
+      - name: Terraform init + plan + apply (staging)
+        working-directory: infra/terraform/environments/staging
+        # `plan` first surfaces drift introduced by manual changes; the
+        # plan file is then applied verbatim so what gets applied is
+        # exactly what was reviewed in the run log.
+        run: |
+          set -euo pipefail
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
+          terraform plan -input=false -out=tfplan \
+            -var "bff_image_tag=${IMAGE_TAG_SHA}" \
+            -var "business_service_image_tag=${IMAGE_TAG_SHA}"
+          terraform apply -input=false -auto-approve tfplan
+
+      # Ansible runs migrate (Liquibase ACA Jobs) → configure (Keycloak
+      # realm reconciliation via keycloak-config-cli) → health. Skips
+      # build/push (already done above) and bootstrap (one-time per env).
+      # Versions pinned to keep deploys reproducible — bumps land via PR.
+      - name: Setup Ansible
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade 'pip==24.*'
+          pip install 'ansible-core==2.17.*'
+      - name: Ansible post-deploy
+        working-directory: infra/ansible
+        run: |
+          ansible-playbook -i inventory/staging.yml playbooks/deploy.yml \
+            --tags migrate,configure,health
+
+      - name: Smoke health-check against staging FQDN
+        working-directory: infra/terraform/environments/staging
+        # `--max-time 5` caps EACH probe so the loop count is meaningful.
+        # Without it, a hung-but-accepting BFF (stop-the-world GC) would
+        # absorb the entire 150s budget on a single probe with curl's
+        # default 120s timeout.
+        run: |
+          set -euo pipefail
+          BFF_FQDN=$(terraform output -raw bff_fqdn)
+          echo "Polling https://${BFF_FQDN}/actuator/health"
+          for i in $(seq 1 30); do
+            if curl -sfo /dev/null --max-time 5 "https://${BFF_FQDN}/actuator/health"; then
+              echo "  healthy after ${i} attempts"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::BFF at https://${BFF_FQDN} failed to become healthy after 150s"
+          exit 1
+
+      # Dependency-Track upload (CLAUDE.md > Security build gates >
+      # Governance). Reuses the CycloneDX BOM produced by the `ci` job
+      # (artifacts `bff-sbom` and `business-service-sbom`) so the BOM
+      # uploaded to DT is provably the same one the gate verified —
+      # rebuilding on a different runner could drift. `dtrack.skip=false`
+      # overrides the default-true setting in the parent pom.xml.
+      - uses: ./.github/actions/setup-java
+      - name: Download bff SBOM from CI
+        uses: actions/download-artifact@v4
+        with:
+          name: bff-sbom
+          path: bff/target/
+      - name: Download business-service SBOM from CI
+        uses: actions/download-artifact@v4
+        with:
+          name: business-service-sbom
+          path: business-service/target/
+      - name: Upload bff SBOM to Dependency-Track
+        working-directory: bff
+        env:
+          DTRACK_URL:     ${{ secrets.DTRACK_URL }}
+          DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
+        run: |
+          ./mvnw -B -ntp dependency-track:upload-bom \
+            -Ddtrack.skip=false \
+            -Ddependency-track.url="${DTRACK_URL}" \
+            -Ddependency-track.apiKey="${DTRACK_API_KEY}" \
+            -Ddependency-track.projectName=boatapp-bff \
+            -Ddependency-track.projectVersion="${GITHUB_SHA}"
+      - name: Upload business-service SBOM to Dependency-Track
+        working-directory: business-service
+        env:
+          DTRACK_URL:     ${{ secrets.DTRACK_URL }}
+          DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
+        run: |
+          ./mvnw -B -ntp dependency-track:upload-bom \
+            -Ddtrack.skip=false \
+            -Ddependency-track.url="${DTRACK_URL}" \
+            -Ddependency-track.apiKey="${DTRACK_API_KEY}" \
+            -Ddependency-track.projectName=boatapp-business-service \
+            -Ddependency-track.projectVersion="${GITHUB_SHA}"
+
+      - name: Failure summary
+        if: failure()
+        run: |
+          {
+            echo "## Staging deploy FAILED"
+            echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"

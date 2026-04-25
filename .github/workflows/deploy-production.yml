@@ -1,0 +1,267 @@
+# .github/workflows/deploy-production.yml
+#
+# Production deploy. Triggered ONLY when the user publishes a GitHub
+# Release. The release tag (e.g. `v1.0.0`) becomes the immutable image tag
+# and the Dependency-Track project version.
+#
+# Manual approval is enforced by GitHub Environment protection rules
+# (Settings → Environments → production → Required reviewers). This file
+# does NOT skip CI: ci.yml is reused so production builds the same code
+# the same way as staging — same lint, SCA, build, test, docker, E2E.
+#
+# Pipeline order — same shape as deploy-staging.yml with these deltas:
+#   - Checkout uses the release tag (`ref: ${{ github.event.release.tag_name }}`).
+#   - Image tags: `<release-tag>` (immutable), `latest`, `production`.
+#   - Terraform applies environments/production.
+#   - Ansible runs against inventory/production.yml.
+#   - DT projectVersion is the release tag (not the SHA), so Dependency-
+#     Track tracks releases instead of commits in production.
+#   - Final step appends a "Deployed: <timestamp>" line to the release
+#     body so the release page reflects the deployment status.
+#
+# Required environment-scoped secrets (GitHub → Settings → Environments →
+# production) — see .github/ENVIRONMENTS.md:
+#   TF_VAR_postgres_admin_password
+#   TF_VAR_bff_db_password
+#   TF_VAR_business_db_password
+#   TF_VAR_keycloak_db_password
+#   TF_VAR_keycloak_admin_password
+#   DTRACK_URL          (production DT project — different from staging)
+#   DTRACK_API_KEY
+
+name: Deploy to Production
+
+on:
+  release:
+    types: [published]
+
+# Defaults are read-only. The `deploy` job widens to `id-token: write`
+# (OIDC) but keeps `contents: read`. Only `annotate-release` widens to
+# `contents: write`, which `gh release edit` needs — limiting the blast
+# radius if any of the build/push/apply steps were ever compromised.
+permissions:
+  contents: read
+
+# Serialize production deploys; never cancel mid-apply.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: CI (reuse ci.yml)
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy
+    needs: [ci]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write   # OIDC for `azure/login@v2`
+      contents: read
+    env:
+      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
+      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
+      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
+      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
+      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      # Pin the checkout to the release tag — the tag is the source of
+      # truth for production. If main has moved on since the tag was
+      # cut, we still build the tagged code.
+      - name: Checkout release tag
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Azure login (OIDC, no client secret)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve federated SP object ID
+        # AZURE_CLIENT_ID is fed via env to keep the secret value off the
+        # process command line (`ps -ef` from a parallel step would
+        # otherwise see it briefly before GitHub's masking kicks in).
+        env:
+          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRINCIPAL_ID=$(az ad sp show --id "${AZ_CLIENT_ID}" --query id -o tsv)
+          echo "TF_VAR_ci_push_principal_id=${PRINCIPAL_ID}"  >> "$GITHUB_ENV"
+          echo "TF_VAR_tf_apply_principal_id=${PRINCIPAL_ID}" >> "$GITHUB_ENV"
+
+      - name: Compute image references
+        run: |
+          set -euo pipefail
+          ACR_LOGIN=$(az acr show -n "${{ vars.ACR_NAME }}" --query loginServer -o tsv)
+          {
+            echo "ACR_LOGIN=${ACR_LOGIN}"
+            echo "BFF_IMAGE=${ACR_LOGIN}/bff"
+            echo "BUSINESS_IMAGE=${ACR_LOGIN}/business-service"
+          } >> "$GITHUB_ENV"
+
+      - name: ACR login
+        run: az acr login --name "${{ vars.ACR_NAME }}"
+
+      # Three tags per image:
+      #   - <release-tag>   immutable; what Terraform pins to
+      #   - latest          rolling, for ad-hoc pulls
+      #   - production      rolling, mirrors what's currently deployed
+      - name: Build & push bff image
+        uses: ./.github/actions/docker-build-push
+        with:
+          dockerfile: bff/Dockerfile
+          image: ${{ env.BFF_IMAGE }}
+          tags: |
+            ${{ env.RELEASE_TAG }}
+            latest
+            production
+
+      - name: Build & push business-service image
+        uses: ./.github/actions/docker-build-push
+        with:
+          dockerfile: business-service/Dockerfile
+          image: ${{ env.BUSINESS_IMAGE }}
+          tags: |
+            ${{ env.RELEASE_TAG }}
+            latest
+            production
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.9.8'
+
+      - name: Terraform init + plan + apply (production)
+        working-directory: infra/terraform/environments/production
+        # `plan` first surfaces drift; the plan file is applied verbatim
+        # so what gets applied is exactly what was reviewed in the log.
+        run: |
+          set -euo pipefail
+          terraform init \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
+          terraform plan -input=false -out=tfplan \
+            -var "bff_image_tag=${RELEASE_TAG}" \
+            -var "business_service_image_tag=${RELEASE_TAG}"
+          terraform apply -input=false -auto-approve tfplan
+
+      - name: Setup Ansible
+        # Versions pinned to keep deploys reproducible.
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade 'pip==24.*'
+          pip install 'ansible-core==2.17.*'
+      - name: Ansible post-deploy (production)
+        working-directory: infra/ansible
+        run: |
+          ansible-playbook -i inventory/production.yml playbooks/deploy.yml \
+            --tags migrate,configure,health
+
+      - name: Smoke health-check against production FQDN
+        working-directory: infra/terraform/environments/production
+        # `--max-time 5` caps EACH probe so the loop count is meaningful
+        # (see deploy-staging.yml for the underlying rationale).
+        run: |
+          set -euo pipefail
+          BFF_FQDN=$(terraform output -raw bff_fqdn)
+          echo "Polling https://${BFF_FQDN}/actuator/health"
+          for i in $(seq 1 30); do
+            if curl -sfo /dev/null --max-time 5 "https://${BFF_FQDN}/actuator/health"; then
+              echo "  healthy after ${i} attempts"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::BFF at https://${BFF_FQDN} failed to become healthy after 150s"
+          exit 1
+
+      # DT upload to the production project, using the BOM the `ci` job
+      # produced (artifacts `bff-sbom` / `business-service-sbom`) so the
+      # uploaded BOM corresponds to the exact build the gate verified.
+      # The environment-scoped DTRACK_URL / DTRACK_API_KEY override any
+      # repo-level values, so production findings stay in the production
+      # DT project.
+      - uses: ./.github/actions/setup-java
+      - name: Download bff SBOM from CI
+        uses: actions/download-artifact@v4
+        with:
+          name: bff-sbom
+          path: bff/target/
+      - name: Download business-service SBOM from CI
+        uses: actions/download-artifact@v4
+        with:
+          name: business-service-sbom
+          path: business-service/target/
+      - name: Upload bff SBOM to Dependency-Track
+        working-directory: bff
+        env:
+          DTRACK_URL:     ${{ secrets.DTRACK_URL }}
+          DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
+        run: |
+          ./mvnw -B -ntp dependency-track:upload-bom \
+            -Ddtrack.skip=false \
+            -Ddependency-track.url="${DTRACK_URL}" \
+            -Ddependency-track.apiKey="${DTRACK_API_KEY}" \
+            -Ddependency-track.projectName=boatapp-bff \
+            -Ddependency-track.projectVersion="${RELEASE_TAG}"
+      - name: Upload business-service SBOM to Dependency-Track
+        working-directory: business-service
+        env:
+          DTRACK_URL:     ${{ secrets.DTRACK_URL }}
+          DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
+        run: |
+          ./mvnw -B -ntp dependency-track:upload-bom \
+            -Ddtrack.skip=false \
+            -Ddependency-track.url="${DTRACK_URL}" \
+            -Ddependency-track.apiKey="${DTRACK_API_KEY}" \
+            -Ddependency-track.projectName=boatapp-business-service \
+            -Ddependency-track.projectVersion="${RELEASE_TAG}"
+
+      - name: Failure summary
+        if: failure()
+        run: |
+          {
+            echo "## Production deploy FAILED"
+            echo ""
+            echo "- Release: \`${RELEASE_TAG}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Separate job so `contents: write` is scoped to the single step that
+  # needs it. Every preceding step (build/push/Terraform/Ansible) runs
+  # without write access to the repo, limiting damage if any tool in
+  # that chain were compromised.
+  annotate-release:
+    name: Annotate release with deployment status
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+      GH_TOKEN:    ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Append deployment line to release body
+        # Uses `gh release edit`'s --notes-file form to merge the
+        # original body with a new trailing line — robust against
+        # release notes that contain backticks or quotes which would
+        # break a `--notes "$STRING"` argument.
+        run: |
+          set -euo pipefail
+          ORIG_NOTES=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body -q .body)
+          DEPLOYED_AT=$(date -u +%FT%TZ)
+          NOTES_FILE=$(mktemp)
+          {
+            printf '%s\n\n' "${ORIG_NOTES}"
+            printf -- '---\n'
+            printf 'Deployed to production at `%s` (run %s/%s/actions/runs/%s).\n' \
+              "${DEPLOYED_AT}" "${GITHUB_SERVER_URL}" "${GITHUB_REPOSITORY}" "${GITHUB_RUN_ID}"
+          } > "${NOTES_FILE}"
+          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --notes-file "${NOTES_FILE}"

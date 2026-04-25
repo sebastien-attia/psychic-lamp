@@ -1,0 +1,267 @@
+# .github/workflows/ci.yml
+#
+# Continuous integration for the Boat App.
+#
+# Triggers
+#   - push to `main`, `staging`, or any `feature/**` branch
+#   - pull_request targeting `main` or `staging`
+#   - workflow_call from deploy-staging.yml / deploy-production.yml
+#     (so deploy workflows reuse this exact pipeline rather than copying
+#     half of it)
+#
+# Jobs
+#   lint                    Frontend type-check (vue-tsc). No backend lint
+#                           step: spotless is not wired in either pom.xml,
+#                           and SpotBugs+FindSecBugs already gate `mvn verify`
+#                           in build-bff / build-business-service.
+#   sca-scan                Software composition analysis via OSV-Scanner
+#                           across all lockfiles; fails on HIGH+CRITICAL.
+#   build-bff               `./mvnw verify` for bff (Testcontainers Keycloak
+#                           + WireMock + SpotBugs+FindSecBugs SAST), then
+#                           `./mvnw package` to emit target/bom.{json,xml}.
+#   build-business-service  Same shape for business-service (Testcontainers
+#                           Postgres + ArchUnit + SAST + SBOM).
+#   build-frontend          `npm run type-check && npm run test && npm run
+#                           build`. Vitest + vue-tsc.
+#   docker-build            Sanity-build both Dockerfiles end-to-end on the
+#                           runner; tags `ci-<sha>` only — does NOT push.
+#   e2e-tests               Boots the local-intg compose stack and runs
+#                           Playwright against the BFF.
+#
+# Workflows that re-use this via `workflow_call:` are responsible for any
+# additional environment/permissions context they need (for example
+# `id-token: write` for OIDC); this file only declares what the checks
+# themselves need.
+
+name: CI
+
+on:
+  push:
+    branches: [main, staging, 'feature/**']
+  pull_request:
+    branches: [main, staging]
+  workflow_call: {}
+
+# Least-privilege defaults. Individual jobs can widen with their own
+# `permissions:` block if needed (none currently do).
+permissions:
+  contents: read
+
+# Cancel in-flight runs for the same branch when a new push lands; saves
+# minutes on busy feature branches. Deploy workflows opt OUT of cancellation
+# at their own concurrency group.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint (frontend type-check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-node
+      # `vue-tsc --noEmit` is the closest thing to a lint the frontend has
+      # today (no .eslintrc, no `lint` script in package.json). Type errors
+      # block CI; style is handled at edit time by the project's Prettier
+      # PostToolUse hook.
+      - name: Type-check frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run type-check
+
+  sca-scan:
+    name: SCA — OSV-Scanner
+    # Reusable workflow form pinned to a tagged release (no @main). Scans
+    # bff/pom.xml, business-service/pom.xml and frontend/package-lock.json
+    # in one pass via --recursive. `--fail-on-vuln=HIGH` makes the gate
+    # block on HIGH+CRITICAL; MEDIUM still surfaces in the report but
+    # does not fail the job.
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.5
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
+    with:
+      scan-args: |-
+        --recursive
+        --fail-on-vuln=HIGH
+        ./
+
+  build-bff:
+    name: Build & test — bff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-java
+      # `verify` runs unit + integration tests (Testcontainers Keycloak +
+      # WireMock) AND SpotBugs+FindSecBugs SAST. `package` afterwards
+      # emits the CycloneDX BOM into target/bom.{json,xml}; we run it
+      # with -DskipTests so we don't re-execute the test suite.
+      - name: Maven verify (tests + SAST)
+        working-directory: bff
+        run: ./mvnw -B -ntp verify
+      - name: Maven package (CycloneDX SBOM)
+        working-directory: bff
+        run: ./mvnw -B -ntp -DskipTests package
+      - name: Upload bff test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-test-reports
+          path: |
+            bff/target/surefire-reports/
+            bff/target/failsafe-reports/
+            bff/target/site/jacoco/
+            bff/target/spotbugsXml.xml
+          if-no-files-found: ignore
+      - name: Upload bff CycloneDX SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: bff-sbom
+          path: |
+            bff/target/bom.json
+            bff/target/bom.xml
+          if-no-files-found: error
+
+  build-business-service:
+    name: Build & test — business-service
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-java
+      - name: Maven verify (tests + ArchUnit + SAST)
+        working-directory: business-service
+        run: ./mvnw -B -ntp verify
+      - name: Maven package (CycloneDX SBOM)
+        working-directory: business-service
+        run: ./mvnw -B -ntp -DskipTests package
+      - name: Upload business-service test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: business-service-test-reports
+          path: |
+            business-service/target/surefire-reports/
+            business-service/target/failsafe-reports/
+            business-service/target/site/jacoco/
+            business-service/target/spotbugsXml.xml
+          if-no-files-found: ignore
+      - name: Upload business-service CycloneDX SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: business-service-sbom
+          path: |
+            business-service/target/bom.json
+            business-service/target/bom.xml
+          if-no-files-found: error
+
+  build-frontend:
+    name: Build & test — frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-node
+      # `type-check` is also covered by `lint`; running it again here keeps
+      # this job self-contained when invoked in isolation.
+      - name: Frontend install + tests + build
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run type-check
+          npm run test
+          npm run build
+      - name: Upload frontend dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+          if-no-files-found: error
+
+  docker-build:
+    name: Docker build sanity (no push)
+    runs-on: ubuntu-latest
+    needs: [build-bff, build-business-service, build-frontend, sca-scan]
+    steps:
+      - uses: actions/checkout@v5
+      # Both Dockerfiles take the repo root as build context (the bff
+      # 4-stage build references frontend/ and contracts/, the
+      # business-service 2-stage build references contracts/). Tag with
+      # the commit SHA only — this job validates that the image builds;
+      # the deploy workflows are the only path that pushes.
+      - name: Build bff image
+        run: docker build -f bff/Dockerfile -t boatapp/bff:ci-${{ github.sha }} .
+      - name: Build business-service image
+        run: docker build -f business-service/Dockerfile -t boatapp/business-service:ci-${{ github.sha }} .
+
+  e2e-tests:
+    name: E2E (Playwright)
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-node
+      # The compose stack mounts a BFF signing-key PEM as a Docker secret;
+      # the file is .gitignored, so CI must produce it before `docker
+      # compose up` (otherwise the bff container fails to start —
+      # see infra/docker/keys/.gitignore + bff Dockerfile comments).
+      - name: Generate BFF signing key
+        run: |
+          set -euo pipefail
+          ./ai-scripts/00b-generate-bff-key.sh
+          # Assert the key actually landed where compose expects it.
+          # Without this, a silent script failure would manifest 120s
+          # later as a generic "stack failed to come healthy" timeout.
+          test -s infra/docker/keys/bff-signing-key.pem
+      - name: Start local-intg stack
+        run: docker compose up -d --build
+      # Both health probes have docker-side healthchecks already, but the
+      # SPA test framework polls these URLs from the runner host where
+      # the container healthcheck status is invisible. Poll until 200.
+      - name: Wait for stack to become healthy
+        # `--max-time 2` caps EACH probe; without it a hung-but-listening
+        # service would consume the entire 120s budget on a single probe
+        # via curl's default 120s timeout.
+        run: |
+          set -euo pipefail
+          BFF_HEALTH=http://localhost:8080/actuator/health
+          KC_OIDC=http://localhost:8180/realms/boat-app/.well-known/openid-configuration
+          for url in "${BFF_HEALTH}" "${KC_OIDC}"; do
+            echo "polling ${url}"
+            for i in $(seq 1 60); do
+              if curl -sfo /dev/null --max-time 2 "${url}"; then
+                echo "  ok after ${i} attempts"
+                break
+              fi
+              if [ "${i}" -eq 60 ]; then
+                echo "::error::timeout waiting for ${url}"
+                docker compose ps
+                docker compose logs --tail=200
+                exit 1
+              fi
+              sleep 2
+            done
+          done
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+      - name: Run Playwright E2E suite
+        working-directory: frontend
+        run: npm run e2e
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            frontend/playwright-report/
+            frontend/test-results/
+          if-no-files-found: ignore
+      - name: Tear down stack
+        # Always run, even on cancellation — leaking containers across
+        # runs would poison subsequent E2E jobs on self-hosted runners.
+        if: always()
+        run: docker compose down -v
