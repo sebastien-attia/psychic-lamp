@@ -17,8 +17,42 @@
   "boats": {
     "list": {
       "title": "Boats",
-      "empty": "No boats yet — create your first one.",
-      "loading": "Loading boats…"
+      "loading": "Loading boats…",
+      "newBoat": "New boat",
+      "count": "no boats | 1 boat | {count} boats",
+      "search": {
+        "label": "Search boats",
+        "placeholder": "Search boats by name or description…",
+        "clear": "Clear search"
+      },
+      "empty": {
+        "title": "No boats in your fleet yet",
+        "message": "Add your first boat to start tracking your fleet.",
+        "cta": "Create your first boat"
+      },
+      "noResults": {
+        "title": "No boats match your search",
+        "message": "Try a different keyword or clear the search."
+      },
+      "error": {
+        "title": "We couldn't load your boats",
+        "message": "Check your connection and try again.",
+        "retry": "Retry"
+      },
+      "pagination": {
+        "nav": "Pagination",
+        "prev": "Previous",
+        "next": "Next",
+        "pageSize": "Boats per page",
+        "pageSizeOption": "{size} / page",
+        "summary": "Showing {from}–{to} of {total}",
+        "pageOf": "Page {current} of {total}"
+      }
+    },
+    "card": {
+      "edit": "Edit boat",
+      "delete": "Delete boat",
+      "createdRelative": "Created {relative}"
     },
     "create": { "title": "Create a new boat", "submit": "Create" },
     "detail": {
