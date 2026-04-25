@@ -1,0 +1,70 @@
+# .github/settings.yml
+#
+# Source of truth for repository + branch-protection configuration.
+# Applied by ai-scripts/00d-bootstrap-azure.sh › apply_branch_protection().
+# Edit this file, then rerun 00d to update protection on github.com:
+#
+#     ./ai-scripts/00d-bootstrap-azure.sh \
+#         --subscription <id> --repo <owner/repo>
+#
+# Format follows Probot-Settings (https://github.com/probot/settings) so
+# this file is also useful as documentation even when the bootstrap
+# script isn't being rerun. The bootstrap consumes only the
+# `branches[].protection` subtree; repository-level keys below are
+# advisory until phase 5 (when the script also applies them).
+
+repository:
+  # Squash-only — keeps `main` linear, makes bisect possible.
+  delete_branch_on_merge: true
+  allow_merge_commit: false
+  allow_squash_merge: true
+  allow_rebase_merge: false
+
+branches:
+  - name: main
+    protection:
+      # `strict: true` requires the branch to be up-to-date with main
+      # before merging — pairs with `required_linear_history` so a
+      # stale-branch merge cannot squeeze through.
+      required_status_checks:
+        strict: true
+        contexts:
+          - lint
+          - sca-scan
+          - secret-scan
+          - build-bff
+          - build-business-service
+          - build-frontend
+          - container-scan
+          - e2e-tests
+          - 'CodeQL / analyze (java-kotlin)'
+          - 'CodeQL / analyze (javascript-typescript)'
+      required_pull_request_reviews:
+        required_approving_review_count: 1
+        dismiss_stale_reviews: true
+      enforce_admins: true
+      required_linear_history: true
+      required_signatures: true
+
+  - name: staging
+    protection:
+      # Staging mirrors main except CodeQL is intentionally NOT required
+      # here: the longer-running scan blocking every staging push would
+      # slow down the integration loop. CodeQL still runs on staging
+      # pushes via codeql.yml; it just doesn't gate the merge.
+      required_status_checks:
+        strict: true
+        contexts:
+          - lint
+          - sca-scan
+          - secret-scan
+          - build-bff
+          - build-business-service
+          - build-frontend
+          - container-scan
+          - e2e-tests
+      required_pull_request_reviews:
+        required_approving_review_count: 1
+        dismiss_stale_reviews: true
+      enforce_admins: false
+      required_linear_history: true

@@ -1,23 +1,23 @@
 # .github/workflows/deploy-production.yml
 #
-# Production deploy. Triggered ONLY when the user publishes a GitHub
-# Release. The release tag (e.g. `v1.0.0`) becomes the immutable image tag
-# and the Dependency-Track project version.
+# Production deploy. Triggered ONLY when a GitHub Release is published.
+# The release tag (e.g. `v1.0.0`) becomes the immutable image tag and the
+# Dependency-Track project version.
 #
 # Manual approval is enforced by GitHub Environment protection rules
-# (Settings → Environments → production → Required reviewers). This file
-# does NOT skip CI: ci.yml is reused so production builds the same code
-# the same way as staging — same lint, SCA, build, test, docker, E2E.
+# (Settings → Environments → production → Required reviewers). With the
+# phase-4b 3-job restructure that gate now sits on the `apply` job, AFTER
+# `plan` has produced and uploaded `tfplan.binary` — reviewers approve
+# the exact change-set they can see in the run summary.
 #
 # Pipeline order — same shape as deploy-staging.yml with these deltas:
 #   - Checkout uses the release tag (`ref: ${{ github.event.release.tag_name }}`).
 #   - Image tags: `<release-tag>` (immutable), `latest`, `production`.
 #   - Terraform applies environments/production.
 #   - Ansible runs against inventory/production.yml.
-#   - DT projectVersion is the release tag (not the SHA), so Dependency-
-#     Track tracks releases instead of commits in production.
-#   - Final step appends a "Deployed: <timestamp>" line to the release
-#     body so the release page reflects the deployment status.
+#   - DT projectVersion is the release tag (not the SHA), so DT tracks
+#     releases instead of commits in production.
+#   - Final job appends a "Deployed: <timestamp>" line to the release body.
 #
 # Required environment-scoped secrets (GitHub → Settings → Environments →
 # production) — see .github/ENVIRONMENTS.md:
@@ -35,65 +35,58 @@ on:
   release:
     types: [published]
 
-# Defaults are read-only. The `deploy` job widens to `id-token: write`
-# (OIDC) but keeps `contents: read`. Only `annotate-release` widens to
-# `contents: write`, which `gh release edit` needs — limiting the blast
-# radius if any of the build/push/apply steps were ever compromised.
+# Defaults are read-only. Each job widens for itself; only `annotate-
+# release` ever holds `contents: write`, limiting the blast radius if any
+# build/push/apply step were ever compromised.
 permissions:
   contents: read
 
-# Serialize production deploys; never cancel mid-apply.
+# Serialize per-tag, never cancel mid-apply. Two simultaneous releases of
+# DIFFERENT tags can run in parallel (different concurrency keys); same-tag
+# re-runs queue.
 concurrency:
-  group: deploy-production
+  group: deploy-production-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
   ci:
     name: CI (reuse ci.yml)
     uses: ./.github/workflows/ci.yml
+    # Reusable workflows do NOT inherit caller secrets by default. Without
+    # this, ci.yml's DT gate, gitleaks license, and any other `secrets.*`
+    # reference would resolve to empty strings on release-triggered runs.
+    secrets: inherit
 
-  deploy:
-    name: Deploy
+  build-push:
+    # Build + push images, then sign with cosign (keyless OIDC) and emit a
+    # SLSA Build L3 provenance attestation.
+    name: Build, push, sign
     needs: [ci]
     runs-on: ubuntu-latest
-    environment: production
     permissions:
-      id-token: write   # OIDC for `azure/login@v2`
+      id-token: write       # OIDC for `azure/login@v2` + cosign keyless + attestations
       contents: read
+      attestations: write   # required by actions/attest-build-provenance
     env:
-      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
-      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
-      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
-      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
-      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
+    outputs:
+      bff_digest: ${{ steps.bff_push.outputs.digest }}
+      business_digest: ${{ steps.business_push.outputs.digest }}
     steps:
       # Pin the checkout to the release tag — the tag is the source of
       # truth for production. If main has moved on since the tag was
       # cut, we still build the tagged code.
       - name: Checkout release tag
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
         with:
           ref: ${{ github.event.release.tag_name }}
 
       - name: Azure login (OIDC, no client secret)
-        uses: azure/login@v2
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
         with:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Resolve federated SP object ID
-        # AZURE_CLIENT_ID is fed via env to keep the secret value off the
-        # process command line (`ps -ef` from a parallel step would
-        # otherwise see it briefly before GitHub's masking kicks in).
-        env:
-          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        run: |
-          set -euo pipefail
-          PRINCIPAL_ID=$(az ad sp show --id "${AZ_CLIENT_ID}" --query id -o tsv)
-          echo "TF_VAR_ci_push_principal_id=${PRINCIPAL_ID}"  >> "$GITHUB_ENV"
-          echo "TF_VAR_tf_apply_principal_id=${PRINCIPAL_ID}" >> "$GITHUB_ENV"
 
       - name: Compute image references
         run: |
@@ -108,11 +101,15 @@ jobs:
       - name: ACR login
         run: az acr login --name "${{ vars.ACR_NAME }}"
 
+      - name: Install cosign
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+
       # Three tags per image:
       #   - <release-tag>   immutable; what Terraform pins to
       #   - latest          rolling, for ad-hoc pulls
       #   - production      rolling, mirrors what's currently deployed
       - name: Build & push bff image
+        id: bff_push
         uses: ./.github/actions/docker-build-push
         with:
           dockerfile: bff/Dockerfile
@@ -122,7 +119,21 @@ jobs:
             latest
             production
 
+      - name: Cosign sign bff image
+        env:
+          IMAGE: ${{ env.BFF_IMAGE }}
+          DIGEST: ${{ steps.bff_push.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Attest SLSA provenance for bff
+        uses: actions/attest-build-provenance@7668571508540a607bdfd90a87a560489fe372eb # v2.1.0
+        with:
+          subject-name: ${{ env.BFF_IMAGE }}
+          subject-digest: ${{ steps.bff_push.outputs.digest }}
+          push-to-registry: true
+
       - name: Build & push business-service image
+        id: business_push
         uses: ./.github/actions/docker-build-push
         with:
           dockerfile: business-service/Dockerfile
@@ -132,27 +143,156 @@ jobs:
             latest
             production
 
+      - name: Cosign sign business-service image
+        env:
+          IMAGE: ${{ env.BUSINESS_IMAGE }}
+          DIGEST: ${{ steps.business_push.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Attest SLSA provenance for business-service
+        uses: actions/attest-build-provenance@7668571508540a607bdfd90a87a560489fe372eb # v2.1.0
+        with:
+          subject-name: ${{ env.BUSINESS_IMAGE }}
+          subject-digest: ${{ steps.business_push.outputs.digest }}
+          push-to-registry: true
+
+  plan:
+    # Run terraform plan from the tagged commit and persist the binary
+    # plan as an artifact so the apply job applies it verbatim.
+    name: Terraform plan (production)
+    needs: [build-push]
+    runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
+      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
+      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
+      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
+      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Azure login (OIDC, no client secret)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve federated SP object ID
+        env:
+          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRINCIPAL_ID=$(az ad sp show --id "${AZ_CLIENT_ID}" --query id -o tsv)
+          echo "TF_VAR_ci_push_principal_id=${PRINCIPAL_ID}"  >> "$GITHUB_ENV"
+          echo "TF_VAR_tf_apply_principal_id=${PRINCIPAL_ID}" >> "$GITHUB_ENV"
+
       - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: '1.9.8'
 
-      - name: Terraform init + plan + apply (production)
+      - name: Terraform init + plan (production)
         working-directory: infra/terraform/environments/production
-        # `plan` first surfaces drift; the plan file is applied verbatim
-        # so what gets applied is exactly what was reviewed in the log.
         run: |
           set -euo pipefail
           terraform init \
             -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
-          terraform plan -input=false -out=tfplan \
+          terraform plan -out=tfplan.binary -input=false \
             -var "bff_image_tag=${RELEASE_TAG}" \
             -var "business_service_image_tag=${RELEASE_TAG}"
-          terraform apply -input=false -auto-approve tfplan
+          terraform show -json tfplan.binary > tfplan.json
+
+      - name: Render plan summary
+        # `comment-on-pr` left at its default — the composite already gates
+        # the comment step on `event_name == 'pull_request'`.
+        uses: ./.github/actions/terraform-plan-summary
+        with:
+          plan-json: infra/terraform/environments/production/tfplan.json
+
+      - name: Upload terraform plan artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: |
+            infra/terraform/environments/production/tfplan.binary
+            infra/terraform/environments/production/tfplan.json
+          retention-days: 90
+          if-no-files-found: error
+
+  apply:
+    # Apply the EXACT plan from the artifact, then run post-deploy steps.
+    # Carries `environment: production` so the Required-Reviewer rule
+    # fires AFTER the plan is uploaded — reviewers approve the diff
+    # they can see in the run summary, not a blank-cheque deploy.
+    name: Terraform apply + post-deploy (production)
+    needs: [build-push, plan]
+    runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
+      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
+      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
+      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
+      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Azure login (OIDC, no client secret)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve federated SP object ID
+        env:
+          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRINCIPAL_ID=$(az ad sp show --id "${AZ_CLIENT_ID}" --query id -o tsv)
+          echo "TF_VAR_ci_push_principal_id=${PRINCIPAL_ID}"  >> "$GITHUB_ENV"
+          echo "TF_VAR_tf_apply_principal_id=${PRINCIPAL_ID}" >> "$GITHUB_ENV"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: '1.9.8'
+
+      - name: Download tfplan artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: tfplan-${{ github.run_id }}
+          path: infra/terraform/environments/production/
+
+      - name: Terraform init + apply (verbatim from artifact)
+        working-directory: infra/terraform/environments/production
+        # `-lockfile=readonly` makes the apply fail loudly if the provider
+        # lockfile changed between plan and apply (e.g. a Dependabot bump
+        # landed during the approval window).
+        run: |
+          set -euo pipefail
+          terraform init -lockfile=readonly \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
+          terraform apply -input=false -auto-approve tfplan.binary
 
       - name: Setup Ansible
-        # Versions pinned to keep deploys reproducible.
         run: |
           set -euo pipefail
           python -m pip install --upgrade 'pip==24.*'
@@ -165,8 +305,6 @@ jobs:
 
       - name: Smoke health-check against production FQDN
         working-directory: infra/terraform/environments/production
-        # `--max-time 5` caps EACH probe so the loop count is meaningful
-        # (see deploy-staging.yml for the underlying rationale).
         run: |
           set -euo pipefail
           BFF_FQDN=$(terraform output -raw bff_fqdn)
@@ -181,20 +319,14 @@ jobs:
           echo "::error::BFF at https://${BFF_FQDN} failed to become healthy after 150s"
           exit 1
 
-      # DT upload to the production project, using the BOM the `ci` job
-      # produced (artifacts `bff-sbom` / `business-service-sbom`) so the
-      # uploaded BOM corresponds to the exact build the gate verified.
-      # The environment-scoped DTRACK_URL / DTRACK_API_KEY override any
-      # repo-level values, so production findings stay in the production
-      # DT project.
       - uses: ./.github/actions/setup-java
       - name: Download bff SBOM from CI
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: bff-sbom
           path: bff/target/
       - name: Download business-service SBOM from CI
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: business-service-sbom
           path: business-service/target/
@@ -235,12 +367,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # Separate job so `contents: write` is scoped to the single step that
-  # needs it. Every preceding step (build/push/Terraform/Ansible) runs
-  # without write access to the repo, limiting damage if any tool in
-  # that chain were compromised.
+  # needs it. Every preceding step (build/push/sign/Terraform/Ansible)
+  # runs without write access to the repo, limiting damage if any tool
+  # in that chain were compromised.
   annotate-release:
     name: Annotate release with deployment status
-    needs: [deploy]
+    needs: [apply]
     runs-on: ubuntu-latest
     permissions:
       contents: write

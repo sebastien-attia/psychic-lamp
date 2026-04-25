@@ -1,0 +1,46 @@
+# .github/dependabot.yml
+#
+# Automatic dependency updates. Without Dependabot the SHA-pinned actions
+# (.github/workflows/*.yml + .github/actions/*/action.yml) would rot —
+# nobody would ever bump them. Dependabot's `package-ecosystem: github-
+# actions` updater rewrites the trailing `# vX.Y.Z` tag-comment on the
+# `uses:` line, which is why every SHA pin in this repo carries one.
+#
+# Schedule: weekly Monday means PRs land at the start of the week when
+# someone is around to review them, instead of piling up over a weekend.
+
+version: 2
+updates:
+  # Pinned-action upkeep across every workflow + composite action.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      actions:
+        patterns: ['*']
+
+  - package-ecosystem: maven
+    directory: /bff
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: maven
+    directory: /business-service
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      dev-dependencies:
+        dependency-type: development

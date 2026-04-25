@@ -56,10 +56,14 @@ concurrency:
 
 jobs:
   lint:
-    name: Lint (frontend type-check)
+    # Frontend type-check (vue-tsc). The closest thing to a lint we have.
+    # Job ID `lint` is the check display name — required by branch
+    # protection in .github/settings.yml, which matches contexts against
+    # check display names. Do not add a `name:` override here without
+    # also updating settings.yml.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: ./.github/actions/setup-node
       # `vue-tsc --noEmit` is the closest thing to a lint the frontend has
       # today (no .eslintrc, no `lint` script in package.json). Type errors
@@ -72,13 +76,13 @@ jobs:
           npm run type-check
 
   sca-scan:
-    name: SCA — OSV-Scanner
+    # SCA — OSV-Scanner. Job ID is the required-status-check name in settings.yml.
     # Reusable workflow form pinned to a tagged release (no @main). Scans
     # bff/pom.xml, business-service/pom.xml and frontend/package-lock.json
     # in one pass via --recursive. `--fail-on-vuln=HIGH` makes the gate
     # block on HIGH+CRITICAL; MEDIUM still surfaces in the report but
     # does not fail the job.
-    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@v2.3.5
+    uses: google/osv-scanner-action/.github/workflows/osv-scanner-reusable.yml@c51854704019a247608d928f370c98740469d4b5 # v2.3.5
     permissions:
       contents: read
       security-events: write
@@ -90,10 +94,11 @@ jobs:
         ./
 
   build-bff:
-    name: Build & test — bff
+    # Java build + unit/integration tests + SAST + CycloneDX SBOM for the BFF module.
+    # Job ID is the required-status-check name in settings.yml.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: ./.github/actions/setup-java
       # `verify` runs unit + integration tests (Testcontainers Keycloak +
       # WireMock) AND SpotBugs+FindSecBugs SAST. `package` afterwards
@@ -105,9 +110,24 @@ jobs:
       - name: Maven package (CycloneDX SBOM)
         working-directory: bff
         run: ./mvnw -B -ntp -DskipTests package
+      # Pre-deploy Dependency-Track gate: upload the BOM, wait for analysis,
+      # fail the run on any unsuppressed FAIL-severity policy violation. The
+      # post-deploy DT receipt step in deploy-*.yml is preserved separately
+      # so DT records both "what we tried to ship" and "what we actually ran".
+      # Skipped silently when DTRACK_PROJECT_UUID_STAGING is unset (e.g. in a
+      # fresh fork before the operator wires the project).
+      - name: Dependency-Track gate (bff)
+        if: ${{ vars.DTRACK_PROJECT_UUID_STAGING != '' }}
+        uses: ./.github/actions/dtrack-gate
+        with:
+          dtrack-url:     ${{ secrets.DTRACK_URL }}
+          dtrack-api-key: ${{ secrets.DTRACK_API_KEY }}
+          project-uuid:   ${{ vars.DTRACK_PROJECT_UUID_STAGING }}
+          bom-path:       bff/target/bom.json
+          fail-on:        FAIL
       - name: Upload bff test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bff-test-reports
           path: |
@@ -117,7 +137,7 @@ jobs:
             bff/target/spotbugsXml.xml
           if-no-files-found: ignore
       - name: Upload bff CycloneDX SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: bff-sbom
           path: |
@@ -126,10 +146,11 @@ jobs:
           if-no-files-found: error
 
   build-business-service:
-    name: Build & test — business-service
+    # Java build + unit/integration tests + ArchUnit + SAST + CycloneDX SBOM.
+    # Job ID is the required-status-check name in settings.yml.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: ./.github/actions/setup-java
       - name: Maven verify (tests + ArchUnit + SAST)
         working-directory: business-service
@@ -137,9 +158,19 @@ jobs:
       - name: Maven package (CycloneDX SBOM)
         working-directory: business-service
         run: ./mvnw -B -ntp -DskipTests package
+      # Pre-deploy DT gate — see build-bff above for rationale.
+      - name: Dependency-Track gate (business-service)
+        if: ${{ vars.DTRACK_PROJECT_UUID_STAGING != '' }}
+        uses: ./.github/actions/dtrack-gate
+        with:
+          dtrack-url:     ${{ secrets.DTRACK_URL }}
+          dtrack-api-key: ${{ secrets.DTRACK_API_KEY }}
+          project-uuid:   ${{ vars.DTRACK_PROJECT_UUID_STAGING }}
+          bom-path:       business-service/target/bom.json
+          fail-on:        FAIL
       - name: Upload business-service test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: business-service-test-reports
           path: |
@@ -149,7 +180,7 @@ jobs:
             business-service/target/spotbugsXml.xml
           if-no-files-found: ignore
       - name: Upload business-service CycloneDX SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: business-service-sbom
           path: |
@@ -158,10 +189,11 @@ jobs:
           if-no-files-found: error
 
   build-frontend:
-    name: Build & test — frontend
+    # Frontend install + type-check + Vitest + production build.
+    # Job ID is the required-status-check name in settings.yml.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: ./.github/actions/setup-node
       # `type-check` is also covered by `lint`; running it again here keeps
       # this job self-contained when invoked in isolation.
@@ -173,18 +205,18 @@ jobs:
           npm run test
           npm run build
       - name: Upload frontend dist
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: frontend-dist
           path: frontend/dist/
           if-no-files-found: error
 
   docker-build:
-    name: Docker build sanity (no push)
+    # Sanity-build both Dockerfiles end-to-end. No push — deploy workflows are the only push path.
     runs-on: ubuntu-latest
     needs: [build-bff, build-business-service, build-frontend, sca-scan]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       # Both Dockerfiles take the repo root as build context (the bff
       # 4-stage build references frontend/ and contracts/, the
       # business-service 2-stage build references contracts/). Tag with
@@ -195,12 +227,76 @@ jobs:
       - name: Build business-service image
         run: docker build -f business-service/Dockerfile -t boatapp/business-service:ci-${{ github.sha }} .
 
+  secret-scan:
+    # gitleaks: scan full history on every push/PR for non-format-known secrets.
+    # Job ID is the required-status-check name in settings.yml.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # gitleaks scans full history; default fetch-depth=1 would limit
+          # detection to the current commit and miss secrets that landed
+          # earlier on the branch.
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # GITLEAKS_LICENSE is required only for org-owned repos. Personal-
+          # account runs ignore it; the env var being unset is harmless.
+          GITLEAKS_LICENSE: ${{ secrets.GITLEAKS_LICENSE }}
+
+  container-scan:
+    # Trivy SARIF on built images, fails HIGH+CRITICAL with fix available.
+    # Job ID is the required-status-check name in settings.yml.
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [bff, business-service]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      # Rebuild on this runner: jobs do not share the docker-build job's
+      # daemon, and `docker save`/`load` artifact shuffling is more code
+      # for no real benefit — BuildKit's local cache makes the rebuild
+      # fast enough.
+      - name: Build image for scanning
+        run: docker build --file ${{ matrix.image }}/Dockerfile --tag local/${{ matrix.image }}:${{ github.sha }} .
+      - name: Trivy vulnerability scan (HIGH+CRITICAL, fixable)
+        uses: aquasecurity/trivy-action@915b19bbe73b92a6cf82a1bc12b087c9a19a5fe2 # v0.28.0
+        with:
+          image-ref: 'local/${{ matrix.image }}:${{ github.sha }}'
+          format: 'sarif'
+          output: 'trivy-${{ matrix.image }}.sarif'
+          severity: 'HIGH,CRITICAL'
+          exit-code: '1'
+          # `ignore-unfixed: true` keeps the gate honest: blocking on
+          # upstream-unfixable findings would just create noise. They
+          # still surface in the Security tab via SARIF — same bar as
+          # OSV-Scanner's source-side `--fail-on-vuln=HIGH`.
+          ignore-unfixed: true
+      # Upload SARIF even when Trivy failed the job, otherwise the
+      # findings would only live in the run log — `if: always()` makes
+      # them queryable from the Security tab and Dependabot.
+      - name: Upload SARIF to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+        with:
+          sarif_file: 'trivy-${{ matrix.image }}.sarif'
+          category: 'trivy-${{ matrix.image }}'
+
   e2e-tests:
-    name: E2E (Playwright)
+    # Boots the local-intg compose stack and runs Playwright against the BFF.
+    # Job ID is the required-status-check name in settings.yml.
     runs-on: ubuntu-latest
     needs: [docker-build]
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: ./.github/actions/setup-node
       # The compose stack mounts a BFF signing-key PEM as a Docker secret;
       # the file is .gitignored, so CI must produce it before `docker
@@ -253,7 +349,7 @@ jobs:
         run: npm run e2e
       - name: Upload Playwright report on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: playwright-report
           path: |

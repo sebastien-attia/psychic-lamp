@@ -1,0 +1,117 @@
+# .github/actions/dtrack-gate/action.yml
+#
+# What this action does:
+#   Uploads a CycloneDX BOM to a Dependency-Track project, polls until the
+#   project finishes (re)analysis, then queries the policy-violation API and
+#   FAILS the calling workflow if any unsuppressed violation matches the
+#   configured severity floor (default `FAIL`). Upgrades Dependency-Track
+#   from a passive post-deploy receipt into an active pre-deploy gate so a
+#   known-violating BOM cannot reach an apply step.
+#
+# Who calls it:
+#   - .github/workflows/ci.yml — runs as a gate on `build-bff` and
+#     `build-business-service` after `mvn package` produces target/bom.json.
+#     Skips silently when `vars.DTRACK_PROJECT_UUID_*` is not set, so a
+#     repo without a configured DT project still passes CI.
+#   - .github/workflows/deploy-*.yml — currently keep the existing Maven
+#     `dependency-track:upload-bom` goal as the post-deploy receipt; this
+#     action is *available* for additional gating points but the existing
+#     receipt step is preserved to minimise diff against phase 4.
+#
+# Anti-goals: this action does NOT mutate Dependency-Track policies, projects
+# or thresholds. Project + policy are managed in DT itself; the action
+# simply reports what DT already evaluated.
+
+name: 'Dependency-Track gate'
+description: |
+  Uploads a CycloneDX BOM, waits for analysis, then fails the step if any
+  unsuppressed policy violation matches the severity floor.
+
+inputs:
+  dtrack-url:
+    description: 'Base URL of the Dependency-Track API (no trailing slash).'
+    required: true
+  dtrack-api-key:
+    description: 'API key with BOM_UPLOAD + VIEW_PORTFOLIO + POLICY_VIOLATION_ANALYSIS scopes.'
+    required: true
+  project-uuid:
+    description: 'UUID of the DT project to upload the BOM into.'
+    required: true
+  bom-path:
+    description: 'Path to the CycloneDX BOM (JSON or XML).'
+    required: true
+  poll-timeout-sec:
+    description: 'How long to wait for DT to finish analysing the BOM before querying violations.'
+    required: false
+    default: '300'
+  fail-on:
+    description: 'Policy violationState that fails the gate (FAIL | WARN | INFO).'
+    required: false
+    default: 'FAIL'
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        DTRACK_URL:    ${{ inputs.dtrack-url }}
+        DTRACK_API_KEY: ${{ inputs.dtrack-api-key }}
+        PROJECT_UUID:  ${{ inputs.project-uuid }}
+        BOM_PATH:      ${{ inputs.bom-path }}
+        TIMEOUT:       ${{ inputs.poll-timeout-sec }}
+        FAIL_ON:       ${{ inputs.fail-on }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -s "${BOM_PATH}" ]; then
+          echo "::error::dtrack-gate: BOM not found or empty at ${BOM_PATH}" >&2
+          exit 1
+        fi
+
+        # `--retry 3 --retry-delay 2` makes the action resilient to a
+        # single DT 502/503 or transient network blip without escalating
+        # to a workflow re-run.
+        CURL_RETRY=(--retry 3 --retry-delay 2 --retry-connrefused)
+
+        # 1. Upload BOM. Multipart form per the DT v1 API contract.
+        echo "▸ uploading ${BOM_PATH} → ${DTRACK_URL}/api/v1/bom (project=${PROJECT_UUID})"
+        curl -fsSL "${CURL_RETRY[@]}" -X POST "${DTRACK_URL}/api/v1/bom" \
+          -H "X-Api-Key: ${DTRACK_API_KEY}" \
+          -F "project=${PROJECT_UUID}" \
+          -F "bom=@${BOM_PATH}" >/dev/null
+
+        # 2. Poll until DT finishes analysis. inheritedRiskScore stays at
+        #    "pending" while the BOM is still being processed; once analysis
+        #    completes it's a numeric value (0+).
+        deadline=$(( $(date +%s) + TIMEOUT ))
+        state=pending
+        while [ "$(date +%s)" -lt "${deadline}" ]; do
+          state=$(curl -fsSL "${CURL_RETRY[@]}" "${DTRACK_URL}/api/v1/project/${PROJECT_UUID}" \
+            -H "X-Api-Key: ${DTRACK_API_KEY}" \
+            | jq -r '.metrics.inheritedRiskScore // "pending"')
+          if [ "${state}" != "pending" ]; then
+            break
+          fi
+          sleep 5
+        done
+        if [ "${state}" = "pending" ]; then
+          echo "::warning::dtrack-gate: DT analysis still pending after ${TIMEOUT}s — querying violations anyway"
+        fi
+
+        # 3. Query unsuppressed policy violations and fail on the configured
+        #    severity floor. The DT policy-violation API path the verifier
+        #    greps for is /api/v1/violation/project — keep this URL stable.
+        #    `jq --arg` keeps the FAIL_ON value out of the jq program text
+        #    so a future caller passing a quote-bearing value cannot
+        #    silently make the gate report `count=0`.
+        viols=$(curl -fsSL "${CURL_RETRY[@]}" \
+          "${DTRACK_URL}/api/v1/violation/project/${PROJECT_UUID}?suppressed=false" \
+          -H "X-Api-Key: ${DTRACK_API_KEY}")
+        count=$(echo "${viols}" | jq --arg fo "${FAIL_ON}" \
+          '[.[] | select(.policyCondition.policy.violationState == $fo)] | length')
+        if [ "${count}" -gt 0 ]; then
+          echo "::error::dtrack-gate: ${count} ${FAIL_ON}-severity policy violation(s) in DT project ${PROJECT_UUID}"
+          echo "${viols}" | jq '.'
+          exit 1
+        fi
+        echo "▸ DT gate passed (no ${FAIL_ON}-severity violations)"

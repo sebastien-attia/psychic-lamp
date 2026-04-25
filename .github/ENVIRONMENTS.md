@@ -90,14 +90,25 @@ these passwords if you lose them.
 
 ### Dependency-Track governance
 
-| Secret           | Purpose                                                              |
-|------------------|----------------------------------------------------------------------|
-| `DTRACK_URL`     | HTTPS URL of the Dependency-Track API (e.g. `https://dt.example.org`). |
-| `DTRACK_API_KEY` | API key with `BOM_UPLOAD` and `PROJECT_CREATION_UPLOAD` permissions. |
+`DTRACK_URL` and `DTRACK_API_KEY` are **repository-scoped** secrets so
+the pre-deploy DT gate in `ci.yml` (which runs on every push and PR, in
+jobs that have no `environment:` block) can read them. Project isolation
+between staging and production is achieved by the per-environment
+project UUID (see *Repository-level variables*) plus per-environment
+project names (`boatapp-bff` vs `boatapp-bff-prod`, etc).
 
-Keep the staging and production values **separate** so the DT projects
-stay isolated. `deploy-staging.yml` and `deploy-production.yml` resolve
-these from the matching environment scope at run time.
+| Secret           | Scope          | Purpose                                                              |
+|------------------|----------------|----------------------------------------------------------------------|
+| `DTRACK_URL`     | repository     | HTTPS URL of the Dependency-Track API (e.g. `https://dt.example.org`). |
+| `DTRACK_API_KEY` | repository     | API key with `BOM_UPLOAD`, `VIEW_PORTFOLIO`, `POLICY_VIOLATION_ANALYSIS`. |
+
+If you genuinely need different DT instances per environment (e.g. a
+production-only DT behind a stricter network), define environment-scoped
+overrides at *Settings → Environments → \<env\> → Environment secrets*
+with the same names — environment-scoped secrets shadow repository-scoped
+ones inside any job that declares `environment:`. The `apply` job in both
+deploy workflows carries the matching `environment:` so the override
+takes effect for the post-deploy receipt step automatically.
 
 ---
 
@@ -159,6 +170,117 @@ as a blocking error.
 If a future workflow needs registry access from a system that genuinely
 cannot federate (e.g. a third-party CI), generate a scope-bound token
 via `az acr token create` rather than turning admin back on.
+
+---
+
+## Image signatures + SLSA provenance (cosign keyless)
+
+Every image pushed by `deploy-staging.yml` or `deploy-production.yml` is
+signed by the workflow's OIDC identity via `cosign --yes` and ships with
+a SLSA Build L3 provenance attestation produced by
+`actions/attest-build-provenance`. Both artifacts live alongside the image
+in ACR.
+
+To verify a deployed image locally (replace `<digest>` with the
+`sha256:…` value from `docker inspect ${ACR}.azurecr.io/bff:staging` or
+the deploy run summary):
+
+```bash
+cosign verify \
+  --certificate-identity-regexp 'https://github\.com/<org>/<repo>/\.github/workflows/deploy-(staging|production)\.yml@.*' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  ${ACR_NAME}.azurecr.io/bff@<digest>
+```
+
+Replace `bff` with `business-service` for the other image. To list every
+attached artifact (signature, provenance, SBOM if any), use
+`cosign tree ${ACR_NAME}.azurecr.io/bff:staging`.
+
+> **Storage cost.** cosign signatures + SLSA provenance are stored as
+> additional OCI artifacts in ACR (~5–10 KB per image). They do not
+> affect Container Apps pull behaviour — the runtime still resolves and
+> pulls the image by tag exactly as before.
+
+---
+
+## Source-SAST: CodeQL or Semgrep fallback
+
+`.github/workflows/codeql.yml` runs CodeQL on every push and PR to
+`main`/`staging` plus a weekly schedule. The two analysis matrix legs
+(`CodeQL / analyze (java-kotlin)` and
+`CodeQL / analyze (javascript-typescript)`) are required-status contexts
+on `main` per `.github/settings.yml`.
+
+CodeQL on a **private** repository requires GitHub Advanced Security
+(GHAS). If this repo is private and the org doesn't have GHAS, CodeQL
+runs will fail with HTTP 403. Detect with:
+
+```bash
+OWNER_REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+gh api "/repos/${OWNER_REPO}" --jq \
+  '.private and ((.security_and_analysis.advanced_security.status // "disabled") != "enabled")'
+```
+
+If the result is `true`:
+1. Delete `.github/workflows/codeql.yml`.
+2. Add a `semgrep` job to `.github/workflows/ci.yml` (use
+   `returntocorp/semgrep-action` with `config: p/owasp-top-ten`, upload
+   SARIF via `github/codeql-action/upload-sarif`, name the job
+   `semgrep`).
+3. Drop the two `CodeQL / analyze (...)` contexts from
+   `.github/settings.yml > branches[name=main].protection.required_status_checks.contexts`
+   and add `semgrep` instead.
+4. Rerun `00d-bootstrap-azure.sh` to apply the new branch-protection
+   contexts.
+
+The verifier at `ai-scripts/checks/4b/run.sh` accepts either path
+(CodeQL workflow OR a `returntocorp/semgrep` reference in `ci.yml`).
+
+---
+
+## Branch protection — source of truth
+
+Branch protection is **APPLIED** by `ai-scripts/00d-bootstrap-azure.sh`.
+`.github/settings.yml` is the **source of truth** for what the script
+applies. Edit `settings.yml`, then rerun 00d to update protection rules
+on github.com:
+
+```bash
+./ai-scripts/00d-bootstrap-azure.sh \
+  --subscription <id> --repo <owner/repo>
+```
+
+The script reads the `branches[].protection` subtree per branch (`main`
+and `staging`), injects `restrictions: null`, and PUTs the payload via
+`gh api -X PUT repos/${REPO}/branches/${BRANCH}/protection`. Idempotent:
+rerunning overwrites with the same payload.
+
+`yq` is required to apply protection (the script parses `settings.yml`
+with it) but the dependency is soft — first-run bootstrap before
+`settings.yml` exists still works.
+
+---
+
+## Pre-deploy Dependency-Track gate (configuration)
+
+`.github/actions/dtrack-gate/action.yml` runs in `ci.yml` for both Maven
+modules. It uploads the BOM, polls until DT finishes analysis, then
+fails the run on any unsuppressed FAIL-severity policy violation. The
+post-deploy DT *receipt* (existing `dependency-track:upload-bom` Maven
+goal) still runs from the deploy workflows so DT records both "what we
+tried to ship" and "what we actually ran".
+
+Two repository-level GitHub variables wire the gate:
+
+| Variable                          | Purpose                                                      |
+|-----------------------------------|--------------------------------------------------------------|
+| `vars.DTRACK_PROJECT_UUID_STAGING`    | UUID of the staging DT project. The gate is skipped silently when this variable is unset (e.g. fresh fork before DT is wired). |
+| `vars.DTRACK_PROJECT_UUID_PRODUCTION` | Reserved for a future production-side gate; currently unused. |
+
+Set them with:
+```bash
+gh variable set DTRACK_PROJECT_UUID_STAGING --repo <owner/repo> --body <uuid>
+```
 
 ---
 

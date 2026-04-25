@@ -1,0 +1,33 @@
+# .gitleaks.toml
+#
+# Allowlist for `gitleaks` (the secret-scan job in .github/workflows/ci.yml).
+# Native GitHub push-protection covers token formats with known prefixes
+# (AKIA…, ghp_…, sk-…); gitleaks complements that with custom-key detection.
+# This config trims false positives from generated code and example
+# placeholders without weakening detection on real source files.
+#
+# Real-secret hygiene in this repo:
+#   - infra/docker/keys/*.pem  is in .gitignore. The BFF signing key is
+#     generated at CI time by ai-scripts/00b-generate-bff-key.sh and
+#     never committed.
+#   - Generated OpenAPI sources land under target/generated-sources/...
+#     (Maven) or src/services/api-client/generated/ (frontend) — these
+#     paths are allowlisted below to avoid noise from contract examples.
+
+title = "owt-challenge gitleaks config"
+
+[extend]
+# Inherit gitleaks' default rule pack and add allowlists on top.
+useDefault = true
+
+[allowlist]
+description = "OpenAPI-generated sources, .env example placeholders, common harmless strings"
+paths = [
+  '''\.env\.example$''',
+  '''bff/target/generated-sources/openapi/.*''',
+  '''business-service/target/generated-sources/openapi/.*''',
+  '''frontend/src/services/api-client/generated/.*''',
+]
+regexes = [
+  '''(?i)\b(changeme|change-me|demo|demo123|password|secret)\b''',
+]

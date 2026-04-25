@@ -20,7 +20,10 @@ name: 'Docker build & push'
 description: |
   Builds a Docker image from a Dockerfile and pushes it to a registry
   under every tag in `tags`. Caller is responsible for `azure/login@v2`
-  and `az acr login` BEFORE invoking this action.
+  and `az acr login` BEFORE invoking this action. Emits an `outputs.digest`
+  (sha256:…) which callers can pipe into `cosign sign` and the SLSA
+  `actions/attest-build-provenance` action — signing the digest, not a
+  mutable tag, is mandatory for SLSA L3.
 
 inputs:
   context:
@@ -37,6 +40,11 @@ inputs:
     description: 'Newline-separated list of tags to apply and push (e.g. "staging\nstaging-abcdef0").'
     required: true
 
+outputs:
+  digest:
+    description: 'sha256:… digest of the pushed image (read from RepoDigests after push).'
+    value: ${{ steps.push.outputs.digest }}
+
 runs:
   using: composite
   steps:
@@ -46,6 +54,7 @@ runs:
     # are easy to audit against the Phase 4 verification regexes and
     # avoid pulling in another third-party action.
     - name: Build, tag and push image
+      id: push
       shell: bash
       env:
         DBP_CONTEXT: ${{ inputs.context }}
@@ -99,3 +108,19 @@ runs:
           docker push "${DBP_IMAGE}:${TAG}"
           echo "::endgroup::"
         done
+
+        # Read the registry-assigned digest from the local image's
+        # RepoDigests after push. Filter on the literal "${DBP_IMAGE}@"
+        # prefix so an image whose name is a prefix of another in the
+        # daemon's catalogue (e.g. `acr.io/bff` vs `acr.io/bff-frontend`)
+        # cannot accidentally match. Emit as `digest` output for cosign +
+        # actions/attest-build-provenance — both consume the digest,
+        # NEVER the mutable tag.
+        DIGEST=$(docker inspect --format='{{range .RepoDigests}}{{println .}}{{end}}' "${DBP_IMAGE}:${FIRST_TAG}" \
+          | grep -F "${DBP_IMAGE}@" | head -n1 | cut -d'@' -f2)
+        if [ -z "${DIGEST}" ]; then
+          echo "::error::docker-build-push: could not resolve sha256 digest for ${DBP_IMAGE}" >&2
+          exit 1
+        fi
+        echo "digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+        echo "▸ pushed ${DBP_IMAGE}@${DIGEST}"

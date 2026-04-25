@@ -1,0 +1,81 @@
+# .github/workflows/codeql.yml
+#
+# Source-SAST via GitHub CodeQL (java-kotlin + javascript-typescript).
+# Findings appear in the repo's Security tab; the per-language analyse
+# job names (`CodeQL / analyze (java-kotlin)` and `... (javascript-
+# typescript)`) join the required-checks list in `.github/settings.yml`.
+#
+# Java leg requires a real build (autobuild can't always reconstruct the
+# project's compiler args); we reuse the same `setup-java` composite +
+# `./mvnw -B -DskipTests verify` Maven goal as ci.yml so cache hits and
+# semantics line up between the two workflows.
+#
+# Fallback: if this repo turns out to be PRIVATE without GitHub Advanced
+# Security, CodeQL runs will fail with HTTP 403 (CodeQL analysis on
+# private repos requires a paid GHAS license). In that case the operator
+# should DELETE this file and add a `semgrep` job to ci.yml — see
+# `.github/ENVIRONMENTS.md` › Source-SAST.
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+  schedule:
+    # Weekly Monday 04:17 UTC — odd minute spreads load across the
+    # GitHub-hosted runner pool. Catches new vulnerabilities the rule
+    # pack picked up since the last push.
+    - cron: '17 4 * * 1'
+
+permissions:
+  security-events: write   # required to upload SARIF
+  contents: read
+  actions: read
+
+jobs:
+  analyze:
+    # Per-language CodeQL analysis. The `name` is what branch protection requires.
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [java-kotlin, javascript-typescript]
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+        with:
+          languages: ${{ matrix.language }}
+          # security-extended adds higher-recall queries on top of the
+          # default pack; security-and-quality additionally surfaces
+          # maintainability findings (low-FP, useful for refactor PRs).
+          queries: security-extended,security-and-quality
+
+      # CodeQL needs a real Java build to extract bytecode it can analyse.
+      # Skip both tests (already run in ci.yml > build-bff/business-service)
+      # and the SpotBugs+FindSecBugs SAST plugins (also already run in CI)
+      # — CodeQL only needs class files, not the static-analysis pass.
+      # `verify` is still the chosen goal so the build wires through
+      # phases identical to the CI build, just with the slow plugins off.
+      - if: matrix.language == 'java-kotlin'
+        uses: ./.github/actions/setup-java
+      - if: matrix.language == 'java-kotlin'
+        name: Build Java modules for CodeQL
+        run: |
+          set -euo pipefail
+          MVN_FLAGS=(-B -ntp -DskipTests -Dspotbugs.skip=true)
+          (cd bff              && ./mvnw "${MVN_FLAGS[@]}" verify)
+          (cd business-service && ./mvnw "${MVN_FLAGS[@]}" verify)
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@ce64ddcb0d8d890d2df4a9d1c04ff297367dea2a # v3
+        with:
+          category: '/language:${{ matrix.language }}'
