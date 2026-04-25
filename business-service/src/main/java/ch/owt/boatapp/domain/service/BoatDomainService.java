@@ -1,6 +1,7 @@
 package ch.owt.boatapp.domain.service;
 
 import ch.owt.boatapp.domain.exception.BoatNotFoundException;
+import ch.owt.boatapp.domain.exception.ConcurrentModificationException;
 import ch.owt.boatapp.domain.model.AuditAction;
 import ch.owt.boatapp.domain.model.Boat;
 import ch.owt.boatapp.domain.model.BoatAudit;
@@ -22,6 +23,7 @@ import java.time.Clock;
 import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -109,10 +111,20 @@ public final class BoatDomainService implements ManageBoatsUseCase {
         Boat existing = boatRepository.findById(command.id().value())
                 .orElseThrow(() -> new BoatNotFoundException(command.id()));
 
+        // Explicit domain-level optimistic-lock check: the domain owns the
+        // version invariant rather than relying on Hibernate to detect the
+        // mismatch at flush. JPA's @Version remains as defense-in-depth at
+        // the persistence layer (the web adapter maps both exceptions to
+        // HTTP 409).
+        if (!Objects.equals(existing.version(), command.expectedVersion())) {
+            throw new ConcurrentModificationException(command.id(),
+                    command.expectedVersion(), existing.version());
+        }
+
         // Records are immutable: rebuild rather than mutate. `id` and
         // `createdAt` are carried over from the loaded record; `version` is
-        // the caller-supplied expectedVersion so Hibernate can detect a
-        // stale write at flush time.
+        // the caller-supplied expectedVersion (== existing.version() at this
+        // point) so Hibernate sees the same value it persisted.
         Boat updated = new Boat(existing.id(), command.name(), command.description(),
                 existing.createdAt(), command.expectedVersion());
         Boat saved = boatRepository.save(updated);
