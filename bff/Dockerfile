@@ -1,33 +1,63 @@
 # bff/Dockerfile
 #
-# Three-stage build for the BFF service.
+# Four-stage build for the BFF service.
 #
-#   1. frontend  — node:22-alpine. Runs `npm ci && npm run build` against
-#                  ../frontend, producing the Vue SPA bundle in dist/.
-#   2. bff-build — eclipse-temurin:25-jdk. Copies the SPA into
-#                  bff/src/main/resources/static/ so the Spring Boot JAR
-#                  serves it as static files at the application root, then
-#                  runs `./mvnw package -DskipTests`.
-#   3. runtime   — eclipse-temurin:25-jre. Non-root user, container-aware
-#                  JVM flags, HEALTHCHECK on /actuator/health.
+#   1. ts-codegen — openapitools/openapi-generator-cli:v7.21.0 (bundles Java
+#                   + the generator JAR). Generates the typescript-axios
+#                   client from contracts/openapi.yaml into /out, driven
+#                   by contracts/codegen-typescript-axios.json (the same
+#                   config consumed by `npm run generate:api` — single
+#                   source of truth, no flag drift). Pulled out of the
+#                   Node stage because the npm wrapper shells out to
+#                   `java -jar`, and node:22-alpine has no JRE.
+#   2. frontend   — node:22-alpine. Runs `npm ci && npm run build:no-codegen`
+#                   against ../frontend (build:no-codegen skips
+#                   generate:api — the generated client is COPYed in
+#                   from ts-codegen), producing the Vue SPA bundle in
+#                   dist/.
+#   3. bff-build  — eclipse-temurin:25-jdk. Copies the SPA into
+#                   bff/src/main/resources/static/ so the Spring Boot JAR
+#                   serves it as static files at the application root,
+#                   then runs `./mvnw package -DskipTests`.
+#   4. runtime    — eclipse-temurin:25-jre. Non-root user, container-aware
+#                   JVM flags, HEALTHCHECK on /actuator/health.
 #
-# Build context: REPO ROOT (compose passes context=.). The frontend/ and
-# bff/ directories must both be present at the context root.
+# Build context: REPO ROOT (compose passes context=.). The frontend/, bff/
+# and contracts/ directories must all be present at the context root.
 #
 # Build:
 #   docker build -t boatapp/bff:local -f bff/Dockerfile .
 # Run (compose handles this; standalone for sanity):
 #   docker run --rm -p 8080:8080 boatapp/bff:local
 
-# ── Stage 1: frontend bundle ──────────────────────────────────────────────
+# ── Stage 1: TypeScript client codegen ────────────────────────────────────
+# Pin matches the version the npm wrapper auto-selects (frontend log shows
+# "Did set selected version to 7.21.0"). Bumping requires bumping both.
+FROM openapitools/openapi-generator-cli:v7.21.0 AS ts-codegen
+WORKDIR /work
+# Copy the whole contracts/ dir (not just openapi.yaml) so future $ref
+# splits keep working without a Dockerfile change.
+COPY contracts/ ./contracts/
+# `RUN` does not invoke ENTRYPOINT, so we call the entrypoint script by
+# absolute path. Same script `docker run` would invoke implicitly.
+RUN /usr/local/bin/docker-entrypoint.sh generate \
+      -i /work/contracts/openapi.yaml \
+      -c /work/contracts/codegen-typescript-axios.json \
+      -o /out
+
+# ── Stage 2: frontend bundle ──────────────────────────────────────────────
 FROM node:22-alpine AS frontend
 WORKDIR /workspace/frontend
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci
 COPY frontend/ ./
-RUN npm run build
+# Drop in the pre-generated TS client so build:no-codegen can skip
+# generate:api (which would otherwise need a JRE in this stage).
+# --chown normalizes ownership regardless of the codegen image's user.
+COPY --from=ts-codegen --chown=root:root /out/ ./src/services/api-client/generated/
+RUN npm run build:no-codegen
 
-# ── Stage 2: BFF Maven build ──────────────────────────────────────────────
+# ── Stage 3: BFF Maven build ──────────────────────────────────────────────
 FROM eclipse-temurin:25-jdk AS bff-build
 WORKDIR /workspace
 # Copy Maven wrapper + pom first to leverage the Docker layer cache when
@@ -46,7 +76,7 @@ RUN rm -rf /workspace/bff/src/main/resources/static \
 COPY --from=frontend /workspace/frontend/dist/ ./bff/src/main/resources/static/
 RUN cd bff && ./mvnw -B -ntp package -DskipTests
 
-# ── Stage 3: runtime ──────────────────────────────────────────────────────
+# ── Stage 4: runtime ──────────────────────────────────────────────────────
 FROM eclipse-temurin:25-jre AS runtime
 # curl is needed by HEALTHCHECK below; --no-install-recommends keeps the
 # image lean. The temurin image is Ubuntu-based.

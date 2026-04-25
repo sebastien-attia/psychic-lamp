@@ -8,6 +8,7 @@
     "dev:intg": "npm run generate:api && vite --mode local-intg",
     "build": "npm run generate:api && vue-tsc --noEmit && vite build",
     "build:intg": "npm run generate:api && vue-tsc --noEmit && vite build --mode local-intg",
+    "build:no-codegen": "vue-tsc --noEmit && vite build",
     "type-check": "vue-tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -15,7 +16,7 @@
     "e2e:ui": "playwright test --ui",
     "e2e:headed": "playwright test --headed",
     "e2e:report": "playwright show-report",
-    "generate:api": "openapi-generator-cli generate -i ../contracts/openapi.yaml -g typescript-axios -o src/services/api-client/generated --additional-properties=supportsES6=true,withSeparateModelsAndApi=true,apiPackage=api,modelPackage=models,withInterfaces=true",
+    "generate:api": "openapi-generator-cli generate -i ../contracts/openapi.yaml -c ../contracts/codegen-typescript-axios.json -o src/services/api-client/generated",
     "preview": "vite preview"
   },
   "dependencies": {
