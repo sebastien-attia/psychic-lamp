@@ -1,0 +1,46 @@
+# Provider and backend configuration for the Boat App Azure deployment.
+#
+# - Pinned to azurerm ~> 4.0 to ensure feature parity across the modules
+#   (Container Apps Jobs, Key Vault RBAC mode, PostgreSQL Flexible Server
+#   private DNS integration).
+# - The azurerm backend block is intentionally empty; concrete state
+#   storage settings are supplied per-environment via partial config in
+#   environments/{staging,production}/backend.tf.
+# - subscription_id is intentionally not pinned in code; it is supplied
+#   either via the ARM_SUBSCRIPTION_ID env var (preferred for CI) or via
+#   var.azure_subscription_id in terraform.tfvars.
+
+terraform {
+  required_version = ">= 1.9"
+
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.0"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = "~> 3.6"
+    }
+    tls = {
+      source  = "hashicorp/tls"
+      version = "~> 4.0"
+    }
+  }
+
+  backend "azurerm" {}
+}
+
+provider "azurerm" {
+  features {
+    key_vault {
+      purge_soft_delete_on_destroy    = false
+      recover_soft_deleted_key_vaults = true
+    }
+    resource_group {
+      prevent_deletion_if_contains_resources = true
+    }
+  }
+
+  subscription_id = var.azure_subscription_id
+}

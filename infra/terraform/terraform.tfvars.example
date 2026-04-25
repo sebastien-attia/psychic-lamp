@@ -1,0 +1,36 @@
+# Example variable file for the root module.
+#
+# Copy this to a sibling .tfvars or pass `-var-file=...` on the command line.
+# Sensitive values must NEVER be committed: rely on `-var` flags, env vars
+# (TF_VAR_<name>), or Key Vault references injected by your CI/CD pipeline.
+#
+# Bootstrap notes
+# ───────────────
+# - ci_push_principal_id / tf_apply_principal_id come from the one-time
+#   Entra ID app registration. See infra/terraform/README.md for the
+#   `az ad app create` + federated-credential incantation.
+# - postgres_admin_password is used by Ansible's bootstrap-db-roles
+#   playbook to provision the per-DB application roles; the apps never
+#   read it.
+
+environment  = "staging"
+location     = "switzerlandnorth"
+project_name = "boatapp"
+
+# azure_subscription_id = "00000000-0000-0000-0000-000000000000" # or set ARM_SUBSCRIPTION_ID
+
+# ── Sensitive — supply via -var, TF_VAR_*, or environment-specific .tfvars ─
+postgres_admin_password = "<REPLACE_ME>" # var.postgres_admin_password
+bff_db_password         = "<REPLACE_ME>" # var.bff_db_password
+business_db_password    = "<REPLACE_ME>" # var.business_db_password
+keycloak_db_password    = "<REPLACE_ME>" # var.keycloak_db_password
+keycloak_admin_password = "<REPLACE_ME>" # var.keycloak_admin_password
+
+# ── CI / OIDC federation (object IDs of the Entra ID app) ─────────────────
+ci_push_principal_id  = "<REPLACE_ME>" # az ad app show --id $AZURE_CLIENT_ID --query id -o tsv
+tf_apply_principal_id = "<REPLACE_ME>" # typically the same value as ci_push_principal_id
+
+# ── Image tags (driven by the CI pipeline) ────────────────────────────────
+bff_image_tag              = "latest"
+business_service_image_tag = "latest"
+keycloak_image_tag         = "26.6.1"
