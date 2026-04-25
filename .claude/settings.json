@@ -3,7 +3,8 @@
     "PostToolUse": [{
       "matcher": "Edit|Write",
       "hooks": [{
-        "command": "bash -c 'FILE=\"$CLAUDE_FILE\"; case \"$FILE\" in *.java) DIR=$(echo \"$FILE\" | grep -o \"^[^/]*/\"); cd \"$DIR\" && ./mvnw spotless:apply -q 2>/dev/null || true ;; *.ts|*.vue|*.js) cd frontend && npx prettier --write \"$FILE\" 2>/dev/null || true ;; esac'"
+        "type": "command",
+        "command": "bash -c 'if [ -t 0 ]; then exit 0; fi; FILE=$(jq -r \".tool_input.file_path // empty\"); if [ -z \"$FILE\" ]; then exit 0; fi; REPO=\"${CLAUDE_PROJECT_DIR:-$PWD}\"; case \"$FILE\" in \"$REPO\"/bff/*.java) (cd \"$REPO/bff\" && ./mvnw spotless:apply -q) || true ;; \"$REPO\"/business-service/*.java) (cd \"$REPO/business-service\" && ./mvnw spotless:apply -q) || true ;; *.java) echo \"[hook] Java file outside repo bff/business-service: $FILE\" >&2 ;; \"$REPO\"/frontend/*.ts|\"$REPO\"/frontend/*.tsx|\"$REPO\"/frontend/*.vue|\"$REPO\"/frontend/*.js|\"$REPO\"/frontend/*.jsx) (cd \"$REPO/frontend\" && npx --no-install prettier --write \"$FILE\") || true ;; esac; exit 0'"
       }]
     }]
   }

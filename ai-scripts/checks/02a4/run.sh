@@ -120,6 +120,15 @@ elif ! command -v curl >/dev/null; then
 else
   if command -v lsof >/dev/null && lsof -iTCP:8081 -sTCP:LISTEN >/dev/null 2>&1; then
     info "port 8081 already in use — skipping dev-mode boot smoke"
+  elif ! bash -c '(exec 3<>/dev/tcp/localhost/5432) 2>/dev/null'; then
+    # Liquibase opens a JDBC connection before the Spring context finishes
+    # refreshing, so dev profile cannot start without a database — even
+    # though DevSecurityConfig bypasses auth. The probe runs in a fresh
+    # `bash -c` so the test socket FD cannot leak into the surrounding
+    # script (and from there into the spring-boot:run child).
+    info "postgres not reachable on localhost:5432 — skipping dev-mode boot smoke"
+    info "  → start it with: docker compose -f docker-compose.dev.yml up -d postgres-dev"
+    info "  → (docker-compose.dev.yml is created in phase 02c1; then re-run this check)"
   else
     info "starting business-service (dev profile) for smoke test…"
     LOG="$(mktemp -t boat-02a4-bs.XXXXXX.log)"

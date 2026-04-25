@@ -460,6 +460,16 @@
     ai-scripts/checks/02a4/run.sh .
     ```
     All `fail` items must be green before `<commit>`.
+
+    The dev-mode `/actuator/health` smoke requires Postgres on
+    `localhost:5432` (Liquibase runs on every startup, including the `dev`
+    profile, so the context cannot refresh without a database). If Postgres
+    is not reachable, the check skips this step gracefully with an
+    `info`-level skip (plus two next-step hints) — it does NOT fail the
+    phase. To exercise the smoke end-to-end, start Postgres first (`docker
+    compose -f docker-compose.dev.yml up -d postgres-dev`, available once
+    phase 02c1 has created the compose file) and re-run.
+
     Human-only checks live in `ai-scripts/checks/02a4/human.md`.
   </verification>
 
