@@ -1,0 +1,15 @@
+spring:
+  application:
+    name: business-service
+  profiles:
+    # No-profile launches default to `dev` so Liquibase + datasource autoconfig
+    # find a target. Higher environments must set `--spring.profiles.active=…`
+    # explicitly.
+    default: dev
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+  jpa:
+    open-in-view: false
+
+server:
+  port: 8081

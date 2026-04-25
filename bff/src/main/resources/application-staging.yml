@@ -1,0 +1,40 @@
+# BFF staging profile — Azure App Service + Azure PostgreSQL flexible server.
+# Signing key PEM is mounted from an Azure Key Vault secret-volume; only the
+# absolute path inside the container is referenced here.
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_FQDN}:5432/${BFF_DB_NAME:bff_session}?sslmode=require
+    username: ${BFF_DB_USER}
+    password: ${BFF_DB_PASSWORD}
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            client-id: ${KEYCLOAK_CLIENT_ID}
+            client-authentication-method: private_key_jwt
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/keycloak"
+            scope:
+              - openid
+              - profile
+              - email
+              - offline_access
+        provider:
+          keycloak:
+            issuer-uri: ${KEYCLOAK_ISSUER_URI}
+            user-name-attribute: preferred_username
+
+bff:
+  signing-key:
+    path: ${BFF_SIGNING_KEY_PATH}
+    id: ${BFF_SIGNING_KEY_ID}
+
+business-service:
+  url: ${BUSINESS_SERVICE_URL}
+
+server:
+  servlet:
+    session:
+      cookie:
+        secure: true

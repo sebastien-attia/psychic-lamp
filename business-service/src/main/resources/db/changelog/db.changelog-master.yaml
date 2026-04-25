@@ -1,0 +1,6 @@
+# Business Service master changelog — owns the `boatapp` database (APP_USER,
+# BOATS, BOAT_AUDIT). Migrations are added in step 02a2:
+#   include: changes/001-app-user.yaml
+#   include: changes/002-boats.yaml
+#   include: changes/003-boat-audit.yaml
+databaseChangeLog: []

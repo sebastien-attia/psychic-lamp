@@ -1,0 +1,11 @@
+# Business Service production profile — same shape as staging, production URLs only.
+spring:
+  datasource:
+    url: jdbc:postgresql://${POSTGRES_FQDN}:5432/${BUSINESS_DB_NAME:boatapp}?sslmode=require
+    username: ${BUSINESS_DB_USER}
+    password: ${BUSINESS_DB_PASSWORD}
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI}

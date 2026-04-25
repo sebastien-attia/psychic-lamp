@@ -1,0 +1,15 @@
+# BFF dev profile.
+#
+# In dev the BFF is NOT started — the frontend Vite proxy talks straight to the
+# Business Service on :8081. This file exists so the BFF can still be spun up
+# in dev (e.g. for ad-hoc debugging) against its own bff_session DB without
+# requiring Keycloak.
+#
+# TODO(02a4): DevSecurityConfig must EITHER exclude OAuth2ClientAutoConfiguration
+# from the @SpringBootApplication OR provide a stub `keycloak` registration here,
+# otherwise Boot's OAuth2 client autoconfig fails fast on missing client-id.
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/${BFF_DB_NAME:bff_session}
+    username: ${BFF_DB_USER:bff}
+    password: ${BFF_DB_PASSWORD:bff}

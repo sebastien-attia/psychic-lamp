@@ -1,0 +1,43 @@
+# BFF local-intg profile — full OAuth2 + JWT stack against Keycloak in Docker.
+#
+# Keycloak client uses private_key_jwt: the BFF signs a client_assertion JWT
+# with the RSA key referenced by bff.signing-key.path (PEM) / bff.signing-key.id (kid).
+# The public half is published at /.well-known/jwks.json by JwksController so
+# Keycloak can verify the assertion.
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/${BFF_DB_NAME:bff_session}
+    username: ${BFF_DB_USER:bff}
+    password: ${BFF_DB_PASSWORD:bff}
+  security:
+    oauth2:
+      client:
+        registration:
+          keycloak:
+            client-id: ${KEYCLOAK_CLIENT_ID}
+            client-authentication-method: private_key_jwt
+            authorization-grant-type: authorization_code
+            redirect-uri: "{baseUrl}/login/oauth2/code/keycloak"
+            scope:
+              - openid
+              - profile
+              - email
+              - offline_access
+        provider:
+          keycloak:
+            issuer-uri: ${KEYCLOAK_ISSUER_URI}
+            user-name-attribute: preferred_username
+
+bff:
+  signing-key:
+    path: ${BFF_SIGNING_KEY_PATH}
+    id: ${BFF_SIGNING_KEY_ID}
+
+business-service:
+  url: ${BUSINESS_SERVICE_URL:http://localhost:8081}
+
+server:
+  servlet:
+    session:
+      cookie:
+        secure: false

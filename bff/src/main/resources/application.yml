@@ -1,0 +1,30 @@
+spring:
+  application:
+    name: bff
+  profiles:
+    # No-profile launches (e.g. plain `mvnw spring-boot:run`, IDE run configs)
+    # default to `dev` so Liquibase + datasource autoconfig find a target.
+    # Higher environments must set `--spring.profiles.active=…` explicitly.
+    default: dev
+  session:
+    store-type: jdbc
+    jdbc:
+      # SPRING_SESSION schema is created by the BFF's own Liquibase changelog
+      # (see db/changelog/changes/001-spring-session.yaml from step 02a2).
+      # Keeping Spring Session from auto-initializing avoids a duplicate-create race.
+      initialize-schema: never
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+
+server:
+  port: 8080
+  servlet:
+    session:
+      timeout: 30m
+      cookie:
+        name: SESSION
+        http-only: true
+        same-site: lax
+        # `secure` defaults to false here so dev / local-intg work over plain HTTP.
+        # staging / prod override to `true`.
+        secure: false

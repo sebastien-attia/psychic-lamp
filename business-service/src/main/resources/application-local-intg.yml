@@ -1,0 +1,12 @@
+# Business Service local-intg profile — JWT resource server validating tokens
+# minted by Keycloak. JWKS is fetched from {issuer-uri}/protocol/openid-connect/certs.
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/${BUSINESS_DB_NAME:boatapp}
+    username: ${BUSINESS_DB_USER:business_service}
+    password: ${BUSINESS_DB_PASSWORD:business_service}
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          issuer-uri: ${KEYCLOAK_ISSUER_URI}

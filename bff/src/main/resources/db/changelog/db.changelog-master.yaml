@@ -1,0 +1,4 @@
+# BFF master changelog — owns the `bff_session` database (SPRING_SESSION,
+# SPRING_SESSION_ATTRIBUTES). Migration is added in step 02a2 step 5b:
+#   include: changes/001-spring-session.yaml
+databaseChangeLog: []

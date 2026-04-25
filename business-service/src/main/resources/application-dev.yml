@@ -1,0 +1,13 @@
+# Business Service dev profile — fast iteration, no Keycloak.
+# Auth is bypassed by DevSecurityConfig (permitAll), and a dummy AppUser is
+# auto-created on startup so persistence + audit FKs still resolve.
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/${BUSINESS_DB_NAME:boatapp}
+    username: ${BUSINESS_DB_USER:business_service}
+    password: ${BUSINESS_DB_PASSWORD:business_service}
+  jpa:
+    hibernate:
+      ddl-auto: none
+  liquibase:
+    enabled: true
