@@ -19,10 +19,14 @@ GROUP_ID="ch.owt.boatapp"
 
 # session-jdbc: JDBC-backed Spring Session (persisted in bff_session DB / SPRING_SESSION table).
 # The bare `session` ID was removed from Initializr metadata — store requires an explicit backend.
+# session-jdbc transitively pulls spring-jdbc (JdbcTemplate), so an explicit data-jdbc
+# starter is intentionally NOT included: it would add Spring Data Commons + a repository
+# scanner, opening the door to persistence concerns the BFF must not host
+# (see .claude/rules/bff-java.md — "No JPA, no domain logic").
 # validation: Jakarta Bean Validation (hibernate-validator). REQUIRED on BOTH services:
 #   the BFF is itself a REST adapter at the trust boundary to the browser and MUST run
 #   @Valid on its inbound DTOs (syntactic → 400). See .claude/rules/validation-and-errors.md.
-BFF_DEPS="web,validation,security,oauth2-client,actuator,session-jdbc,data-jdbc,liquibase,postgresql,lombok,testcontainers"
+BFF_DEPS="web,validation,security,oauth2-client,actuator,session-jdbc,liquibase,postgresql,lombok,testcontainers"
 BS_DEPS="web,data-jpa,validation,oauth2-resource-server,security,actuator,postgresql,liquibase,lombok,testcontainers"
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

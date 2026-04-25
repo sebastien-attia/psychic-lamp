@@ -32,17 +32,13 @@
 		<springdoc.version>2.8.13</springdoc.version>
 		<wiremock-spring-boot.version>3.10.0</wiremock-spring-boot.version>
 		<testcontainers-keycloak.version>3.7.0</testcontainers-keycloak.version>
-		<openapi-generator.version>7.10.0</openapi-generator.version>
+		<openapi-generator.version>7.11.0</openapi-generator.version>
 		<nimbus-jose-jwt.version>10.0.2</nimbus-jose-jwt.version>
 	</properties>
 	<dependencies>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-data-jdbc</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
@@ -105,9 +101,11 @@
 			<scope>test</scope>
 		</dependency>
 
-		<!-- WireMock (test) — mock the upstream Business Service in BFF integration tests -->
+		<!-- WireMock (test) — mock the upstream Business Service in BFF integration tests. -->
+		<!-- Canonical artifact, maintained by the WireMock org. The original Maciej Walkowiak -->
+		<!-- repo was donated to org.wiremock.integrations and lives there now. -->
 		<dependency>
-			<groupId>com.maciejwalkowiak.spring</groupId>
+			<groupId>org.wiremock.integrations</groupId>
 			<artifactId>wiremock-spring-boot</artifactId>
 			<version>${wiremock-spring-boot.version}</version>
 			<scope>test</scope>
@@ -123,11 +121,6 @@
 		<dependency>
 			<groupId>org.springframework.boot</groupId>
 			<artifactId>spring-boot-starter-actuator-test</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-data-jdbc-test</artifactId>
 			<scope>test</scope>
 		</dependency>
 		<dependency>
