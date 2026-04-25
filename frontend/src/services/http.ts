@@ -17,16 +17,20 @@ import { i18n } from '../i18n'
 const LOGIN_REDIRECT_URL = '/oauth2/authorization/keycloak'
 
 /**
- * The bootstrap endpoint whose 401 must NOT trigger an immediate
- * redirect. The auth store calls `/api/me` once at app start; an anon
- * 401 there is the *expected* way it learns the user is signed out, so
- * the router guard — not the interceptor — owns the redirect decision.
+ * Endpoints whose 401 must NOT trigger an immediate redirect-and-toast.
  *
- * Compared as a path suffix (after stripping any query string) to
+ * - `/api/me`: the auth store calls it once at app start; an anon 401
+ *   there is the *expected* way it learns the user is signed out, so
+ *   the router guard — not the interceptor — owns the redirect.
+ * - `/api/logout`: a 401 on logout means the session is already gone
+ *   server-side; pushing a "session expired" toast at that moment is
+ *   confusing (the user just clicked Sign out).
+ *
+ * Compared as path suffixes (after stripping any query string) to
  * stay robust against axios setting `config.url` to either a path or
  * a fully-qualified URL depending on the calling code.
  */
-const BOOTSTRAP_URL = '/api/me'
+const SILENT_401_PATHS = ['/api/me', '/api/logout'] as const
 
 /**
  * Delay (ms) between pushing the "session expired" toast and
@@ -83,9 +87,11 @@ function authRequiredProblem(instance: string): ApiProblemError {
 /**
  * Response interceptor that normalises auth and contract errors.
  *
- * 1. **HTTP 401 on `/api/me`** — pass through as a typed
- *    `ApiProblemError`. The auth store swallows it; the router guard
- *    then calls `auth.login()` to redirect.
+ * 1. **HTTP 401 on a {@link SILENT_401_PATHS} endpoint** — pass
+ *    through as a typed `ApiProblemError`. The auth store swallows
+ *    `/api/me` 401s (router guard then calls `auth.login()`);
+ *    `/api/logout` 401s mean the session is already gone and need
+ *    no UX.
  * 2. **HTTP 401 on any other URL** — session has expired mid-session.
  *    Push a "Your session has expired" toast, then redirect to
  *    Keycloak. The promise still rejects so `await` chains settle.
@@ -101,7 +107,7 @@ http.interceptors.response.use(
     const path = rawUrl.split('?')[0]
 
     if (status === 401) {
-      if (path.endsWith(BOOTSTRAP_URL)) {
+      if (SILENT_401_PATHS.some((p) => path.endsWith(p))) {
         return Promise.reject(authRequiredProblem(rawUrl))
       }
       if (!redirecting) {

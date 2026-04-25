@@ -54,22 +54,30 @@ export const router = createRouter({
  * Global navigation guard: every route in this SPA requires
  * authentication.
  *
+ * Fast path (already authenticated, not loading): synchronous
+ * short-circuit so subsequent navigations do not introduce a
+ * superfluous microtask.
+ *
  * On the very first navigation `auth.loading` is still `true` from
- * store creation, so the guard awaits `fetchUser()` (which dedupes
- * with App.vue's `onMounted` call). After that, `loading` is `false`
- * and `isAuthenticated` is the source of truth — anonymous users are
- * sent to Keycloak via `auth.login()`, and the navigation is aborted
- * to prevent the destination route from briefly mounting before the
- * browser unloads.
+ * store creation, so the guard awaits `fetchUser()` and is the single
+ * caller responsible for bootstrapping the session. After that,
+ * `loading` is `false` and `isAuthenticated` is the source of truth —
+ * anonymous users are sent to Keycloak via `auth.login()`, and the
+ * navigation is aborted to prevent the destination route from briefly
+ * mounting before the browser unloads. `auth.redirecting` short-
+ * circuits any further navigation while the redirect is in flight.
  */
-router.beforeEach(async () => {
+router.beforeEach((): boolean | void | Promise<boolean | void> => {
   const auth = useAuthStore()
   if (auth.redirecting) return false
-  if (auth.loading) {
-    await auth.fetchUser()
-  }
-  if (!auth.isAuthenticated) {
-    auth.login()
-    return false
-  }
+  if (!auth.loading && auth.isAuthenticated) return
+  return (async () => {
+    if (auth.loading) {
+      await auth.fetchUser()
+    }
+    if (!auth.isAuthenticated) {
+      auth.login()
+      return false
+    }
+  })()
 })
