@@ -77,7 +77,7 @@ services:
   # Keycloak admin endpoint. Idempotent (create-or-update). The same YAML
   # is reused by Ansible in staging/prod (see ai-scripts/02c3-ansible.md).
   keycloak-config:
-    image: docker.io/adorsys/keycloak-config-cli:latest-26.6.1
+    image: docker.io/adorsys/keycloak-config-cli:latest-26.5.4
     depends_on:
       keycloak: { condition: service_healthy }
     restart: "no"
