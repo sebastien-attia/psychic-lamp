@@ -22,6 +22,10 @@ public final class ProblemTypes {
     public static final URI VALIDATION =
             URI.create("https://boatapp.owt.ch/problems/validation");
 
+    /** 401 — missing or invalid Bearer JWT (issued by {@code RestAuthenticationEntryPoint}). */
+    public static final URI AUTH_REQUIRED =
+            URI.create("https://boatapp.owt.ch/problems/auth-required");
+
     /** 404 — {@code BoatNotFoundException}. */
     public static final URI NOT_FOUND =
             URI.create("https://boatapp.owt.ch/problems/not-found");

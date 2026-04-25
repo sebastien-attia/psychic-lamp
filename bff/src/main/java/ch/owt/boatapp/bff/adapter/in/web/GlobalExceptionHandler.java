@@ -19,6 +19,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
@@ -195,6 +196,39 @@ public class GlobalExceptionHandler {
         ProblemDetail problem = baseProblem(HttpStatus.BAD_GATEWAY, ProblemTypes.UPSTREAM_FAILURE,
                 "Upstream service failed",
                 "The upstream service returned an unexpected error.", req);
+        return responseFor(problem, locale);
+    }
+
+    // ── 401 from BffConfig's Bearer-token interceptor ───────────────────────
+
+    /**
+     * Convert an {@link AuthenticationException} thrown by the BFF's
+     * Bearer-token interceptor (typically: refresh-token revoked or
+     * Keycloak unreachable, surfaced as
+     * {@code InsufficientAuthenticationException}) into the same RFC 9457
+     * 401 envelope that {@code RestAuthenticationEntryPoint} emits for
+     * missing-session calls.
+     *
+     * <p>Without this handler the exception would fall through to
+     * {@link #handleFallback(Exception, HttpServletRequest)} and surface as
+     * 500, leaking an OAuth2 stack-trace fragment to the SPA.
+     *
+     * @param ex  the auth exception raised inside a request handler (NOT by
+     *            the security filter chain — those go to
+     *            {@code RestAuthenticationEntryPoint})
+     * @param req the inbound request — used for {@code instance} and logging
+     * @return RFC 9457 401 with no {@code messages}
+     */
+    @ExceptionHandler(AuthenticationException.class)
+    public ResponseEntity<ProblemDetail> handleAuthenticationException(
+            AuthenticationException ex, HttpServletRequest req) {
+        Locale locale = LocaleContextHolder.getLocale();
+        String code = "auth.required";
+        String detail = messageSource.getMessage(code, new Object[0], code, locale);
+        ProblemDetail problem = baseProblem(HttpStatus.UNAUTHORIZED, ProblemTypes.AUTH_REQUIRED,
+                "Authentication required", detail, req);
+        log.warn("401 from interceptor at {} {} — {}",
+                req.getMethod(), req.getRequestURI(), ex.getMessage());
         return responseFor(problem, locale);
     }
 

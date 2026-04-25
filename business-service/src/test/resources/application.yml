@@ -1,0 +1,18 @@
+# Test-only profile-less config: gives the resource-server's JwtDecoder a
+# placeholder JWKS URI so @SpringBootTest can wire the @Profile("!dev")
+# beans without contacting Keycloak.
+#
+# Why this file exists: the Initializr-generated BusinessServiceApplicationTests
+# runs with NO active profile, so @Profile("!dev") matches and
+# ResourceServerSecurityConfig fires. Without `jwk-set-uri` (or `issuer-uri`),
+# Spring Boot fails to autoconfigure JwtDecoder.
+#
+# `jwk-set-uri` is preferred over `issuer-uri` because the decoder is built
+# lazily — no HTTP call fires at startup. `issuer-uri` would trigger eager
+# OIDC discovery and break the test on a sandboxed network.
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: http://localhost/jwks
