@@ -164,21 +164,21 @@ resource "azurerm_container_app" "bff" {
       }
 
       liveness_probe {
-        path             = "/actuator/health"
-        port             = 8080
-        transport        = "HTTP"
-        initial_delay    = 30
-        interval_seconds = 30
-        timeout          = 5
+        path                    = "/actuator/health"
+        port                    = 8080
+        transport               = "HTTP"
+        initial_delay           = 30
+        interval_seconds        = 30
+        timeout                 = 5
         failure_count_threshold = 3
       }
 
       readiness_probe {
-        path             = "/actuator/health"
-        port             = 8080
-        transport        = "HTTP"
-        interval_seconds = 10
-        timeout          = 5
+        path                    = "/actuator/health"
+        port                    = 8080
+        transport               = "HTTP"
+        interval_seconds        = 10
+        timeout                 = 5
         failure_count_threshold = 3
         success_count_threshold = 1
       }
@@ -255,21 +255,21 @@ resource "azurerm_container_app" "business_service" {
       }
 
       liveness_probe {
-        path             = "/actuator/health"
-        port             = 8081
-        transport        = "HTTP"
-        initial_delay    = 30
-        interval_seconds = 30
-        timeout          = 5
+        path                    = "/actuator/health"
+        port                    = 8081
+        transport               = "HTTP"
+        initial_delay           = 30
+        interval_seconds        = 30
+        timeout                 = 5
         failure_count_threshold = 3
       }
 
       readiness_probe {
-        path             = "/actuator/health"
-        port             = 8081
-        transport        = "HTTP"
-        interval_seconds = 10
-        timeout          = 5
+        path                    = "/actuator/health"
+        port                    = 8081
+        transport               = "HTTP"
+        interval_seconds        = 10
+        timeout                 = 5
         failure_count_threshold = 3
         success_count_threshold = 1
       }
@@ -330,7 +330,7 @@ resource "azurerm_container_app" "keycloak" {
       # var.keycloak_image_tag). The literal pin is repeated here so the
       # supply-chain audit script can verify the floor without parsing
       # variable defaults.
-      image = "quay.io/keycloak/keycloak:${var.keycloak_image_tag}"
+      image  = "quay.io/keycloak/keycloak:${var.keycloak_image_tag}"
       cpu    = 0.5
       memory = "1Gi"
 
@@ -391,21 +391,21 @@ resource "azurerm_container_app" "keycloak" {
       }
 
       liveness_probe {
-        path             = "/health/live"
-        port             = 8080
-        transport        = "HTTP"
-        initial_delay    = 60
-        interval_seconds = 30
-        timeout          = 5
+        path                    = "/health/live"
+        port                    = 8080
+        transport               = "HTTP"
+        initial_delay           = 60
+        interval_seconds        = 30
+        timeout                 = 5
         failure_count_threshold = 3
       }
 
       readiness_probe {
-        path             = "/health/ready"
-        port             = 8080
-        transport        = "HTTP"
-        interval_seconds = 10
-        timeout          = 5
+        path                    = "/health/ready"
+        port                    = 8080
+        transport               = "HTTP"
+        interval_seconds        = 10
+        timeout                 = 5
         failure_count_threshold = 3
         success_count_threshold = 1
       }
@@ -455,10 +455,10 @@ resource "azurerm_container_app_job" "liquibase" {
 
   template {
     container {
-      name    = "liquibase"
-      image   = each.value.image
-      cpu     = 0.25
-      memory  = "0.5Gi"
+      name   = "liquibase"
+      image  = each.value.image
+      cpu    = 0.25
+      memory = "0.5Gi"
 
       command = ["java"]
       args = [

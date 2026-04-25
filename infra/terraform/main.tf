@@ -111,7 +111,7 @@ module "container_apps" {
   jdbc_urls = module.database.jdbc_urls
 
   # Key Vault wiring (secret IDs are bound into the ACA `secret { }` blocks)
-  keyvault_secret_ids   = module.keyvault.secret_ids
+  keyvault_secret_ids       = module.keyvault.secret_ids
   bff_signing_key_secret_id = module.keyvault.bff_signing_key_secret_id
 
   # Image tags
