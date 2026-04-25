@@ -6,8 +6,13 @@
     "boats": "Boats",
     "newBoat": "New boat",
     "signOut": "Sign out",
+    "signingOut": "Signing out…",
     "toggleDarkMode": "Toggle dark mode",
     "menu": "Menu"
+  },
+  "auth": {
+    "loading": "Loading your session…",
+    "sessionExpired": "Your session has expired. Please sign in again."
   },
   "boats": {
     "list": {
@@ -38,6 +43,7 @@
   },
   "actions": {
     "cancel": "Cancel",
-    "confirm": "Confirm"
+    "confirm": "Confirm",
+    "dismiss": "Dismiss"
   }
 }

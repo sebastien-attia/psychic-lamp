@@ -4,18 +4,15 @@ import {
   type RouteRecordRaw,
 } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
-import { ApiProblemError } from '../services/problem-detail'
-
-let bootstrapped = false
 
 /**
  * Application routes.
  *
  * No `/login` or `/callback` route exists: authentication is handled
- * entirely by the BFF (the axios 401 interceptor redirects to
- * `/oauth2/authorization/keycloak`, Spring Security drives the OAuth2
- * Authorization-Code flow against Keycloak, and the user is returned to
- * `/` with a session cookie set).
+ * entirely by the BFF. The router guard below redirects anonymous
+ * users to `/oauth2/authorization/keycloak` via `auth.login()`;
+ * Spring Security drives the OAuth2 Authorization-Code flow against
+ * Keycloak and returns the user to `/` with a session cookie set.
  */
 const routes: RouteRecordRaw[] = [
   { path: '/', redirect: '/boats' },
@@ -45,8 +42,8 @@ const routes: RouteRecordRaw[] = [
 
 /**
  * Vue Router instance. Uses HTML5 history mode so URLs match the BFF's
- * static-resource fallback (the BFF serves `index.html` for any unmatched
- * path under `/`, letting the SPA take over).
+ * static-resource fallback (the BFF serves `index.html` for any
+ * unmatched path under `/`, letting the SPA take over).
  */
 export const router = createRouter({
   history: createWebHistory(),
@@ -54,29 +51,25 @@ export const router = createRouter({
 })
 
 /**
- * Global navigation guard: ensure the current user is loaded once before any
- * navigation completes. The first call awaits `GET /api/me`; subsequent
- * navigations short-circuit on the module-scoped `bootstrapped` flag so a
- * transient backend error does not pin the guard into an infinite refetch
- * loop.
+ * Global navigation guard: every route in this SPA requires
+ * authentication.
  *
- * On 401 the axios interceptor in `services/http.ts` triggers a redirect to
- * Keycloak; the rejection from `fetchMe()` is then swallowed here (the page
- * is unloading anyway). Any other failure is rethrown so the user sees
- * something instead of landing on a blank screen.
+ * On the very first navigation `auth.loading` is still `true` from
+ * store creation, so the guard awaits `fetchUser()` (which dedupes
+ * with App.vue's `onMounted` call). After that, `loading` is `false`
+ * and `isAuthenticated` is the source of truth — anonymous users are
+ * sent to Keycloak via `auth.login()`, and the navigation is aborted
+ * to prevent the destination route from briefly mounting before the
+ * browser unloads.
  */
 router.beforeEach(async () => {
-  if (bootstrapped) return
   const auth = useAuthStore()
-  try {
-    await auth.fetchMe()
-  } catch (e) {
-    if (e instanceof ApiProblemError && e.status === 401) {
-      // 401 already triggered a redirect to Keycloak; swallow.
-      return
-    }
-    throw e
-  } finally {
-    bootstrapped = true
+  if (auth.redirecting) return false
+  if (auth.loading) {
+    await auth.fetchUser()
+  }
+  if (!auth.isAuthenticated) {
+    auth.login()
+    return false
   }
 })

@@ -58,16 +58,18 @@ const fullName = computed(() => {
           </p>
         </div>
         <div class="py-1">
-          <MenuItem v-slot="{ active }">
+          <MenuItem v-slot="{ active }" :disabled="auth.loggingOut">
             <button
               type="button"
+              :disabled="auth.loggingOut"
               :class="[
                 active ? 'bg-slate-100 dark:bg-slate-700' : '',
+                auth.loggingOut ? 'cursor-not-allowed opacity-60' : '',
                 'block w-full px-4 py-2 text-left text-sm text-slate-700 dark:text-slate-200',
               ]"
               @click="auth.logout()"
             >
-              {{ t('nav.signOut') }}
+              {{ auth.loggingOut ? t('nav.signingOut') : t('nav.signOut') }}
             </button>
           </MenuItem>
         </div>
