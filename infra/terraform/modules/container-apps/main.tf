@@ -232,24 +232,20 @@ resource "terraform_data" "bootstrap_db_roles_run" {
           # "Unknown" — `set -e` will fail this attempt and the outer
           # loop retries. This avoids the trap where a 404/auth
           # failure looks identical to "still running".
-          # `az containerapp job execution show` takes the JOB name via
-          # --name/-n (alias of --job-name) and REQUIRES the execution
-          # name via the distinct --job-execution-name flag. Passing
-          # --name for the execution silently aliases onto --job-name,
-          # leaving --job-execution-name unset and tripping
-          # "the following arguments are required: --job-execution-name".
-          # The long form --job-name is used deliberately here so the
-          # alias trap is impossible to re-introduce by accident.
-          # Mirrors the working invocation in the Ansible task "Poll
-          # job execution until terminal state"
-          # (infra/ansible/playbooks/run-migrations.yml).
+          # `--name` is the JOB name; `--job-execution-name` is the
+          # execution name returned by `az containerapp job start`.
+          # Per `az containerapp job execution show --help` (CLI 2.85)
+          # and the latest Microsoft Learn docs, both are required and
+          # there is no `--job-name` alias. Mirrors the working
+          # invocation in infra/ansible/playbooks/run-migrations.yml
+          # ("Poll job execution until terminal state").
           STATUS=$(az containerapp job execution show \
-            --job-name "$JOB_NAME" --resource-group "$RG_NAME" \
+            --name "$JOB_NAME" --resource-group "$RG_NAME" \
             --job-execution-name "$EXEC" --query properties.status -o tsv)
           echo "  [$i/36] $EXEC: $STATUS"
           case "$STATUS" in
-            Succeeded)        echo ">> bootstrap-db-roles: succeeded"; exit 0 ;;
-            Failed|Canceled)  break ;;
+            Succeeded)                 echo ">> bootstrap-db-roles: succeeded"; exit 0 ;;
+            Failed|Canceled|Degraded)  break ;;
           esac
           sleep 10
         done
