@@ -56,6 +56,15 @@ jobs:
     # this, ci.yml's DT gate, gitleaks license, and any other `secrets.*`
     # reference would resolve to empty strings on deploy-triggered runs.
     secrets: inherit
+    # The reusable workflow's nested jobs (sca-scan, container-scan) need to
+    # upload SARIF and read action metadata. The CALLER job's permissions
+    # block is the ceiling for the called workflow's jobs — without raising
+    # it here the workflow fails to start with "is requesting
+    # security-events: write, but is only allowed security-events: none".
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
 
   build-push:
     # Build + push images, then sign with cosign (keyless OIDC) and emit
