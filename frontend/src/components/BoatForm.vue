@@ -117,7 +117,7 @@ const onSubmit = handleSubmit(async (values) => {
     <div
       v-if="formError"
       role="alert"
-      class="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 dark:border-red-700 dark:bg-red-900/30 dark:text-red-200"
+      class="rounded-md border border-brique-200 bg-brique-50 px-3 py-2 text-sm text-brique-700 dark:border-brique-700 dark:bg-brique-900/30 dark:text-brique-200"
     >
       {{ formError }}
     </div>
@@ -145,12 +145,12 @@ const onSubmit = handleSubmit(async (values) => {
         :maxlength="NAME_MAX"
         :aria-invalid="!!errors.name"
         :aria-describedby="errors.name ? 'boat-name-error' : undefined"
-        class="mt-1 block w-full rounded-md border-slate-300 py-2.5 shadow-sm focus:border-nautical-500 focus:ring-nautical-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+        class="mt-1 block w-full rounded-md border-slate-300 py-2.5 shadow-sm focus:border-bleu-500 focus:ring-bleu-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
       />
       <p
         id="boat-name-error"
         v-if="errors.name"
-        class="mt-1 text-sm text-red-600"
+        class="mt-1 text-sm text-brique-600"
         aria-live="polite"
       >
         {{ errors.name }}
@@ -180,12 +180,12 @@ const onSubmit = handleSubmit(async (values) => {
         :maxlength="DESCRIPTION_MAX"
         :aria-invalid="!!errors.description"
         :aria-describedby="errors.description ? 'boat-description-error' : undefined"
-        class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-nautical-500 focus:ring-nautical-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
+        class="mt-1 block w-full rounded-md border-slate-300 shadow-sm focus:border-bleu-500 focus:ring-bleu-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100"
       />
       <p
         id="boat-description-error"
         v-if="errors.description"
-        class="mt-1 text-sm text-red-600"
+        class="mt-1 text-sm text-brique-600"
         aria-live="polite"
       >
         {{ errors.description }}
@@ -206,7 +206,7 @@ const onSubmit = handleSubmit(async (values) => {
       <button
         type="submit"
         :disabled="isSubmitting"
-        class="inline-flex w-full items-center justify-center gap-2 rounded-md bg-nautical-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-transform hover:bg-nautical-700 focus:outline-none focus:ring-2 focus:ring-nautical-500 active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100 sm:w-auto"
+        class="inline-flex w-full items-center justify-center gap-2 rounded-md bg-bleu-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-transform hover:bg-bleu-700 focus:outline-none focus:ring-2 focus:ring-bleu-500 active:scale-[0.98] disabled:opacity-50 disabled:active:scale-100 sm:w-auto"
       >
         <svg
           v-if="isSubmitting"

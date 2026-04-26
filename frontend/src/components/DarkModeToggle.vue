@@ -18,8 +18,8 @@ const { t } = useI18n()
   <Switch
     :model-value="isDark"
     :aria-label="t('nav.toggleDarkMode')"
-    class="relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-nautical-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900"
-    :class="isDark ? 'bg-nautical-600' : 'bg-slate-300'"
+    class="relative inline-flex h-7 w-12 shrink-0 cursor-pointer items-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-bleu-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900"
+    :class="isDark ? 'bg-bleu-600' : 'bg-slate-300'"
     @update:model-value="toggle"
   >
     <span
@@ -28,12 +28,12 @@ const { t } = useI18n()
     >
       <MoonIcon
         v-if="isDark"
-        class="h-4 w-4 text-nautical-700"
+        class="h-4 w-4 text-bleu-700"
         aria-hidden="true"
       />
       <SunIcon
         v-else
-        class="h-4 w-4 text-amber-500"
+        class="h-4 w-4 text-olive-500"
         aria-hidden="true"
       />
     </span>

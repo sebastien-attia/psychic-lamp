@@ -30,21 +30,21 @@ defineEmits<{
 <template>
   <div
     role="alert"
-    class="flex flex-col items-center justify-center rounded-lg border border-red-200 bg-red-50 px-6 py-12 text-center dark:border-red-800 dark:bg-red-900/30"
+    class="flex flex-col items-center justify-center rounded-lg border border-brique-200 bg-brique-50 px-6 py-12 text-center dark:border-brique-800 dark:bg-brique-900/30"
   >
     <ExclamationTriangleIcon
-      class="h-10 w-10 text-red-500 dark:text-red-300"
+      class="h-10 w-10 text-brique-500 dark:text-brique-300"
       aria-hidden="true"
     />
-    <h2 class="mt-3 text-base font-semibold text-red-800 dark:text-red-100">
+    <h2 class="mt-3 text-base font-semibold text-brique-800 dark:text-brique-100">
       {{ title }}
     </h2>
-    <p class="mt-1 max-w-md text-sm text-red-700 dark:text-red-200">
+    <p class="mt-1 max-w-md text-sm text-brique-700 dark:text-brique-200">
       {{ message }}
     </p>
     <button
       type="button"
-      class="mt-5 inline-flex items-center rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 shadow-sm hover:bg-red-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:border-red-700 dark:bg-red-900/40 dark:text-red-100 dark:hover:bg-red-900/60"
+      class="mt-5 inline-flex min-h-[44px] items-center rounded-md border border-brique-300 bg-white px-4 py-2 text-sm font-medium text-brique-700 shadow-sm hover:bg-brique-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brique-500 dark:border-brique-700 dark:bg-brique-900/40 dark:text-brique-100 dark:hover:bg-brique-900/60"
       @click="$emit('retry')"
     >
       {{ retryLabel }}

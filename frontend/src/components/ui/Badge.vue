@@ -7,8 +7,8 @@ import { computed } from 'vue'
  */
 const props = withDefaults(
   defineProps<{
-    /** Visual flavour: `neutral` for inert metadata, `accent` for warm
-     *  amber emphasis (matches the page's primary CTA color). */
+    /** Visual flavour: `neutral` for inert metadata, `accent` for the
+     *  Olive accent that pairs with the page's create / success CTAs. */
     variant?: 'neutral' | 'accent'
   }>(),
   { variant: 'neutral' },
@@ -16,7 +16,7 @@ const props = withDefaults(
 
 const classes = computed(() =>
   props.variant === 'accent'
-    ? 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200'
+    ? 'bg-olive-100 text-olive-800 dark:bg-olive-900/40 dark:text-olive-200'
     : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
 )
 </script>

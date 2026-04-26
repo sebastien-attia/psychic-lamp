@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink, useRoute, useRouter, type LocationQuery } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 import { InboxIcon, MagnifyingGlassIcon, PlusIcon } from '@heroicons/vue/24/outline'
 
 import { useBoatsStore } from '../stores/boats'
+import { useShortcutsStore } from '../stores/shortcuts'
 import { useDebouncedRef } from '../composables/useDebouncedRef'
 import { showError, showSuccess } from '../composables/useToast'
 import BoatCard from '../components/boats/BoatCard.vue'
@@ -39,8 +40,35 @@ const route = useRoute()
 const { t } = useI18n()
 
 const store = useBoatsStore()
+const shortcutsStore = useShortcutsStore()
 const { boats, totalElements, totalPages, currentPage, pageSize, loading, error } =
   storeToRefs(store)
+
+/**
+ * Ref attached to the page's `SearchInput` so the global `/` shortcut
+ * can move focus into it. Wrapped in a typed shape that matches
+ * `SearchInput`'s template-ref surface (it exposes the underlying
+ * `<input>` via a `focus()` method).
+ */
+const searchInputRef = ref<{ focus: () => void } | null>(null)
+
+/**
+ * Teardown fn returned by `setFocusSearch`. Keeps registration and
+ * unregistration paired in a single closure so the store can never
+ * leak a reference to a destroyed component.
+ */
+let unregisterFocusSearch: (() => void) | null = null
+
+onMounted(() => {
+  unregisterFocusSearch = shortcutsStore.setFocusSearch(() => {
+    searchInputRef.value?.focus()
+  })
+})
+
+onBeforeUnmount(() => {
+  unregisterFocusSearch?.()
+  unregisterFocusSearch = null
+})
 
 const PAGE_SIZE_OPTIONS = [12, 24, 48] as const
 const DEFAULT_PAGE_SIZE = 12
@@ -313,7 +341,7 @@ function refetch(): void {
       </div>
       <RouterLink
         :to="{ name: 'boats.create' }"
-        class="inline-flex items-center gap-2 rounded-md bg-amber-700 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-amber-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700"
+        class="inline-flex min-h-[44px] items-center gap-2 rounded-md bg-olive-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-olive-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-olive-600"
       >
         <PlusIcon class="h-4 w-4" aria-hidden="true" />
         {{ t('boats.list.newBoat') }}
@@ -321,6 +349,7 @@ function refetch(): void {
     </header>
 
     <SearchInput
+      ref="searchInputRef"
       v-model="searchInput"
       class="mt-6"
       :label="t('boats.list.search.label')"

@@ -120,7 +120,7 @@ async function refresh(): Promise<void> {
     </h1>
     <RouterLink
       to="/boats"
-      class="mt-4 inline-block text-nautical-600 hover:underline dark:text-nautical-300"
+      class="mt-4 inline-block text-bleu-600 hover:underline dark:text-bleu-300"
     >
       {{ t('nav.boats') }}
     </RouterLink>
@@ -133,14 +133,14 @@ async function refresh(): Promise<void> {
     >
       <RouterLink
         to="/boats"
-        class="hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-nautical-500"
+        class="hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-bleu-500"
       >
         {{ t('nav.boats') }}
       </RouterLink>
       <span aria-hidden="true" class="mx-2">›</span>
       <RouterLink
         :to="{ name: 'boats.detail', params: { id: boat.id } }"
-        class="hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-nautical-500"
+        class="hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-bleu-500"
       >
         {{ boat.name }}
       </RouterLink>
@@ -156,13 +156,13 @@ async function refresh(): Promise<void> {
     <div
       v-if="conflict"
       role="alert"
-      class="mt-6 rounded-md border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-700 dark:bg-amber-900/30 dark:text-amber-100"
+      class="mt-6 rounded-md border border-brique-300 bg-brique-50 p-4 text-sm text-brique-800 dark:border-brique-700 dark:bg-brique-900/30 dark:text-brique-100"
     >
       <p class="font-semibold">{{ t('boats.edit.conflict.title') }}</p>
       <p class="mt-1">{{ t('boats.edit.conflict.message') }}</p>
       <button
         type="button"
-        class="mt-3 inline-flex w-full items-center justify-center rounded-md bg-amber-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-amber-700 sm:w-auto"
+        class="mt-3 inline-flex min-h-[44px] w-full items-center justify-center rounded-md bg-brique-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-brique-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brique-600 sm:w-auto"
         @click="refresh"
       >
         {{ t('boats.edit.conflict.refresh') }}

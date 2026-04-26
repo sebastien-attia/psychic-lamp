@@ -107,5 +107,16 @@
     "confirm": "Confirmer",
     "dismiss": "Ignorer",
     "back": "Retour"
+  },
+  "shortcuts": {
+    "title": "Raccourcis clavier",
+    "subtitle": "Naviguez sans quitter le clavier.",
+    "openLabel": "Raccourcis clavier",
+    "rows": {
+      "focusSearch": "Mettre le focus sur la recherche",
+      "newBoat": "Ajouter un nouveau bateau",
+      "clearSearch": "Effacer la recherche (champ actif)",
+      "openCheatsheet": "Afficher ce mémo"
+    }
   }
 }

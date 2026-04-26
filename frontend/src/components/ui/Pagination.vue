@@ -123,7 +123,7 @@ function onSize(e: Event): void {
       <button
         type="button"
         :disabled="isFirst"
-        class="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+        class="inline-flex min-h-[44px] items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
         @click="goTo(currentPage - 1)"
       >
         <ChevronLeftIcon class="h-4 w-4" aria-hidden="true" />
@@ -133,7 +133,7 @@ function onSize(e: Event): void {
       <button
         type="button"
         :disabled="isLast"
-        class="inline-flex items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
+        class="inline-flex min-h-[44px] items-center gap-1 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:hover:bg-white dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700"
         @click="goTo(currentPage + 1)"
       >
         {{ nextLabel }}
@@ -167,7 +167,7 @@ function onSize(e: Event): void {
           :class="[
             'min-w-[2rem] rounded-md px-2.5 py-1 text-sm font-medium',
             p === currentPage
-              ? 'bg-amber-700 text-white shadow-sm'
+              ? 'bg-olive-600 text-white shadow-sm'
               : 'text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-800',
           ]"
           @click="goTo(p)"
@@ -193,7 +193,7 @@ function onSize(e: Event): void {
       <select
         :id="sizeId"
         :value="pageSize"
-        class="rounded-md border-slate-300 bg-white py-1.5 pl-3 pr-8 text-sm text-slate-700 shadow-sm focus:border-nautical-500 focus:ring-nautical-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
+        class="rounded-md border-slate-300 bg-white py-1.5 pl-3 pr-8 text-sm text-slate-700 shadow-sm focus:border-bleu-500 focus:ring-bleu-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200"
         @change="onSize"
       >
         <option v-for="opt in pageSizeOptions" :key="opt" :value="opt">

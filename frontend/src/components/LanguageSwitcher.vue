@@ -56,7 +56,7 @@ function ariaLabelFor(code: AppLocale): string {
 <template>
   <Menu as="div" class="relative inline-block text-left">
     <MenuButton
-      class="inline-flex items-center gap-x-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-nautical-500"
+      class="inline-flex min-h-[44px] items-center gap-x-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-bleu-500"
       :aria-label="t('nav.language')"
     >
       <LanguageIcon class="h-5 w-5" aria-hidden="true" />
@@ -91,7 +91,7 @@ function ariaLabelFor(code: AppLocale): string {
             <span>{{ labelFor(code) }}</span>
             <CheckIcon
               v-if="code === current"
-              class="h-4 w-4 text-nautical-600 dark:text-nautical-300"
+              class="h-4 w-4 text-bleu-600 dark:text-bleu-300"
               aria-hidden="true"
             />
           </button>
