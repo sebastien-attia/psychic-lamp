@@ -232,9 +232,20 @@ resource "terraform_data" "bootstrap_db_roles_run" {
           # "Unknown" — `set -e` will fail this attempt and the outer
           # loop retries. This avoids the trap where a 404/auth
           # failure looks identical to "still running".
+          # `az containerapp job execution show` takes the JOB name via
+          # --name/-n (alias of --job-name) and REQUIRES the execution
+          # name via the distinct --job-execution-name flag. Passing
+          # --name for the execution silently aliases onto --job-name,
+          # leaving --job-execution-name unset and tripping
+          # "the following arguments are required: --job-execution-name".
+          # The long form --job-name is used deliberately here so the
+          # alias trap is impossible to re-introduce by accident.
+          # Mirrors the working invocation in the Ansible task "Poll
+          # job execution until terminal state"
+          # (infra/ansible/playbooks/run-migrations.yml).
           STATUS=$(az containerapp job execution show \
             --job-name "$JOB_NAME" --resource-group "$RG_NAME" \
-            --name "$EXEC" --query properties.status -o tsv)
+            --job-execution-name "$EXEC" --query properties.status -o tsv)
           echo "  [$i/36] $EXEC: $STATUS"
           case "$STATUS" in
             Succeeded)        echo ">> bootstrap-db-roles: succeeded"; exit 0 ;;
