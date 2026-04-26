@@ -31,7 +31,12 @@ inputs:
     required: false
     default: '.'
   dockerfile:
-    description: 'Path to the Dockerfile, relative to the build context.'
+    description: |
+      Path to the Dockerfile, relative to the workflow working directory
+      (repo root after actions/checkout) — NOT relative to `context`.
+      `docker build`'s --file flag is resolved against the host cwd, so
+      callers should pass a repo-rooted path such as `bff/Dockerfile` or
+      `keycloak/Dockerfile` regardless of what `context` is set to.
     required: true
   image:
     description: 'Fully-qualified image reference WITHOUT tag (e.g. boatappstagingacr.azurecr.io/bff).'

@@ -296,8 +296,11 @@ jobs:
         id: keycloak_push
         uses: ./.github/actions/docker-build-push
         with:
-          context: keycloak
-          dockerfile: Dockerfile
+          # `docker build --file` resolves relative to the workflow's
+          # cwd (repo root after actions/checkout), NOT relative to the
+          # build context. Pass a repo-rooted path here — same shape as
+          # bff/business-service above.
+          dockerfile: keycloak/Dockerfile
           image: ${{ env.KEYCLOAK_IMAGE }}
           tags: |
             staging
