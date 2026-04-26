@@ -284,9 +284,21 @@ jobs:
   plan:
     # Run terraform plan from the tagged commit and persist the binary
     # plan as an artifact so the apply job applies it verbatim.
+    #
+    # Carries `environment: production` for two reasons:
+    #   1. The TF_VAR_* secrets are scoped to the production environment,
+    #      not the repo — without the claim they resolve to empty.
+    #   2. The OIDC FIC for release-triggered runs is `environment:
+    #      production`-scoped (see 00d-bootstrap-azure.sh); without the
+    #      claim azure/login can't match a federated credential.
+    # Side effect: the Required-Reviewer rule fires on this job too, so a
+    # production deploy now requires THREE approvals (bootstrap, plan,
+    # apply). That's the cost of full first-deploy automation; the
+    # alternative is a one-time manual `terraform apply -target` per env.
     name: Terraform plan (production)
     needs: [build-push]
     runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
+    environment: production
     permissions:
       id-token: write
       contents: read

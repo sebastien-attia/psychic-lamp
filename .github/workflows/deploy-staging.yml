@@ -286,12 +286,18 @@ jobs:
           push-to-registry: true
 
   plan:
-    # Run terraform plan in a job that does NOT carry the environment gate,
-    # then upload the binary plan as an artifact so the apply job applies
-    # the EXACT plan the reviewer saw.
+    # Run terraform plan and upload the binary as an artifact so the apply
+    # job applies the EXACT plan the reviewer saw. Carries `environment:
+    # staging` because the `TF_VAR_*` secrets used below are scoped to the
+    # staging GitHub Environment (00f-generate-db-secrets.sh writes them
+    # there, not at repo level) — without the claim they resolve to empty
+    # strings and `terraform plan` fails on the postgres admin password.
+    # Staging has no protection rule, so the claim does not introduce an
+    # operator click.
     name: Terraform plan (staging)
     needs: [build-push]
     runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
+    environment: staging
     permissions:
       id-token: write
       contents: read
