@@ -323,8 +323,16 @@
 
         apply:
           needs: plan
-          environment: staging   # or production (gates approval here)
+          environment: staging   # production = `production` (see dual-env note below)
           runs-on: <vnet-runner>
+          # NO `env:` block. `terraform apply tfplan.binary` runs the
+          # already-resolved plan and does NOT re-evaluate variables, so
+          # any TF_VAR_*_password / TF_VAR_*_principal_id declared here
+          # is dead code and an unnecessary expansion of the secret
+          # blast radius for the post-deploy steps. Likewise, do NOT
+          # add a "Resolve federated SP object ID" step (`az ad sp show`)
+          # to the apply job — the principal-ID values it would emit
+          # are TF_VAR_* the apply step doesn't read either.
           steps:
             - uses: actions/download-artifact@<sha> # v4
               with: { name: tfplan-${{ github.run_id }} }
@@ -332,8 +340,42 @@
             - run: terraform apply -input=false -auto-approve tfplan.binary
 
       The apply runs the EXACT plan that was reviewed — no re-plan inside
-      the apply job. Production-environment approval gate sits BETWEEN
-      plan and apply (it currently sits before everything).
+      the apply job.
+
+      **Dual-environment design for production (one approval per release).**
+      GitHub fires deployment-protection rules per *job-claim*, not per
+      workflow run. If `infra-bootstrap`, `plan`, AND `apply` all claim
+      `environment: production`, a release blocks on three Required-Reviewer
+      prompts back-to-back. To collapse that to one prompt, host the
+      unprotected jobs on a sibling environment:
+
+        infra-bootstrap → environment: production-bootstrap   (no protection)
+        plan            → environment: production-bootstrap   (no protection)
+        apply           → environment: production             (Required-Reviewer)
+
+      `production-bootstrap` is created by `00d-bootstrap-azure.sh` with a
+      matching FIC `gh-env-prod-bootstrap` (subject
+      `repo:<owner>/<repo>:environment:production-bootstrap`). Its TF_VAR_*
+      secret VALUES are mirrored from `production` by
+      `00f-generate-db-secrets.sh`'s env-group logic so
+      `secrets.TF_VAR_*` resolves identically across both envs and
+      Terraform's variable-surface validation passes on the targeted
+      bootstrap apply. The dual-env design MUST be documented in
+      `.github/ENVIRONMENTS.md` with a "do NOT add Required-Reviewer to
+      production-bootstrap" warning — without it a future operator will
+      "fix" the asymmetry through the UI and re-introduce the
+      triple-prompt pain.
+
+      **Preflight env-existence check (production only).** Add a
+      `preflight-envs` job (depends on `ci`, no environment claim) that
+      runs `gh api repos/${GITHUB_REPOSITORY}/environments/{production,production-bootstrap}`
+      and fails fast with an `::error::` pointing at `00d-bootstrap-azure.sh`
+      and `00f-generate-db-secrets.sh` if either env is missing. Without
+      this guard, a clone of the repo where the bootstrap scripts have
+      not been re-run trips an opaque
+      `Value 'production-bootstrap' is not valid` error mid-run, AND the
+      OIDC token lacks the matching environment claim — operators burn
+      time guessing. Wire `infra-bootstrap` to `needs: [ci, preflight-envs]`.
 
       Update `terraform-plan.yml` (PR workflow) to upload the same
       artifact and post a summary table. Share a composite action
@@ -529,6 +571,7 @@
     - github/codeql-action: weekly + on push/PR for Java + TS
     - gitleaks secret scanning on every push/PR
     - terraform plan persisted as artifact, applied verbatim across env gate
+    - production approval collapsed to one prompt per release via sibling `production-bootstrap` env (mirrored secrets, preflight existence check); apply jobs strip dead TF_VAR_* / SP-resolve since `apply tfplan.binary` does not re-evaluate variables
     - Dependency-Track upgraded from receipt to gate (pre-deploy policy check)
     - concurrency: groups on staging/production deploy workflows
     - Branch protection codified in .github/settings.yml, applied by 00d
