@@ -286,6 +286,22 @@ In the GitHub UI:
 Without this, anyone with `write` access to your repo could publish a
 Release and trigger a production deploy without approval.
 
+> **Plan-tier caveat** — *Required reviewers* is **not available on
+> free personal private repos**. If your Environments page shows only
+> "Deployment branches and tags" (and no "Deployment protection rules"
+> section), you are on the free plan. You have three options:
+>
+> 1. **Upgrade to GitHub Pro** ($4/mo, Settings → Billing & plans) —
+>    unlocks Required Reviewers on the private repo.
+> 2. **Flip the repo to public** (after the §C.6 pre-flight). Required
+>    Reviewers, CodeQL/GHAS, secret scanning, and push protection all
+>    become free at once.
+> 3. **Skip the gate for now** — production deploys will still run
+>    when you publish a Release, just without manual approval. As a
+>    partial mitigation, set "Deployment branches and tags" to a
+>    `v*` tag pattern so only release tags (which §C.3 restricts to
+>    you) can deploy to `production`.
+
 ### A.6 (Optional) Wire Dependency-Track
 
 If you have a Dependency-Track instance:
@@ -314,14 +330,21 @@ restrictive defaults, enable it: Settings → Actions → General →
 "Allow all actions and reusable workflows" (or set to your preferred
 allowlist).
 
-### B.3 Note: CodeQL on private repos
+### B.3 Note: features that are paywalled on free private repos
 
-GitHub Advanced Security is paid on private repos. The committed
-`codeql.yml` workflow includes a Semgrep-OSS fallback and skips
-silently when GHAS is unavailable — you should expect to see the
-CodeQL job marked "skipped", not failed. This is expected on private
-personal repos and resolves itself the moment you flip to public
-(see §C.7).
+A free personal private repo has three notable gaps versus public or
+paid:
+
+- **CodeQL / GitHub Advanced Security** — paid. The committed
+  `codeql.yml` workflow includes a Semgrep-OSS fallback and skips
+  silently when GHAS is unavailable; expect the CodeQL job marked
+  "skipped", not failed.
+- **Required Reviewers on Environments** — paid (GitHub Pro and
+  above). See the §A.5 caveat for workarounds.
+- **Secret scanning + Push protection** — paid (GHAS).
+
+All three become **free** the moment you flip the repo to public
+(§C.7).
 
 ### B.4 Note: `GITLEAKS_LICENSE`
 
@@ -517,4 +540,5 @@ For the gritty internals of the pipeline, see
 | Terraform `Error: state lease conflict`                                | Another apply is in flight, or a prior run died holding the lease. Wait, or `az storage blob lease break` on the state blob.               |
 | Container Apps return 503 right after the first deploy                 | Revision is still starting. Wait ~3 minutes, then `az containerapp logs show -n <app> -g boat-app-staging-rg --follow`.                    |
 | CodeQL job marked "skipped" on a private repo                          | Expected — GHAS is paid on private. The Semgrep-OSS fallback covers basic SAST. Resolves itself when you flip to public (§C.7).            |
+| `production` Environment has no "Required reviewers" option in the UI  | You are on the free personal plan; Required Reviewers is paid on private repos. See §A.5 — upgrade to Pro, flip to public, or fall back to a tag-pattern restriction in "Deployment branches and tags". |
 | Release tag created but `deploy-production.yml` did not run            | Required Reviewers (§A.5) is not configured *and* the tag does not match the trigger pattern. Confirm the Release is published, not draft. |
