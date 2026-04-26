@@ -9,13 +9,16 @@
 #
 # Network access
 # ──────────────
-# `public_network_access_enabled = false` + `network_acls` default Deny.
-# The vault is only reachable through:
-#   - the private endpoint in the keyvault subnet (used by Ansible from the
-#     bastion / runner host), and
-#   - the AzureServices bypass, which is what allows Container Apps'
-#     azure_key_vault_secrets references to resolve from inside the ACA
-#     Environment without any direct VNet path.
+# `public_network_access_enabled = true` + `network_acls.default_action =
+# "Allow"`. The control-plane endpoint is reachable from any IP; RBAC +
+# Entra ID is the only auth gate (no anonymous access). This matches the
+# deploy workflow's "no VNet runner" decision: GitHub-hosted runners on
+# public IPs would otherwise get 403 ForbiddenByConnection when writing
+# secrets at apply time. A private-endpoint-only posture is still the
+# right end state — flip both values back to false / "Deny" once a
+# self-hosted runner inside the VNet (or a private GitHub runner pool)
+# is wired up. The private endpoint is still provisioned below so apps
+# inside the ACA Environment resolve via VNet.
 #
 # BFF signing key
 # ───────────────
@@ -42,17 +45,17 @@ resource "azurerm_key_vault" "this" {
 
   enable_rbac_authorization = true
 
-  public_network_access_enabled = false
+  public_network_access_enabled = true
 
   soft_delete_retention_days = var.soft_delete_retention_days
   purge_protection_enabled   = true
 
   network_acls {
-    default_action = "Deny"
-    # AzureServices bypass is what enables Container Apps' azure_key_vault_secrets
-    # references to resolve from inside the ACA Environment via the platform's
-    # MI exchange — no direct VNet path from the apps subnet is needed.
-    # Operators / Ansible reach the vault over the private endpoint instead.
+    # Network-layer filter is open; auth is enforced exclusively by RBAC
+    # (every grant is in this module's role-assignment block at the bottom).
+    # Flip default_action to "Deny" and add ip_rules / VNet-runner subnet
+    # once we have a private apply path.
+    default_action             = "Allow"
     bypass                     = "AzureServices"
     ip_rules                   = []
     virtual_network_subnet_ids = []
