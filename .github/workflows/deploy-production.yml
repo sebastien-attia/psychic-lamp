@@ -57,6 +57,19 @@ on:
 permissions:
   contents: read
 
+# azurerm provider authentication for every terraform-running job.
+# `ARM_USE_OIDC=true` switches the provider off CLI auth (which rejects
+# service principals) and onto the GitHub-issued OIDC token. The token
+# itself is fetched at runtime by the provider via
+# ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN, both of which GHA injects when
+# `id-token: write` is granted on the job. See deploy-staging.yml for
+# the full rationale.
+env:
+  ARM_USE_OIDC:        "true"
+  ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
 # Serialize per-tag, never cancel mid-apply. Two simultaneous releases of
 # DIFFERENT tags can run in parallel (different concurrency keys); same-tag
 # re-runs queue.

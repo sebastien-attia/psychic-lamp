@@ -49,6 +49,21 @@ on:
 permissions:
   contents: read
 
+# azurerm provider authentication for every terraform-running job.
+# `ARM_USE_OIDC=true` switches the provider off CLI auth (which rejects
+# service principals — see the "Authenticating using the Azure CLI is
+# only supported as a User" error) and onto the GitHub-issued OIDC
+# token. The token itself is fetched at runtime by the provider via
+# ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN, both of which GHA injects when
+# `id-token: write` is granted on the job. Setting these at workflow
+# scope fixes bootstrap, plan AND apply in one place; jobs that don't
+# call terraform (ci, build-push) are unaffected.
+env:
+  ARM_USE_OIDC:        "true"
+  ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
 # Serialize staging deploys but DO NOT cancel in-flight ones — cancelling
 # a `terraform apply` mid-flight risks leaving state mid-mutation.
 concurrency:
