@@ -107,6 +107,44 @@
           # Upload report + screenshots on failure
       ```
     </step>
+    <step order="1b">
+      Create `keycloak/Dockerfile` — the optimized Keycloak image that
+      `deploy-staging.yml` and `deploy-production.yml` build below. Two
+      stages, both `FROM quay.io/keycloak/keycloak:26.6.1` (pin the
+      version inline, no `ARG` — Renovate, `docker-compose.yml`'s
+      local-intg `keycloak` image tag, and the Testcontainers spin-ups
+      in the BFF integration tests all need to see the same literal,
+      and they grep for it. Bumping Keycloak means editing all
+      lockstep partners together — Terraform does NOT belong on this
+      list because Terraform consumes `var.keycloak_image_tag`, which
+      CI computes (`staging-<sha8>` / release tag), not the upstream
+      version literal):
+
+        FROM quay.io/keycloak/keycloak:26.6.1 AS builder
+        ENV KC_DB=postgres
+        RUN /opt/keycloak/bin/kc.sh build
+
+        FROM quay.io/keycloak/keycloak:26.6.1
+        ENV KC_DB=postgres
+        COPY --from=builder /opt/keycloak/ /opt/keycloak/
+        ENTRYPOINT ["/opt/keycloak/bin/kc.sh"]
+
+      Baking `kc.sh build` with `KC_DB=postgres` (supplied via the
+      builder-stage `ENV`, equivalent to passing `--db=postgres`) is
+      non-optional: without it, the Container App's
+      `command = ["start", "--optimized"]` crashes immediately with
+      "Unable to find the database vendor". The runtime stage
+      re-declares `KC_DB=postgres` so a one-off `docker run <image>
+      start` (no `--optimized` needed for the smoke test) picks up the
+      same vendor without the caller having to re-pass it. The
+      Dockerfile does NOT `COPY` any local files (only `FROM` +
+      `COPY --from=builder`), so the build context shape is
+      irrelevant — both deploy workflows pass the dockerfile input as
+      a repo-rooted path (`dockerfile: keycloak/Dockerfile`) with NO
+      `context:` override. See step 5's note (further down in this
+      file) on the `dockerfile`-input semantics for why the context
+      override is omitted.
+    </step>
     <step order="2">
       Create .github/workflows/deploy-staging.yml — Auto-deploy to STAGING:
       ```yaml
@@ -146,11 +184,25 @@
               from a GitHub variable — that introduces drift between two
               naming formulas.
                 run: az acr login --name boatappstagingacr
-            - Build Docker images: bff + business-service (two images)
-            - Tag both images: :staging and :staging-${{ github.sha }}
+            - Build Docker images: bff + business-service + keycloak
+              (three images). Keycloak is built from `keycloak/Dockerfile`
+              (NOT pulled from quay.io); the Dockerfile bakes
+              `kc.sh build --db=postgres` into a derivative of
+              `quay.io/keycloak/keycloak:26.6.1` so the Container App can
+              launch with `start --optimized` (without the bake the
+              optimized launcher crashes with "Unable to find the database
+              vendor"). Each `uses: ./.github/actions/docker-build-push`
+              call passes a REPO-ROOTED `dockerfile:` path (e.g.
+              `bff/Dockerfile`, `keycloak/Dockerfile`) and DOES NOT set
+              `context:` — see step 5 below for why.
+            - Tag all three images: :staging and :staging-${{ github.sha }}
             - Push to ACR (plain `docker push` — token was installed by
               `az acr login`; no $ACR_USERNAME / $ACR_PASSWORD anywhere)
-            - Run Terraform plan + apply (staging environment, passing bff_image_tag and business_service_image_tag)
+            - Run Terraform plan + apply (staging environment, passing
+              bff_image_tag, business_service_image_tag, AND
+              keycloak_image_tag — the keycloak Container App is pinned
+              to the same `staging-<sha>` tag as the other two so a
+              rollback moves the whole stack atomically)
             - Run Ansible deploy playbook (staging inventory)
             - Wait for services healthy (bff external URL + business-service via bff)
             - Run smoke E2E tests against staging URL
@@ -191,13 +243,18 @@
               creds). Same naming rule as deploy-staging.yml — TF owns the
               name, workflow uses the env-specific literal:
                 run: az acr login --name boatappproductionacr
-            - Build Docker images: bff + business-service (two images)
-            - Tag both images:
+            - Build Docker images: bff + business-service + keycloak
+              (three images). Same `dockerfile:` rules as deploy-staging
+              above — repo-rooted path, no `context:` override
+              (`keycloak/Dockerfile` ships the optimized derivative).
+            - Tag all three images:
               - :latest
               - :${{ github.event.release.tag_name }}  (e.g., v1.0.0)
               - :production
             - Push to ACR (plain `docker push`; token from `az acr login`)
-            - Run Terraform plan + apply (production environment, passing bff_image_tag and business_service_image_tag)
+            - Run Terraform plan + apply (production environment, passing
+              bff_image_tag, business_service_image_tag, AND
+              keycloak_image_tag pinned to the release tag)
             - Run Ansible deploy playbook (production inventory)
             - Wait for services healthy (bff external URL + business-service via bff)
             - Run smoke tests (subset of E2E) against production URL
@@ -237,6 +294,17 @@
         `registry-password` inputs. The action assumes the caller ran
         `azure/login@v2` with `permissions: id-token: write` in the same
         job and that the federated identity holds `AcrPush` on the ACR.
+        IMPORTANT — `dockerfile` input semantics: the action invokes
+        `docker build --file "${dockerfile}" "${context}"`. Docker's
+        `--file` flag is resolved against the WORKFLOW WORKING DIRECTORY
+        (repo root after `actions/checkout`), NOT against the build
+        context. The input description must say so explicitly so the
+        next caller doesn't pass `context: keycloak` + `dockerfile:
+        Dockerfile` (which would make docker look for `./Dockerfile` in
+        the repo root and fail with "open Dockerfile: no such file or
+        directory"). Document the canonical idiom as: pass a repo-rooted
+        path such as `bff/Dockerfile` / `business-service/Dockerfile` /
+        `keycloak/Dockerfile`, regardless of what `context` is set to.
     </step>
     <step order="6">
       Create .github/ENVIRONMENTS.md documenting:
@@ -303,7 +371,7 @@
     git commit -m "ci: GitHub Actions CI/CD pipeline for Azure
 
     - CI: lint, build (bff + business-service + frontend), test, docker build, E2E
-    - Staging: auto-deploy on push to staging branch (bff + business-service images)
+    - Staging: auto-deploy on push to staging branch (bff + business-service + keycloak images)
     - Production: deploy on GitHub Release (manual trigger, requires approval)
     - Terraform plan: auto-comment on infra PRs
     - OIDC federation for Azure (no long-lived secrets)

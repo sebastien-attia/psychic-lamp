@@ -130,16 +130,38 @@
                docker push ${REGISTRY}/${IMAGE}:${TAG}
                digest=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/${IMAGE}:${TAG} | cut -d@ -f2)
                echo "digest=${digest}" >> "$GITHUB_OUTPUT"
-      4. Keyless sign each image (BFF + business-service) using the
-         workflow OIDC identity — signature is recorded in the public
-         Sigstore Rekor transparency log:
+      4. Keyless sign EACH image (bff + business-service + keycloak)
+         using the workflow OIDC identity — signature is recorded in the
+         public Sigstore Rekor transparency log:
            - run: cosign sign --yes ${REGISTRY}/${IMAGE}@${{ steps.push.outputs.digest }}
-      5. Generate SLSA Build L3 provenance attestation, push to ACR:
+      5. Generate SLSA Build L3 provenance attestation per image, push
+         to ACR:
            - uses: actions/attest-build-provenance@<sha> # v2.1.0
              with:
                subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE }}
                subject-digest: ${{ steps.push.outputs.digest }}
                push-to-registry: true
+
+      Three images, not two. If phase 4's `deploy-*.yml` already build a
+      `keycloak` image alongside `bff` and `business-service` (per
+      `ai-scripts/04-cicd.md` step 1b — an "optimized" derivative of
+      `quay.io/keycloak/keycloak:26.6.1` built from `keycloak/Dockerfile`,
+      baking `KC_DB=postgres` into `kc.sh build` so the Container App
+      can launch with `start --optimized`), wire the same
+      build-push → cosign sign → attest-build-provenance trio for it.
+
+      `docker-build-push` input pitfall — the action runs
+      `docker build --file "${dockerfile}" "${context}"` and docker
+      resolves `--file` against the workflow cwd (repo root after
+      `actions/checkout`), NOT against `context`. So the keycloak
+      invocation MUST pass `dockerfile: keycloak/Dockerfile` (a
+      repo-rooted path) and MUST NOT set `context: keycloak` —
+      `context:` should be left at its default (`.`). Passing
+      `context: keycloak` + `dockerfile: Dockerfile` makes docker look
+      for `./Dockerfile` in the repo root and fail with "open Dockerfile:
+      no such file or directory" before any context tarball is even
+      produced. The bff and business-service callers already follow this
+      idiom — replicate it for keycloak.
 
       Document in `.github/ENVIRONMENTS.md` how to verify locally:
 
@@ -283,7 +305,13 @@
             - run: |
                 terraform plan -out=tfplan.binary -input=false \
                   -var bff_image_tag=$BFF_TAG \
-                  -var business_service_image_tag=$BS_TAG
+                  -var business_service_image_tag=$BS_TAG \
+                  -var keycloak_image_tag=$KC_TAG
+                # All three *_TAG values resolve to the same
+                # staging-<sha8> / release-tag literal that phase 4's
+                # `Compute image references and tags` step writes to
+                # GITHUB_ENV — keycloak rolls forward and rolls back
+                # in lockstep with bff and business-service.
                 terraform show -json tfplan.binary > tfplan.json
             - uses: actions/upload-artifact@<sha> # v4
               with:
@@ -496,7 +524,7 @@
     git commit -m "ci(hardening): SLSA L3 provenance + cosign + Trivy + CodeQL + SHA-pinning
 
     - All actions pinned to commit SHA (Dependabot tag-comment retained)
-    - cosign keyless OIDC signing + actions/attest-build-provenance for both images
+    - cosign keyless OIDC signing + actions/attest-build-provenance for all three images (bff, business-service, keycloak)
     - aquasecurity/trivy-action gates HIGH+CRITICAL on built images
     - github/codeql-action: weekly + on push/PR for Java + TS
     - gitleaks secret scanning on every push/PR

@@ -318,7 +318,18 @@
           - DATABASE_PASSWORD = <from kv ref: business-db-password>
           - KEYCLOAK_ISSUER_URI = https://<keycloak-fqdn>/realms/boat-app
       - Container App: keycloak
-        - Image: quay.io/keycloak/keycloak:26.6.1
+        - Image: `${var.acr_login_server}/keycloak:${var.keycloak_image_tag}`
+          — built and pushed by CI from `keycloak/Dockerfile` (an
+          "optimized" derivative of `quay.io/keycloak/keycloak:26.6.1`
+          that bakes `kc.sh build --db=postgres` so `start --optimized`
+          can launch). Do NOT pull from quay.io directly: the stock
+          image lacks the postgres vendor build and crashes immediately
+          under `start --optimized` with "Unable to find the database
+          vendor". The CI build path (Dockerfile creation, repo-rooted
+          `dockerfile: keycloak/Dockerfile` input to the
+          `docker-build-push` action, cosign signing, SLSA provenance)
+          lives in `ai-scripts/04-cicd.md` step 2 and
+          `ai-scripts/04b-cicd-hardening.md` step 3.
         - CPU: 0.5, Memory: 1Gi
         - Ingress: external, port 8080
         - **Explicit command** (do NOT use the default start-dev for prod):
@@ -519,7 +530,11 @@
       - Image tags (one per Container App pulling from ACR):
         - bff_image_tag
         - business_service_image_tag
-        - keycloak_image_tag (usually pinned to the upstream keycloak version)
+        - keycloak_image_tag (CI passes `<env>-<sha8>` matching bff /
+          business-service so the whole stack rolls together; local
+          `terraform.tfvars.example` may use the upstream version literal
+          for ad-hoc runs — both work because the ACR-hosted image is
+          tagged with whatever value CI computes)
     </step>
     <step order="10">
       Create environments/staging/main.tf:
