@@ -243,18 +243,28 @@ tenant is a no-op.
 ### A.4 Set the per-environment Terraform passwords
 
 The bootstrap script does *not* generate these — they belong to you.
-For each of `staging` and `production`, run:
+The snippet below seeds all five secrets in **both** `staging` and
+`production` in one go. Replace the `REPO=` value with your own
+`owner/repo` slug. Works in both bash and zsh; uses an array instead
+of backslash line-continuations so a stray copy-paste whitespace
+cannot break it.
 
 ```bash
-ENV=staging   # then repeat with ENV=production
+REPO=<owner>/<repo>           # e.g. sebastien-attia/psychic-lamp
 
-for name in TF_VAR_postgres_admin_password \
-            TF_VAR_bff_db_password \
-            TF_VAR_business_db_password \
-            TF_VAR_keycloak_db_password \
-            TF_VAR_keycloak_admin_password ; do
-  openssl rand -base64 32 \
-    | gh secret set "$name" --env "$ENV" --repo <owner>/<repo> --body -
+SECRETS=(
+  TF_VAR_postgres_admin_password
+  TF_VAR_bff_db_password
+  TF_VAR_business_db_password
+  TF_VAR_keycloak_db_password
+  TF_VAR_keycloak_admin_password
+)
+
+for env in staging production; do
+  for name in "${SECRETS[@]}"; do
+    openssl rand -base64 32 \
+      | gh secret set "$name" --env "$env" --repo "$REPO" --body -
+  done
 done
 ```
 
