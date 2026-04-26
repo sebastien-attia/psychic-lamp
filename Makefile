@@ -25,11 +25,6 @@ dev-frontend:
 
 ## up: Start full local-intg stack (postgres + keycloak + business-service + bff).
 up:
-	@test -f infra/docker/keys/bff-signing-key.pem || { \
-		echo "✗ infra/docker/keys/bff-signing-key.pem missing."; \
-		echo "  Run ./ai-scripts/00b-generate-bff-key.sh first."; \
-		exit 1; \
-	}
 	docker compose up -d --build
 
 ## down: Stop the local-intg stack.
