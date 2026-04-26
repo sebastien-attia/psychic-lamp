@@ -345,12 +345,23 @@ jobs:
 
       - name: Terraform plan (staging)
         working-directory: infra/terraform/environments/staging
+        # `set +e` around plan so we can capture the exit code instead of
+        # letting bash mask it. `terraform plan` without -detailed-exitcode
+        # should return 0 on success regardless of whether changes are
+        # detected; if it returns non-zero we want the number printed,
+        # the binary's existence checked, and THEN the failure propagated
+        # — so the GHA log shows what really happened at lock release.
         run: |
-          set -euxo pipefail
+          set -uxo pipefail
+          set +e
           terraform plan -out=tfplan.binary -input=false -lock-timeout=5m \
             -var "bff_image_tag=${IMAGE_TAG_SHA}" \
             -var "business_service_image_tag=${IMAGE_TAG_SHA}"
-          ls -la tfplan.binary
+          rc=$?
+          set -e
+          echo "TERRAFORM_PLAN_EXIT_CODE=${rc}"
+          ls -la tfplan.binary 2>&1 || echo "tfplan.binary missing"
+          exit "${rc}"
 
       - name: Terraform show -json (staging)
         working-directory: infra/terraform/environments/staging
