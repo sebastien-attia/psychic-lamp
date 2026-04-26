@@ -470,11 +470,11 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    # NO `env:` block — `terraform apply tfplan.binary` runs the
-    # already-resolved plan and does not re-evaluate variables, so
-    # the `TF_VAR_*_password` / `TF_VAR_*_principal_id` values that
-    # `plan` needed are dead code here. Keeping them out shrinks the
-    # secret blast radius for the post-deploy steps below.
+    env:
+      # Terraform apply does not need TF_VAR_* here because it consumes
+      # the already-resolved binary plan. The DT flag is only used to
+      # skip optional receipt steps when the repo has no DT wiring.
+      DTRACK_CONFIGURED: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
@@ -547,21 +547,21 @@ jobs:
       # what's currently running, separate from "what we tried to ship".
       # Optional: skipped when this repo has no Dependency-Track wiring.
       - uses: ./.github/actions/setup-java
-        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
+        if: ${{ env.DTRACK_CONFIGURED == 'true' }}
       - name: Download bff SBOM from CI
-        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
+        if: ${{ env.DTRACK_CONFIGURED == 'true' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: bff-sbom
           path: bff/target/
       - name: Download business-service SBOM from CI
-        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
+        if: ${{ env.DTRACK_CONFIGURED == 'true' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: business-service-sbom
           path: business-service/target/
       - name: Upload bff SBOM to Dependency-Track
-        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
+        if: ${{ env.DTRACK_CONFIGURED == 'true' }}
         working-directory: bff
         env:
           DTRACK_URL:     ${{ secrets.DTRACK_URL }}
@@ -574,7 +574,7 @@ jobs:
             -Ddependency-track.projectName=boatapp-bff \
             -Ddependency-track.projectVersion="${GITHUB_SHA}"
       - name: Upload business-service SBOM to Dependency-Track
-        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
+        if: ${{ env.DTRACK_CONFIGURED == 'true' }}
         working-directory: business-service
         env:
           DTRACK_URL:     ${{ secrets.DTRACK_URL }}
