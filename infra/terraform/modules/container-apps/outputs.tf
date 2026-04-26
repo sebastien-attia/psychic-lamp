@@ -34,6 +34,16 @@ output "liquibase_job_names" {
   value       = { for k, v in azurerm_container_app_job.liquibase : k => v.name }
 }
 
+output "bff_custom_domain_verification_id" {
+  description = "Per-app verification token issued by Azure. Use as the value of the `asuid.<bff_custom_domain>` TXT record at the DNS provider before binding the custom domain. Stable for the life of the Container App."
+  value       = azurerm_container_app.bff.custom_domain_verification_id
+}
+
+output "keycloak_custom_domain_verification_id" {
+  description = "Per-app verification token for the Keycloak custom domain. Use as the value of the `asuid.<keycloak_custom_domain>` TXT record."
+  value       = azurerm_container_app.keycloak.custom_domain_verification_id
+}
+
 output "consumer_principal_ids" {
   description = "Map keyed by logical service name → system-assigned managed-identity principal ID. Consumed by the container-registry module (AcrPull) and the keyvault module (Key Vault Secrets User)."
   value = merge(

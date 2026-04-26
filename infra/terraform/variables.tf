@@ -126,3 +126,15 @@ variable "keycloak_image_tag" {
   type        = string
   default     = "26.6.1"
 }
+
+variable "bff_custom_domain" {
+  description = "Optional custom FQDN for the BFF (e.g. app.example.com). Empty = use only the Azure-assigned default FQDN. See modules/container-apps/variables.tf for the DNS preconditions."
+  type        = string
+  default     = ""
+}
+
+variable "keycloak_custom_domain" {
+  description = "Optional custom FQDN for Keycloak (e.g. auth.example.com). Empty = use only the Azure-assigned default FQDN. Setting this also flips KC_HOSTNAME and the JWT issuer URI — re-run the Ansible keycloak-client config after applying."
+  type        = string
+  default     = ""
+}

@@ -55,3 +55,13 @@ output "liquibase_job_names" {
   description = "Map of logical service name → ACA Container App Job name. Ansible invokes these via `az containerapp job start --name <value>` after each deploy."
   value       = module.container_apps.liquibase_job_names
 }
+
+output "bff_custom_domain_verification_id" {
+  description = "Verification token for the BFF custom domain. Use as the value of the `asuid.<bff_custom_domain>` TXT record at the DNS provider before setting `bff_custom_domain`."
+  value       = module.container_apps.bff_custom_domain_verification_id
+}
+
+output "keycloak_custom_domain_verification_id" {
+  description = "Verification token for the Keycloak custom domain. Use as the value of the `asuid.<keycloak_custom_domain>` TXT record."
+  value       = module.container_apps.keycloak_custom_domain_verification_id
+}
