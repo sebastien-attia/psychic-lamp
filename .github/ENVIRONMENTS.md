@@ -17,15 +17,32 @@ first, then come back here for the manual steps.
 
 ## Environments
 
-| Environment  | Trigger                                              | Manual approval | Tags pushed to ACR                                |
-|--------------|------------------------------------------------------|-----------------|---------------------------------------------------|
-| `staging`    | push to the `staging` branch                         | none            | `staging`, `staging-<short-sha>`                  |
-| `production` | publishing a GitHub Release on `main`                | required reviewer (1) | `<release-tag>`, `latest`, `production`     |
+| Environment              | Trigger                                              | Manual approval        | Tags pushed to ACR                                | Used by                                                                                  |
+|--------------------------|------------------------------------------------------|------------------------|---------------------------------------------------|------------------------------------------------------------------------------------------|
+| `staging`                | push to the `staging` branch                         | none                   | `staging`, `staging-<short-sha>`                  | All `deploy-staging.yml` jobs that need env-scoped secrets.                              |
+| `production`             | publishing a GitHub Release on `main`                | required reviewer (1)  | `<release-tag>`, `latest`, `production`           | The `apply` job in `deploy-production.yml` ONLY (the one that mutates the live stack).   |
+| `production-bootstrap`   | publishing a GitHub Release on `main`                | **none — MUST stay unprotected** (see below) | (no push — claim is for OIDC + secret access)     | The `infra-bootstrap` and `plan` jobs in `deploy-production.yml`.                        |
 
-Both environments are created (empty) by `00d-bootstrap-azure.sh`. The
-**production reviewer rule** must be added manually — GitHub's REST API does
-not expose required-reviewer configuration outside Enterprise, so the
-bootstrap script flags it at the end of its summary.
+All three environments are created (empty) by `00d-bootstrap-azure.sh`.
+The **production reviewer rule** must be added manually — GitHub's REST
+API does not expose required-reviewer configuration outside Enterprise,
+so the bootstrap script flags it at the end of its summary.
+
+**Why two production envs?** GitHub's deployment-protection rules fire
+*per job* that claims an environment, not once per workflow run. If the
+`infra-bootstrap`, `plan`, and `apply` jobs all claimed `production`, a
+release would block on three reviewer prompts back-to-back. Splitting
+the unprotected jobs onto a sibling environment (`production-bootstrap`)
+collapses that to one prompt, on the only job that actually mutates the
+stack. `production-bootstrap` mirrors `production`'s secret values
+(handled by `00f-generate-db-secrets.sh`'s env-group logic) so
+`secrets.TF_VAR_*` resolves identically across both envs and Terraform's
+variable-surface validation passes on the targeted bootstrap apply.
+
+**Do NOT add protection rules to `production-bootstrap`** — that
+re-introduces the triple-approval pain and defeats the purpose. If you
+need to gate the bootstrap step, gate the entire workflow via branch
+protection on the release-triggering ref instead.
 
 To set the reviewer:
 
@@ -137,7 +154,8 @@ principal with the following federated credentials:
 | `repo:<owner>/<repo>:ref:refs/heads/staging`            | `deploy-staging.yml`                        |
 | `repo:<owner>/<repo>:pull_request`                      | `terraform-plan.yml`                        |
 | `repo:<owner>/<repo>:environment:staging`               | `deploy-staging.yml` job that uses `environment: staging`     |
-| `repo:<owner>/<repo>:environment:production`            | `deploy-production.yml` job that uses `environment: production` |
+| `repo:<owner>/<repo>:environment:production`            | `deploy-production.yml` `apply` job (the one mutating the live stack) |
+| `repo:<owner>/<repo>:environment:production-bootstrap`  | `deploy-production.yml` `infra-bootstrap` and `plan` jobs (unprotected sibling env) |
 
 The same script grants the SP these role assignments:
 

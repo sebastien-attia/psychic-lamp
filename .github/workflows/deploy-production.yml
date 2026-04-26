@@ -95,18 +95,57 @@ jobs:
       security-events: write
       actions: read
 
+  preflight-envs:
+    # Fail fast and loud if `production-bootstrap` does not exist on the
+    # repo yet (e.g. on a clone where 00d-bootstrap-azure.sh + 00f-generate
+    # -db-secrets.sh have not been re-run since the dual-env design landed).
+    # Without this guard, every downstream job would trip an opaque
+    # "Value 'production-bootstrap' is not valid" error mid-run, AND the
+    # OIDC token would lack the matching environment claim — operators
+    # would burn time guessing. The actuator here is the existence check;
+    # the same operator step that creates the env (00d) also seeds the
+    # mirrored secrets (00f), so passing this gate implies both are done.
+    name: Preflight — required GitHub Environments
+    needs: [ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Verify production + production-bootstrap envs exist
+        run: |
+          set -euo pipefail
+          for env in production production-bootstrap; do
+            if ! gh api "repos/${GITHUB_REPOSITORY}/environments/${env}" >/dev/null 2>&1; then
+              echo "::error::GitHub Environment '${env}' does not exist on ${GITHUB_REPOSITORY}." >&2
+              echo "::error::Re-run ai-scripts/00d-bootstrap-azure.sh AND ai-scripts/00f-generate-db-secrets.sh before deploying." >&2
+              exit 1
+            fi
+            echo "✓ env present: ${env}"
+          done
+
   infra-bootstrap:
     # FIRST PASS of `terraform apply`, scoped to JUST the container registry
     # resource and its AcrPush role binding. See workflow header for the
     # rationale (chicken-and-egg: build-push needs ACR; full apply needs
     # the new image tag, so it has to come AFTER build-push).
     #
-    # Carries `environment: production` because the OIDC federated identity
-    # for release-triggered runs is `environment:production`-scoped.
+    # Carries `environment: production-bootstrap` (NOT `production`) so the
+    # Required-Reviewer rule on `production` does NOT fire here. Bootstrap
+    # creates the ACR and an idempotent role assignment — small blast
+    # radius, run on every release. Forcing a reviewer click on it would
+    # mean THREE approvals per release (bootstrap + plan + apply) for no
+    # security gain. The actual `terraform apply` of the full stack stays
+    # gated on `environment: production` (see the `apply` job).
+    # `production-bootstrap` is its own GitHub Environment with NO
+    # protection rules; its OIDC FIC subject is
+    # `repo:<owner>/<repo>:environment:production-bootstrap` (see
+    # 00d-bootstrap-azure.sh).
     name: Bootstrap ACR (targeted terraform apply)
-    needs: [ci]
+    needs: [ci, preflight-envs]
     runs-on: ubuntu-latest
-    environment: production
+    environment: production-bootstrap
     permissions:
       id-token: write
       contents: read
@@ -320,20 +359,18 @@ jobs:
     # Run terraform plan from the tagged commit and persist the binary
     # plan as an artifact so the apply job applies it verbatim.
     #
-    # Carries `environment: production` for two reasons:
-    #   1. The TF_VAR_* secrets are scoped to the production environment,
-    #      not the repo — without the claim they resolve to empty.
-    #   2. The OIDC FIC for release-triggered runs is `environment:
-    #      production`-scoped (see 00d-bootstrap-azure.sh); without the
-    #      claim azure/login can't match a federated credential.
-    # Side effect: the Required-Reviewer rule fires on this job too, so a
-    # production deploy now requires THREE approvals (bootstrap, plan,
-    # apply). That's the cost of full first-deploy automation; the
-    # alternative is a one-time manual `terraform apply -target` per env.
+    # Carries `environment: production-bootstrap` (NOT `production`) so
+    # the Required-Reviewer rule fires ONCE per release — on the `apply`
+    # job, the only step that mutates the live stack. `plan` is read-only
+    # (it persists a binary plan as an artifact); reviewing the rendered
+    # diff is the whole point of plan-as-artifact. Mirroring production's
+    # secret set into the bootstrap env (handled by
+    # 00f-generate-db-secrets.sh) keeps `secrets.TF_VAR_*` resolvable
+    # here without bringing along the env's protection rule.
     name: Terraform plan (production)
     needs: [build-push]
     runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
-    environment: production
+    environment: production-bootstrap
     permissions:
       id-token: write
       contents: read
@@ -427,11 +464,13 @@ jobs:
       id-token: write
       contents: read
     env:
-      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
-      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
-      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
-      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
-      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+      # Only RELEASE_TAG is consumed downstream (SBOM upload's
+      # `-Ddependency-track.projectVersion`, failure summary). The
+      # `TF_VAR_*_password` and `TF_VAR_*_principal_id` values are
+      # NOT set here: `terraform apply tfplan.binary` runs the
+      # already-resolved plan and does not re-evaluate variables, so
+      # any TF_VAR_* declared in this job's env would be dead code
+      # and an unnecessary expansion of the secret blast radius.
       RELEASE_TAG: ${{ github.event.release.tag_name }}
     steps:
       - name: Checkout release tag
@@ -445,15 +484,6 @@ jobs:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Resolve federated SP object ID
-        env:
-          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        run: |
-          set -euo pipefail
-          PRINCIPAL_ID=$(az ad sp show --id "${AZ_CLIENT_ID}" --query id -o tsv)
-          echo "TF_VAR_ci_push_principal_id=${PRINCIPAL_ID}"  >> "$GITHUB_ENV"
-          echo "TF_VAR_tf_apply_principal_id=${PRINCIPAL_ID}" >> "$GITHUB_ENV"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3

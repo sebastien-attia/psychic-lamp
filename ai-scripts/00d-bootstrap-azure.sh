@@ -211,11 +211,17 @@ EOF
   echo "    created: ${name}  (subject: ${subject})"
 }
 
-add_fic "gh-main"        "repo:${REPO}:ref:refs/heads/main"
-add_fic "gh-staging"     "repo:${REPO}:ref:refs/heads/staging"
-add_fic "gh-pr"          "repo:${REPO}:pull_request"
-add_fic "gh-env-staging" "repo:${REPO}:environment:staging"
-add_fic "gh-env-prod"    "repo:${REPO}:environment:production"
+add_fic "gh-main"             "repo:${REPO}:ref:refs/heads/main"
+add_fic "gh-staging"          "repo:${REPO}:ref:refs/heads/staging"
+add_fic "gh-pr"               "repo:${REPO}:pull_request"
+add_fic "gh-env-staging"      "repo:${REPO}:environment:staging"
+add_fic "gh-env-prod"         "repo:${REPO}:environment:production"
+# `production-bootstrap` is a sibling GitHub Environment to `production`
+# carrying the same secret set but NO protection rules. The infra-bootstrap
+# and plan jobs in deploy-production.yml claim it so the Required-Reviewer
+# rule on `production` fires only on the actually-mutating apply job — one
+# approval per release instead of three.
+add_fic "gh-env-prod-bootstrap" "repo:${REPO}:environment:production-bootstrap"
 
 # ─── 3. Subscription role assignments ──────────────────────────────────
 echo "▸ [4/7] Subscription-scope role assignments for ${APP_NAME}"
@@ -341,7 +347,7 @@ set_repo_var    "LOCATION"                 "${LOCATION}"
 # are the one thing this script cannot do (no REST API for required_reviewers
 # except on GitHub Enterprise with advanced protection rules) — flagged at
 # the end.
-for env in staging production; do
+for env in staging production production-bootstrap; do
   if gh api "repos/${REPO}/environments/${env}" >/dev/null 2>&1; then
     echo "    environment exists: ${env}"
   else
@@ -349,6 +355,10 @@ for env in staging production; do
     echo "    environment created: ${env}"
   fi
 done
+# `production-bootstrap` MUST stay free of protection rules — it exists
+# precisely to host the unreviewed bootstrap/plan jobs. If you ever add
+# Required-Reviewer to it through the UI, you re-introduce the
+# triple-approval pain that motivated the dual-env design.
 
 # ─── 6. Branch protection (codified in .github/settings.yml) ───────────
 # Source of truth: .github/settings.yml (committed by phase 4b). The file
@@ -413,6 +423,11 @@ cat <<EOF
   Remaining manual action (cannot be scripted via public API):
     → GitHub → repo Settings → Environments → production →
       Deployment protection rules → "Required reviewers" → add reviewer(s).
+
+  ⚠  Do NOT add Required-Reviewer to "production-bootstrap" — that env
+     exists precisely to host the unreviewed bootstrap/plan jobs so the
+     reviewer rule fires only once per release. See .github/ENVIRONMENTS.md
+     ("Why two production envs?").
 
   Everything else (Terraform apply, Ansible deploys, image push, schema
   migrations, Keycloak config, secret rotation) is now code-driven through

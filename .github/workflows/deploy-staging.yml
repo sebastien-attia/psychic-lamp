@@ -438,12 +438,11 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    env:
-      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
-      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
-      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
-      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
-      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+    # NO `env:` block — `terraform apply tfplan.binary` runs the
+    # already-resolved plan and does not re-evaluate variables, so
+    # the `TF_VAR_*_password` / `TF_VAR_*_principal_id` values that
+    # `plan` needed are dead code here. Keeping them out shrinks the
+    # secret blast radius for the post-deploy steps below.
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
@@ -453,15 +452,6 @@ jobs:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Resolve federated SP object ID
-        env:
-          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        run: |
-          set -euo pipefail
-          PRINCIPAL_ID=$(az ad sp show --id "${AZ_CLIENT_ID}" --query id -o tsv)
-          echo "TF_VAR_ci_push_principal_id=${PRINCIPAL_ID}"  >> "$GITHUB_ENV"
-          echo "TF_VAR_tf_apply_principal_id=${PRINCIPAL_ID}" >> "$GITHUB_ENV"
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
