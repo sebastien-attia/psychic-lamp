@@ -78,9 +78,13 @@ RUN cd bff && ./mvnw -B -ntp package -DskipTests
 
 # ── Stage 4: runtime ──────────────────────────────────────────────────────
 FROM eclipse-temurin:25-jre AS runtime
-# curl is needed by HEALTHCHECK below; --no-install-recommends keeps the
-# image lean. The temurin image is Ubuntu-based.
+# `apt-get upgrade` shrinks the window between an Ubuntu CVE fix and the
+# next eclipse-temurin base rebuild — without it, Trivy in CI fails the
+# container-scan gate on every base-image lag (e.g. CVE-2026-4878 in
+# libcap2). curl is needed by HEALTHCHECK below; --no-install-recommends
+# keeps the image lean. The temurin image is Ubuntu-based.
 RUN apt-get update \
+ && apt-get upgrade -y \
  && apt-get install -y --no-install-recommends curl \
  && rm -rf /var/lib/apt/lists/* \
  && groupadd --system --gid 1001 spring \
