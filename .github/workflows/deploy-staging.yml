@@ -30,8 +30,7 @@
 #      receipt (the pre-deploy DT *gate* runs in ci.yml).
 #
 # Required environment-scoped secrets (GitHub → Settings → Environments →
-# `staging` and `staging-bootstrap`) — see .github/ENVIRONMENTS.md for the
-# mirroring contract and full list:
+# `staging`) — see .github/ENVIRONMENTS.md for the full list:
 #   TF_VAR_postgres_admin_password
 #   TF_VAR_bff_db_password
 #   TF_VAR_business_db_password
@@ -89,30 +88,6 @@ jobs:
       security-events: write
       actions: read
 
-  preflight-envs:
-    # Fail fast and loud if the staging bootstrap environment is missing.
-    # Bootstrap now claims `staging-bootstrap` so it can resolve env-scoped
-    # Terraform secrets without moving them to repository scope.
-    name: Preflight — required GitHub Environments
-    needs: [ci]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    steps:
-      - name: Verify staging + staging-bootstrap envs exist
-        run: |
-          set -euo pipefail
-          for env in staging staging-bootstrap; do
-            if ! gh api "repos/${GITHUB_REPOSITORY}/environments/${env}" >/dev/null 2>&1; then
-              echo "::error::GitHub Environment '${env}' does not exist on ${GITHUB_REPOSITORY}." >&2
-              echo "::error::Re-run ai-scripts/00d-bootstrap-azure.sh AND ai-scripts/00f-generate-db-secrets.sh before deploying." >&2
-              exit 1
-            fi
-            echo "✓ env present: ${env}"
-          done
-
   infra-bootstrap:
     # FIRST PASS of `terraform apply`, scoped to JUST the container registry
     # resource and its AcrPush role binding for the CI federated identity.
@@ -130,13 +105,12 @@ jobs:
     # transitive deps (RG from module.networking) automatically.
     #
     # Idempotent: subsequent runs see "no changes" and exit fast.
-    # `staging-bootstrap` is an unprotected sibling environment carrying the
-    # same Terraform secret set as `staging`; bootstrap claims it so
-    # env-scoped secrets resolve here without adding a review gate.
+    # Staging has no approval gate, so this job can safely claim the same
+    # `staging` environment as the full plan/apply jobs.
     name: Bootstrap ACR (targeted terraform apply)
-    needs: [ci, preflight-envs]
+    needs: [ci]
     runs-on: ubuntu-latest
-    environment: staging-bootstrap
+    environment: staging
     concurrency:
       group: terraform-staging-state
       cancel-in-progress: false

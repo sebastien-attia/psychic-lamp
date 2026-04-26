@@ -19,30 +19,28 @@ first, then come back here for the manual steps.
 
 | Environment              | Trigger                                              | Manual approval        | Tags pushed to ACR                                | Used by                                                                                  |
 |--------------------------|------------------------------------------------------|------------------------|---------------------------------------------------|------------------------------------------------------------------------------------------|
-| `staging`                | push to the `staging` branch                         | none                   | `staging`, `staging-<short-sha>`                  | The `plan` and `apply` jobs in `deploy-staging.yml`.                                     |
-| `staging-bootstrap`      | push to the `staging` branch                         | **none — MUST stay unprotected** (see below) | (no push — claim is for OIDC + secret access)     | The `infra-bootstrap` job in `deploy-staging.yml`.                                       |
+| `staging`                | push to the `staging` branch                         | none                   | `staging`, `staging-<short-sha>`                  | All Terraform and deployment jobs in `deploy-staging.yml`.                               |
 | `production`             | publishing a GitHub Release on `main`                | required reviewer (1)  | `<release-tag>`, `latest`, `production`           | The `apply` job in `deploy-production.yml` ONLY (the one that mutates the live stack).   |
 | `production-bootstrap`   | publishing a GitHub Release on `main`                | **none — MUST stay unprotected** (see below) | (no push — claim is for OIDC + secret access)     | The `infra-bootstrap` and `plan` jobs in `deploy-production.yml`.                        |
 
-All four environments are created (empty) by `00d-bootstrap-azure.sh`.
+All three environments are created (empty) by `00d-bootstrap-azure.sh`.
 The **production reviewer rule** must be added manually — GitHub's REST
 API does not expose required-reviewer configuration outside Enterprise,
 so the bootstrap script flags it at the end of its summary.
 
-**Why bootstrap sibling envs?** GitHub's deployment-protection rules fire
+**Why `production-bootstrap`?** GitHub's deployment-protection rules fire
 *per job* that claims an environment, not once per workflow run, and
 environment-scoped secrets are only visible inside jobs that claim that
-environment. `staging-bootstrap` and `production-bootstrap` solve the
-same problem in both deploy workflows: targeted Terraform bootstrap jobs
-need environment-based OIDC subjects plus the same `TF_VAR_*` secrets as
-the main environment, but they should not widen those secrets to the
-whole repository. `production-bootstrap` also avoids extra reviewer
-prompts by keeping the unreviewed Terraform jobs off the protected
-`production` environment.
+environment. In production, the `infra-bootstrap` and `plan` jobs need
+environment-based OIDC subjects plus the same `TF_VAR_*` secrets as the
+main environment, but only the final `apply` job should require manual
+approval. The unprotected `production-bootstrap` environment keeps those
+early jobs off the protected `production` environment, so a release asks
+for approval once, on the job that mutates the live stack.
 
-**Do NOT add protection rules to `staging-bootstrap` or `production-bootstrap`**.
-They exist specifically for unprotected bootstrap/plan jobs that still
-need environment-scoped secrets and environment-based OIDC subjects.
+**Do NOT add protection rules to `production-bootstrap`**. It exists
+specifically for unprotected bootstrap/plan jobs that still need
+environment-scoped secrets and environment-based OIDC subjects.
 
 To set the reviewer:
 
@@ -155,7 +153,6 @@ principal with the following federated credentials:
 | `repo:<owner>/<repo>:pull_request`                      | `terraform-plan.yml`                        |
 | `repo:<owner>/<repo>:environment:staging`               | `deploy-staging.yml` job that uses `environment: staging`     |
 | `repo:<owner>/<repo>:environment:production`            | `deploy-production.yml` `apply` job (the one mutating the live stack) |
-| `repo:<owner>/<repo>:environment:staging-bootstrap`     | `deploy-staging.yml` `infra-bootstrap` job (unprotected sibling env) |
 | `repo:<owner>/<repo>:environment:production-bootstrap`  | `deploy-production.yml` `infra-bootstrap` and `plan` jobs (unprotected sibling env) |
 
 The same script grants the SP these role assignments:

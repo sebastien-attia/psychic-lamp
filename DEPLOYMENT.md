@@ -369,9 +369,10 @@ repo the gitleaks job runs without a license — no action needed.
 > first deploy doesn't fail on `az acr login`. The full apply is the
 > second phase (after `build-push`) so it can pin container apps to the
 > freshly built image SHA tag. Bootstrap is idempotent — a no-op once
-> the ACR is in state. The bootstrap jobs claim sibling GitHub
-> environments (`staging-bootstrap`, `production-bootstrap`) that mirror
-> the main envs' Terraform secrets but stay unprotected; production's
+> the ACR is in state. Staging bootstrap claims the normal `staging`
+> environment because staging has no approval gate. Production bootstrap
+> claims the sibling `production-bootstrap` environment, which mirrors
+> production's Terraform secrets but stays unprotected; production's
 > reviewer prompt remains on the final `apply` job only.
 >
 > **Do not delete `infra-bootstrap` once an environment is up.** It is a
