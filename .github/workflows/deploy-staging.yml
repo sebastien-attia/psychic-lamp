@@ -90,11 +90,21 @@ jobs:
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # ACR name is owned by Terraform — see modules/container-registry/main.tf
+      # (`registry_name = replace("${project_name}${environment}acr","-","")`)
+      # and environments/staging/main.tf (project_name = "boatapp"). The literal
+      # below mirrors that formula for staging; production has its own workflow
+      # with its own literal. Single source of truth = TF.
+      #
+      # `loginServer` is deterministically `<name>.azurecr.io` for the public
+      # Azure cloud, so we do NOT call `az acr show --query loginServer`: that
+      # round-trip just adds latency and a failure mode (transient ARM 5xx)
+      # without information gain.
       - name: Compute image references and tags
         id: compute
         run: |
           set -euo pipefail
-          ACR_LOGIN=$(az acr show -n "${{ vars.ACR_NAME }}" --query loginServer -o tsv)
+          ACR_LOGIN="boatappstagingacr.azurecr.io"
           SHA_TAG="staging-${GITHUB_SHA:0:8}"
           {
             echo "ACR_LOGIN=${ACR_LOGIN}"
@@ -106,7 +116,7 @@ jobs:
 
       # OIDC-federated ACR token (no admin creds, no docker login -u/-p).
       - name: ACR login
-        run: az acr login --name "${{ vars.ACR_NAME }}"
+        run: az acr login --name "boatappstagingacr"
 
       # Cosign installer once at the top of the job — both per-image sign
       # steps reuse the same binary.

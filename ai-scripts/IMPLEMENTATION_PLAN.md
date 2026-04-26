@@ -84,7 +84,7 @@ Local-intg (full stack):
 | Step | Command | What |
 |------|---------|------|
 | 0 | `run-phase.sh 0` | Bootstrap (bff/ + business-service/ dirs, Claude rules, CLAUDE.md) |
-| 0d | `run-phase.sh 0d --subscription … --repo owner/name` (passthrough wrapper around `00d-bootstrap-azure.sh`) | **One-off Azure+GitHub bootstrap** before Phase 4 CI/CD: Entra ID app + OIDC federated credentials (main/staging/PR/envs), Subscription Contributor + User Access Administrator role assignments, Terraform remote-state storage, `gh secret/variable set` for `AZURE_*` / `TF_STATE_*` / `ACR_NAME`. Idempotent. Only manual follow-up: enable "Required reviewers" on the `production` GitHub Environment (no public API). |
+| 0d | `run-phase.sh 0d --subscription … --repo owner/name` (passthrough wrapper around `00d-bootstrap-azure.sh`) | **One-off Azure+GitHub bootstrap** before Phase 4 CI/CD: Entra ID app + OIDC federated credentials (main/staging/PR/envs), Subscription Contributor + User Access Administrator role assignments, Terraform remote-state storage, `gh secret/variable set` for `AZURE_*` / `TF_STATE_*` secrets and `PROJECT` / `LOCATION` variables. ACR name is owned by Terraform — not a bootstrap variable. Idempotent. Only manual follow-up: enable "Required reviewers" on the `production` GitHub Environment (no public API). |
 | 1 | `run-phase.sh 1` | OpenAPI contract |
 
 ### Phase 2 (run sequentially from the project root)

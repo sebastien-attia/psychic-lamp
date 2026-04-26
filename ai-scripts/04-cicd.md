@@ -137,8 +137,15 @@
                   subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
             - ACR login via the federated token — NO admin creds, NO docker
               login -u/-p. The federated identity has `AcrPush` on the ACR
-              (granted by Terraform, see 02c2 step 5):
-                run: az acr login --name ${{ vars.ACR_NAME }}
+              (granted by Terraform, see 02c2 step 5). The ACR name is owned
+              by Terraform (`modules/container-registry/main.tf` →
+              `${project_name}${environment}acr`, dashes stripped); the
+              workflow uses the environment-specific literal because each
+              workflow file is environment-specific, mirroring TF's own
+              `environments/<env>/main.tf` hardcoding. Do NOT read the name
+              from a GitHub variable — that introduces drift between two
+              naming formulas.
+                run: az acr login --name boatappstagingacr
             - Build Docker images: bff + business-service (two images)
             - Tag both images: :staging and :staging-${{ github.sha }}
             - Push to ACR (plain `docker push` — token was installed by
@@ -180,8 +187,10 @@
                   client-id:       ${{ secrets.AZURE_CLIENT_ID }}
                   tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
                   subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-            - ACR login via the federated token (AcrPush role, no admin creds):
-                run: az acr login --name ${{ vars.ACR_NAME }}
+            - ACR login via the federated token (AcrPush role, no admin
+              creds). Same naming rule as deploy-staging.yml — TF owns the
+              name, workflow uses the env-specific literal:
+                run: az acr login --name boatappproductionacr
             - Build Docker images: bff + business-service (two images)
             - Tag both images:
               - :latest
@@ -240,9 +249,12 @@
       - Prerequisite: run `./ai-scripts/00d-bootstrap-azure.sh` once per
         tenant + repo BEFORE this phase. That script creates the Entra ID
         app, federated credentials, subscription role assignments, the
-        Terraform remote-state storage, and sets all `AZURE_*` / `TF_STATE_*` /
-        `ACR_NAME` secrets/variables via `gh`. `ENVIRONMENTS.md` documents
-        what the script produced — the file is a reference, not a runbook.
+        Terraform remote-state storage, and sets `AZURE_*` / `TF_STATE_*`
+        secrets and `PROJECT` / `LOCATION` variables via `gh`. The ACR name
+        is **not** stored in a GitHub variable — Terraform owns it
+        (`${project_name}${environment}acr`) and each deploy workflow uses
+        the env-specific literal. `ENVIRONMENTS.md` documents what the
+        script produced — the file is a reference, not a runbook.
       - OIDC setup instructions for Azure Federated Identity Credential, including
         the one-time role assignments the federated identity needs:
         * Subscription-level `Contributor` (or tighter: `Container Apps Contributor`

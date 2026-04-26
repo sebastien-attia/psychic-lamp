@@ -55,11 +55,17 @@ them become useful.
 
 | Variable    | Example value | Used by                              |
 |-------------|---------------|--------------------------------------|
-| `ACR_NAME`  | `boatappstagingacr` | `az acr login --name ${{ vars.ACR_NAME }}` |
 | `PROJECT`   | `boatapp`     | logging / tagging                    |
 | `LOCATION`  | `switzerlandnorth` | downstream Terraform reference  |
 
 `vars` (not `secrets`) because none of these are sensitive.
+
+The ACR name is **not** a bootstrap variable. Terraform owns it via
+`modules/container-registry/main.tf` (formula:
+`replace("${project_name}${environment}acr","-","")`); each deploy workflow
+re-derives it as a literal mirroring that formula
+(`boatappstagingacr` / `boatappproductionacr`). Pinning the name in two places
+caused a drift bug — see git history of `00d-bootstrap-azure.sh` for the fix.
 
 ---
 
@@ -191,18 +197,19 @@ in ACR.
 
 To verify a deployed image locally (replace `<digest>` with the
 `sha256:…` value from `docker inspect ${ACR}.azurecr.io/bff:staging` or
-the deploy run summary):
+the deploy run summary, and `${ACR}` with the env-specific registry —
+`boatappstagingacr` for staging, `boatappproductionacr` for production):
 
 ```bash
 cosign verify \
   --certificate-identity-regexp 'https://github\.com/<org>/<repo>/\.github/workflows/deploy-(staging|production)\.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  ${ACR_NAME}.azurecr.io/bff@<digest>
+  ${ACR}.azurecr.io/bff@<digest>
 ```
 
 Replace `bff` with `business-service` for the other image. To list every
 attached artifact (signature, provenance, SBOM if any), use
-`cosign tree ${ACR_NAME}.azurecr.io/bff:staging`.
+`cosign tree ${ACR}.azurecr.io/bff:staging`.
 
 > **Storage cost.** cosign signatures + SLSA provenance are stored as
 > additional OCI artifacts in ACR (~5–10 KB per image). They do not

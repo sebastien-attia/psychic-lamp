@@ -97,10 +97,18 @@ jobs:
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      # ACR name is owned by Terraform — see modules/container-registry/main.tf
+      # (`registry_name = replace("${project_name}${environment}acr","-","")`)
+      # and environments/production/main.tf (project_name = "boatapp"). The
+      # literal below mirrors that formula for production; staging has its own
+      # workflow with its own literal. Single source of truth = TF.
+      #
+      # `loginServer` is deterministically `<name>.azurecr.io` for the public
+      # Azure cloud — no `az acr show` round-trip needed.
       - name: Compute image references
         run: |
           set -euo pipefail
-          ACR_LOGIN=$(az acr show -n "${{ vars.ACR_NAME }}" --query loginServer -o tsv)
+          ACR_LOGIN="boatappproductionacr.azurecr.io"
           {
             echo "ACR_LOGIN=${ACR_LOGIN}"
             echo "BFF_IMAGE=${ACR_LOGIN}/bff"
@@ -108,7 +116,7 @@ jobs:
           } >> "$GITHUB_ENV"
 
       - name: ACR login
-        run: az acr login --name "${{ vars.ACR_NAME }}"
+        run: az acr login --name "boatappproductionacr"
 
       - name: Install cosign
         uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0

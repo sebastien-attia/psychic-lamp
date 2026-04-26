@@ -47,7 +47,7 @@ Personal account (you)
     ├── Pull Requests           → fire ci.yml + CodeQL + terraform-plan
     ├── Releases (on main)      → fire deploy-production.yml
     ├── Repository secrets      ← AZURE_CLIENT_ID, AZURE_TENANT_ID, …
-    ├── Repository variables    ← ACR_NAME, PROJECT, LOCATION
+    ├── Repository variables    ← PROJECT, LOCATION
     ├── Environments
     │   ├── staging             ← TF_VAR_* secrets, no approval
     │   └── production          ← TF_VAR_* secrets + Required Reviewer
@@ -126,9 +126,14 @@ script / Terraform) is responsible for setting it.
 
 | Variable    | Value source           | Used by                             |
 |-------------|------------------------|-------------------------------------|
-| `ACR_NAME`  | Derived from sub-hash  | Image push/pull in deploy workflows |
 | `PROJECT`   | `--project` flag       | Terraform variable + naming         |
 | `LOCATION`  | `--location` flag      | Terraform variable                  |
+
+The ACR name is **not** stored as a GitHub variable. Terraform owns it
+(`modules/container-registry/main.tf` → `${project_name}${environment}acr`,
+dashes stripped) and each deploy workflow re-derives it as an environment-
+specific literal — `boatappstagingacr` in `deploy-staging.yml`,
+`boatappproductionacr` in `deploy-production.yml`. Single source of truth.
 
 ### Table 4 — GitHub environment-level secrets (you set MANUALLY)
 
