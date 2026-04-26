@@ -23,8 +23,8 @@
     <project>The Boat App — Business Service domain + BFF proxy layer</project>
     <existing-code>Domain models, ports, persistence adapter from Step 02A.2. Read them.</existing-code>
     <hexagonal-rule>
-      Business Service: domain.service implements domain.port.in interfaces. Pure Java. Zero Spring.
-      infrastructure.service.BoatApplicationService is the Spring @Transactional bridge.
+      Business Service: application.service implements application.port.in interfaces. Pure Java. Zero Spring.
+      application.service.BoatApplicationService is the Spring @Transactional bridge.
       adapter.in.web.BoatController is the HTTP adapter that depends on infrastructure.service only.
 
       BFF: adapter.in.web.BoatController depends on infrastructure.service.BoatBffService.
@@ -50,7 +50,7 @@
 
   <instructions-business-service>
     <step order="1">
-      Implement DOMAIN SERVICES (business-service/domain.service) — PURE JAVA (zero Spring imports):
+      Implement DOMAIN SERVICES (business-service/application.service) — PURE JAVA (zero Spring imports):
 
       BoatDomainService.java (implements ManageBoatsUseCase):
       - Constructor: BoatRepositoryPort, BoatAuditRepositoryPort, SyntacticValidator, SemanticValidator
@@ -82,7 +82,7 @@
     </step>
 
     <step order="2">
-      Create BoatApplicationService (business-service/infrastructure.service.BoatApplicationService):
+      Create BoatApplicationService (business-service/application.service.BoatApplicationService):
       - @Service @Transactional — transaction boundary and bridge to pure-Java domain
       - private static final Logger log = LoggerFactory.getLogger(BoatApplicationService.class) (MANDATORY)
       - Injects ManageBoatsUseCase (wired to BoatDomainService via BeanConfig)

@@ -166,26 +166,29 @@ jobs:
           dtrack-url:     ${{ secrets.DTRACK_URL }}
           dtrack-api-key: ${{ secrets.DTRACK_API_KEY }}
           project-uuid:   ${{ vars.DTRACK_PROJECT_UUID_STAGING }}
-          bom-path:       business-service/target/bom.json
+          bom-path:       business-service/bootstrap/target/bom.json
           fail-on:        FAIL
       - name: Upload business-service test reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: business-service-test-reports
+          # Reports are emitted per submodule; glob covers all four.
           path: |
-            business-service/target/surefire-reports/
-            business-service/target/failsafe-reports/
-            business-service/target/site/jacoco/
-            business-service/target/spotbugsXml.xml
+            business-service/*/target/surefire-reports/
+            business-service/*/target/failsafe-reports/
+            business-service/*/target/site/jacoco/
+            business-service/*/target/spotbugsXml.xml
           if-no-files-found: ignore
       - name: Upload business-service CycloneDX SBOM
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: business-service-sbom
+          # CycloneDX makeAggregateBom runs only in the bootstrap module
+          # (one runtime artifact = one aggregated SBOM).
           path: |
-            business-service/target/bom.json
-            business-service/target/bom.xml
+            business-service/bootstrap/target/bom.json
+            business-service/bootstrap/target/bom.xml
           if-no-files-found: error
 
   build-frontend:

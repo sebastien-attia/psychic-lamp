@@ -17,10 +17,15 @@ mkdir -p \
   bff/src/main/resources \
   bff/src/test/java/ch/owt/boatapp/bff/{architecture,integration} \
   bff/src/test/resources \
-  business-service/src/main/java/ch/owt/boatapp/{domain/{model/validation,port/{in,out},service/validation,exception},adapter/{in/web/dto,out/persistence/{entity,mapper,repository}},infrastructure/{config,security,service}} \
-  business-service/src/main/resources/{db/changelog/changes} \
-  business-service/src/test/java/ch/owt/boatapp/{architecture,integration,adapter/{in/web,out/persistence}} \
-  business-service/src/test/resources \
+  business-service/domain/src/main/java/ch/owt/boatapp/domain/{model/validation,exception,service/validation} \
+  business-service/domain/src/test/java/ch/owt/boatapp/domain \
+  business-service/application/src/main/java/ch/owt/boatapp/application/{port/{in,out},service} \
+  business-service/infrastructure/src/main/java/ch/owt/boatapp/{adapter/{in/web/dto,out/persistence/{entity,mapper,repository}},infrastructure/{config,security}} \
+  business-service/infrastructure/src/main/resources/db/changelog/changes \
+  business-service/bootstrap/src/main/java/ch/owt/boatapp \
+  business-service/bootstrap/src/main/resources \
+  business-service/bootstrap/src/test/java/ch/owt/boatapp/{architecture,integration,support} \
+  business-service/bootstrap/src/test/resources \
   frontend/src/{assets,components/{ui,boats},composables,layouts,pages,router,services,stores,types,i18n} \
   frontend/e2e \
   infra/terraform/{modules/{networking,database,container-registry,container-apps,keyvault},environments/{staging,production}} \
@@ -32,6 +37,7 @@ mkdir -p \
 echo "▸ Writing .gitignore..."
 cat > .gitignore << 'EOF'
 bff/target/
+business-service/*/target/
 business-service/target/
 *.class
 *.jar
@@ -137,16 +143,21 @@ Thin proxy with session-based OAuth2. No domain logic, no JPA.
 ### Business Service (business-service/)
 Pure hexagonal service. Validates JWT Bearer tokens.
 - `domain.model` — pure Java domain objects (Boat, AppUser, BoatAudit). NO Spring annotations.
-- `domain.port.in` — inbound port interfaces (use cases). Pure Java.
-- `domain.port.out` — outbound port interfaces (repository contracts). Pure Java.
-- `domain.service` — use case implementations. Pure Java. Only depends on domain.model + ports.
+- `application.port.in` — inbound port interfaces (use cases). Pure Java.
+- `application.port.out` — outbound port interfaces (repository contracts). Pure Java.
+- `application.service` — use case implementations. Pure Java. Only depends on domain.model + ports.
 - `adapter.in.web` — Spring @RestController (REST adapter IN). JWT resource server.
-- `adapter.out.persistence` — Spring Data JPA (adapter OUT). Implements domain.port.out.
-- `infrastructure.config` — BeanConfig (wires pure-Java domain beans).
+- `adapter.out.persistence` — Spring Data JPA (adapter OUT). Implements application.port.out.
+- `infrastructure.config` — BeanConfig (wires pure-Java application services as beans).
 - `infrastructure.security` — ResourceServerSecurityConfig (JWT), DevSecurityConfig (dev bypass).
-- `infrastructure.service` — BoatApplicationService (@Service @Transactional, bridge layer).
 
-**Rule: domain.* packages must have ZERO Spring/Jakarta imports. ArchUnit enforces this.**
+The Business Service is packaged as a four-module Maven reactor:
+\`business-service/\` is a parent POM whose children are \`domain\`,
+\`application\`, \`infrastructure\` and \`bootstrap\` (runnable jar). The
+Maven graph physically prevents \`domain\` from depending on Spring/Jakarta
+because those JARs are not on its classpath.
+
+**Rule: \`domain.*\` and \`application.port.*\` packages must have ZERO Spring/Jakarta imports.** Maven enforces this for \`domain.*\` (no Spring deps on its classpath); ArchUnit enforces it for \`application.port.*\`.
 
 ## Environments
 
@@ -254,22 +265,22 @@ paths: ["business-service/**/*.java", "business-service/pom.xml"]
 # Business Service Rules — Strict Hexagonal Architecture + JWT Resource Server
 
 ## Hexagonal boundaries (enforced by ArchUnit)
-- domain.model, domain.port.in, domain.port.out, domain.service → PURE JAVA ONLY
+- domain.model, application.port.in, application.port.out, application.service → PURE JAVA ONLY
   - NO Spring annotations (@Component, @Service, @Repository, @Transactional)
   - NO Jakarta/javax annotations (@Entity, @Column, @Table)
   - NO framework imports (org.springframework.*, jakarta.*)
   - ONLY java.* and domain.* imports allowed
-- adapter.in.web → Spring @RestController, stateless, depends on infrastructure.service
-- adapter.out.persistence → Spring Data JPA, implements domain.port.out
+- adapter.in.web → Spring @RestController, stateless, depends on application.service
+- adapter.out.persistence → Spring Data JPA, implements application.port.out
   - JPA entities here (separate from domain records), with hand-written @Component mappers — no MapStruct, no annotation processor
+- application.service → BoatApplicationService (@Service @Transactional bridge), BoatDomainService and UserDomainService (pure Java, wired by BeanConfig)
 - infrastructure.config → Spring @Configuration beans, wiring ports to adapters
 - infrastructure.security → ResourceServerSecurityConfig (JWT), DevSecurityConfig (dev bypass)
-- infrastructure.service → BoatApplicationService (@Service @Transactional, bridge layer)
 
 ## Inbound port design — Command and Query objects
 - Mutations → <Action><Entity>Command (e.g. CreateBoatCommand)
 - Reads → <Action><Entity>Query (e.g. ListBoatsQuery)
-- Command/Query records live in domain.port.in (pure Java)
+- Command/Query records live in application.port.in (pure Java)
 - Value objects BoatId(UUID) and UserId(UUID) in domain.model
 
 ## Security

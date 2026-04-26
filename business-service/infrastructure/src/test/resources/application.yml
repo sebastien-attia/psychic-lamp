@@ -1,0 +1,14 @@
+# Test-only baseline for the infrastructure module's slice tests.
+#
+# Mirrors the bootstrap module's test config: gives the resource server's
+# JwtDecoder a placeholder JWKS URI so any auto-configured @Profile("!dev")
+# bean wires without contacting Keycloak.
+#
+# `jwk-set-uri` (lazy decoder build) is preferred over `issuer-uri` (eager
+# OIDC discovery, would HTTP-fail on a sandboxed network at startup).
+spring:
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jwk-set-uri: http://localhost/jwks

@@ -1,5 +1,6 @@
 bff/target/
 business-service/target/
+business-service/*/target/
 *.class
 *.jar
 frontend/node_modules/

@@ -329,7 +329,10 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: business-service-sbom
-          path: business-service/target/
+          # Multi-module layout: SBOM lives in the bootstrap submodule's
+          # target/ — the dependency-track plugin reads bom.xml from
+          # ${project.build.directory} of the bootstrap module.
+          path: business-service/bootstrap/target/
       - name: Upload bff SBOM to Dependency-Track
         working-directory: bff
         env:
@@ -348,7 +351,10 @@ jobs:
           DTRACK_URL:     ${{ secrets.DTRACK_URL }}
           DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
         run: |
-          ./mvnw -B -ntp dependency-track:upload-bom \
+          # The dependency-track plugin is declared only in the bootstrap
+          # submodule (one runtime artifact, one upload). Scoping with
+          # `-pl bootstrap` avoids iterating the other submodules.
+          ./mvnw -B -ntp -pl bootstrap dependency-track:upload-bom \
             -Ddtrack.skip=false \
             -Ddependency-track.url="${DTRACK_URL}" \
             -Ddependency-track.apiKey="${DTRACK_API_KEY}" \

@@ -84,8 +84,15 @@ for svc in bff business-service; do
   run_check "${svc}: mvn package (CycloneDX SBOM generated)" -- \
     bash -c "cd ${svc} && ./mvnw -q package -DskipTests"
 
-  BOM_JSON="${svc}/target/bom.json"
-  BOM_XML="${svc}/target/bom.xml"
+  # business-service runs cyclonedx in the bootstrap submodule (one
+  # runtime artifact = one aggregated SBOM). BFF stays single-module.
+  if [ "${svc}" = "business-service" ]; then
+    BOM_JSON="business-service/bootstrap/target/bom.json"
+    BOM_XML="business-service/bootstrap/target/bom.xml"
+  else
+    BOM_JSON="${svc}/target/bom.json"
+    BOM_XML="${svc}/target/bom.xml"
+  fi
   if [ -s "${BOM_JSON}" ] && grep -q '"bomFormat"\s*:\s*"CycloneDX"' "${BOM_JSON}"; then
     pass "${svc}: target/bom.json is a valid CycloneDX BOM"
     if command -v jq >/dev/null 2>&1; then

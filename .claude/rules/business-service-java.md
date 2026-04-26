@@ -3,23 +3,38 @@ paths: ["business-service/**/*.java", "business-service/pom.xml"]
 ---
 # Business Service Rules — Strict Hexagonal Architecture + JWT Resource Server
 
-## Hexagonal boundaries (enforced by ArchUnit)
-- domain.model, domain.port.in, domain.port.out, domain.service → PURE JAVA ONLY
+## Maven topology (four submodules, dependency direction is one-way)
+
+```
+business-service/  parent (packaging=pom)
+├── domain/         pure Java jar, ZERO Spring/Jakarta deps
+├── application/    depends on domain + spring-context + spring-tx
+├── infrastructure/ depends on application + Spring web/JPA/security
+└── bootstrap/      @SpringBootApplication, runnable jar (finalName=business-service)
+```
+
+The Maven graph physically enforces "domain has no Spring on its classpath" — `import org.springframework.*` inside the domain jar fails to compile.
+
+## Hexagonal boundaries (enforced by Maven graph + ArchUnit)
+- domain.model, domain.exception, domain.service.validation → PURE JAVA ONLY
+  - Lives in the `domain` Maven module (no Spring/Jakarta deps on classpath).
   - NO Spring annotations (@Component, @Service, @Repository, @Transactional)
-  - NO Jakarta/javax annotations (@Entity, @Column, @Table)
-  - NO framework imports (org.springframework.*, jakarta.*)
-  - ONLY java.* and domain.* imports allowed
-- adapter.in.web → Spring @RestController, stateless, depends on infrastructure.service
-- adapter.out.persistence → Spring Data JPA, implements domain.port.out
+  - NO Jakarta annotations (@Entity, @Column, @Table)
+  - ONLY java.* imports allowed (slf4j is also forbidden — domain has no logging)
+- application.port.in, application.port.out → pure-Java interfaces and Command/Query records
+  - Lives in the `application` Maven module. ArchUnit forbids Spring/Jakarta imports here too.
+- application.service → use-case implementations
+  - BoatApplicationService (@Service @Transactional bridge), BoatDomainService and UserDomainService (pure-Java orchestrators, wired as beans by BeanConfig).
+- adapter.in.web → Spring @RestController, stateless, depends on application.service
+- adapter.out.persistence → Spring Data JPA, implements application.port.out
   - JPA entities here (separate from domain records), with hand-written @Component mappers — no MapStruct, no annotation processor
 - infrastructure.config → Spring @Configuration beans, wiring ports to adapters
 - infrastructure.security → ResourceServerSecurityConfig (JWT), DevSecurityConfig (dev bypass)
-- infrastructure.service → BoatApplicationService (@Service @Transactional, bridge layer)
 
 ## Inbound port design — Command and Query objects
 - Mutations → <Action><Entity>Command (e.g. CreateBoatCommand)
 - Reads → <Action><Entity>Query (e.g. ListBoatsQuery)
-- Command/Query records live in domain.port.in (pure Java)
+- Command/Query records live in application.port.in (pure Java)
 - Value objects BoatId(UUID) and UserId(UUID) in domain.model
 
 ## Security

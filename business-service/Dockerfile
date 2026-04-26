@@ -15,14 +15,29 @@
 # ── Stage 1: Maven build ──────────────────────────────────────────────────
 FROM eclipse-temurin:25-jdk AS build
 WORKDIR /workspace
-# Copy Maven wrapper + pom first to leverage the Docker layer cache when
-# only sources change.
+# Copy Maven wrapper + every submodule pom first to leverage the Docker
+# layer cache when only sources change. The four submodules
+# (domain → application → infrastructure → bootstrap) make up the
+# multi-module reactor; their poms must all be present before
+# `dependency:go-offline` can resolve the in-repo dependency graph.
 COPY business-service/.mvn ./business-service/.mvn
-COPY business-service/mvnw business-service/mvnw.cmd business-service/pom.xml ./business-service/
+COPY business-service/mvnw business-service/mvnw.cmd ./business-service/
+COPY business-service/pom.xml                ./business-service/
+COPY business-service/domain/pom.xml         ./business-service/domain/
+COPY business-service/application/pom.xml    ./business-service/application/
+COPY business-service/infrastructure/pom.xml ./business-service/infrastructure/
+COPY business-service/bootstrap/pom.xml      ./business-service/bootstrap/
 RUN cd business-service && ./mvnw -B -ntp dependency:go-offline
-COPY business-service/src ./business-service/src
+COPY business-service/domain/src         ./business-service/domain/src
+COPY business-service/application/src    ./business-service/application/src
+COPY business-service/infrastructure/src ./business-service/infrastructure/src
+COPY business-service/bootstrap/src      ./business-service/bootstrap/src
+COPY business-service/spotbugs-security-include.xml business-service/spotbugs-exclude-generated.xml ./business-service/
 COPY contracts ./contracts
-RUN cd business-service && ./mvnw -B -ntp package -DskipTests
+# `-pl bootstrap -am` builds bootstrap and everything it depends on
+# (domain → application → infrastructure → bootstrap), skipping any
+# unrelated reactor work.
+RUN cd business-service && ./mvnw -B -ntp -pl bootstrap -am package -DskipTests
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────
 FROM eclipse-temurin:25-jre AS runtime
@@ -38,7 +53,7 @@ RUN apt-get update \
  && groupadd --system --gid 1001 spring \
  && useradd  --system --uid 1001 --gid spring --no-create-home spring
 WORKDIR /app
-COPY --from=build /workspace/business-service/target/*.jar /app/app.jar
+COPY --from=build /workspace/business-service/bootstrap/target/business-service.jar /app/app.jar
 USER spring:spring
 EXPOSE 8081
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \

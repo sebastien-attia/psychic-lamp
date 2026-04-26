@@ -82,11 +82,14 @@
           # Upload test reports + bom.* as artifacts (consumed by deploy-* for DT upload).
 
         build-business-service:
-          # Java 25, Maven, cache .m2, cwd = business-service/
-          # ./mvnw verify (unit + integration tests with Testcontainers: Postgres)
-          # SpotBugs+FindSecBugs (SAST) fires during 'verify'.
-          # ./mvnw package — emits target/bom.json + target/bom.xml.
-          # Upload test reports + bom.* as artifacts.
+          # Java 25, Maven, cache .m2, cwd = business-service/ (parent reactor).
+          # ./mvnw verify (unit + integration tests with Testcontainers: Postgres) —
+          # builds the four-module reactor: domain → application → infrastructure → bootstrap.
+          # SpotBugs+FindSecBugs (SAST) fires during 'verify' in every submodule.
+          # ./mvnw package — cyclonedx makeAggregateBom runs only in bootstrap and emits
+          # business-service/bootstrap/target/bom.json + bom.xml (one runtime artifact = one SBOM).
+          # Upload test reports (glob business-service/*/target/surefire-reports/, etc.)
+          # and the bootstrap/target/bom.* SBOM as artifacts.
 
         build-frontend:
           # Node 22, npm ci, cache node_modules
