@@ -306,10 +306,13 @@ jobs:
         run: docker compose up -d --build
       - name: Verify bff-keygen produced the signing key
         # Asserts that the init container actually wrote the PEM where
-        # the BFF service expects it. Without this, a silent regression
-        # in `bff-keygen` would surface 120s later as a generic
-        # "stack failed to come healthy" timeout from the wait step.
-        run: test -s infra/docker/keys/bff-signing-key.pem
+        # the BFF service reads it. Without this, a silent regression
+        # in `bff-keygen` (e.g. exit 0 with an empty file) would surface
+        # 120s later as a generic "stack failed to come healthy" timeout
+        # from the wait step. The PEM lives in the `bff-signing-key`
+        # named volume — never on the host — so we exec into the BFF
+        # container to test the path it actually reads.
+        run: docker compose exec -T bff test -s /var/lib/bff-keys/bff-signing-key.pem
       # Both health probes have docker-side healthchecks already, but the
       # SPA test framework polls these URLs from the runner host where
       # the container healthcheck status is invisible. Poll until 200.
