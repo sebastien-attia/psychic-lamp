@@ -63,11 +63,18 @@ them become useful.
 
 ---
 
-## Environment-scoped secrets (must be set MANUALLY)
+## Environment-scoped secrets (set by `00f-generate-db-secrets.sh`)
 
 These secrets exist **per environment** because their values differ between
-staging and production. Add them at `Settings → Environments → <env> →
-Environment secrets` for both `staging` and `production`.
+staging and production. They are written by
+[`ai-scripts/00f-generate-db-secrets.sh`](../ai-scripts/00f-generate-db-secrets.sh)
+— a sibling to `00d-bootstrap-azure.sh` that generates 256-bit URL-safe
+values (`openssl rand -hex 32`) and writes them to both environments via
+`gh secret set --env <env>`. Run it once after `00d` succeeds:
+
+```bash
+./ai-scripts/00f-generate-db-secrets.sh --repo <owner>/<repo>
+```
 
 ### Terraform sensitive inputs
 
@@ -83,10 +90,11 @@ run logs.
 | `TF_VAR_keycloak_db_password`       | Per-DB password for the `keycloak` role.                      |
 | `TF_VAR_keycloak_admin_password`    | Initial Keycloak admin password.                              |
 
-Generate strong values once per environment, store them in your password
-manager **and** in the GitHub environment secret. The Terraform state is
-encrypted at rest in the state storage account, but nothing recovers
-these passwords if you lose them.
+The Terraform state is encrypted at rest in the state storage account, and
+Azure Key Vault holds the canonical copy after the first `terraform apply`
+— but nothing recovers these specific GitHub-environment values once
+overwritten, so capture `00f`'s output if you need them out-of-band.
+Re-running `00f` rotates every secret in one shot.
 
 ### Dependency-Track governance
 

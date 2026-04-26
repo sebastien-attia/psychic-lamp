@@ -133,9 +133,11 @@ script / Terraform) is responsible for setting it.
 ### Table 4 — GitHub environment-level secrets (you set MANUALLY)
 
 Set these once per environment (`staging` and `production`). The
-bootstrap script intentionally does **not** generate
-database/admin passwords — they belong to you. Generate values with
-`openssl rand -base64 32`.
+Azure bootstrap script intentionally does **not** generate
+database/admin passwords — they belong to you. Use
+[`ai-scripts/00f-generate-db-secrets.sh`](ai-scripts/00f-generate-db-secrets.sh)
+(see §A.4) which generates 256-bit URL-safe values via
+`openssl rand -hex 32` and writes them to both environments in one go.
 
 | Secret                            | Stored in Azure as | Purpose                       |
 |-----------------------------------|--------------------|-------------------------------|
@@ -242,37 +244,31 @@ tenant is a no-op.
 
 ### A.4 Set the per-environment Terraform passwords
 
-The bootstrap script does *not* generate these — they belong to you.
-The snippet below seeds all five secrets in **both** `staging` and
-`production` in one go. Replace the `REPO=` value with your own
-`owner/repo` slug. Works in both bash and zsh; uses an array instead
-of backslash line-continuations so a stray copy-paste whitespace
-cannot break it.
+`00d-bootstrap-azure.sh` does *not* generate these — they belong to
+you. Run [`ai-scripts/00f-generate-db-secrets.sh`](ai-scripts/00f-generate-db-secrets.sh)
+to seed all five secrets in **both** `staging` and `production` in one
+go:
 
 ```bash
-REPO=<owner>/<repo>           # e.g. sebastien-attia/psychic-lamp
-
-SECRETS=(
-  TF_VAR_postgres_admin_password
-  TF_VAR_bff_db_password
-  TF_VAR_business_db_password
-  TF_VAR_keycloak_db_password
-  TF_VAR_keycloak_admin_password
-)
-
-for env in staging production; do
-  for name in "${SECRETS[@]}"; do
-    # `gh secret set` reads from stdin when --body is omitted.
-    # Do NOT use `--body -` — that stores the literal string "-".
-    openssl rand -base64 32 \
-      | gh secret set "$name" --env "$env" --repo "$REPO"
-  done
-done
+./ai-scripts/00f-generate-db-secrets.sh --repo <owner>/<repo>
+# e.g. ./ai-scripts/00f-generate-db-secrets.sh --repo sebastien-attia/psychic-lamp
 ```
 
-Store the generated values out-of-band (your password manager) — Azure
-Key Vault will hold the canonical copy after the first
-`terraform apply`, but you may need them for a manual psql session.
+The script:
+
+- generates 256 bits of entropy per secret with `openssl rand -hex 32`
+  — hex (not base64) keeps values URL-safe so they can be embedded in
+  JDBC URLs and Keycloak DB env vars without `+` / `/` / `=` breakage;
+- pipes each value into `gh secret set --env <env> --repo <repo>`
+  (stdin, **not** `--body -` — see commit 202e236);
+- pre-checks that both GitHub Environments exist (so a stale repo
+  fails fast instead of leaving the secret store half-populated);
+- supports `--dry-run` to preview without writing.
+
+If you need to store the values out-of-band (your password manager),
+use `--dry-run` first to see exactly what *would* be written, then run
+without `--dry-run` and capture stdout. Azure Key Vault will hold the
+canonical copy after the first `terraform apply`.
 
 ### A.5 Enable "Required reviewers" on the `production` Environment
 
@@ -633,10 +629,11 @@ In an incognito window, browse the repo URL and confirm:
 - **Roll out a new version** — open a PR to `main`, merge after CI
   is green, then publish a Release: `gh release create v1.2.3
   --generate-notes`. Approve the production deployment when prompted.
-- **Rotate database passwords** — re-run the loop from §A.4 with a
-  fresh `openssl rand -base64 32`, then push an empty commit to
-  `staging` (or publish a new release) so the deploy workflow picks
-  the new value up via Terraform → Key Vault.
+- **Rotate database passwords** — re-run
+  `./ai-scripts/00f-generate-db-secrets.sh --repo <owner>/<repo>`
+  (see §A.4), then push an empty commit to `staging` (or publish a new
+  release) so the deploy workflow picks the new values up via
+  Terraform → Key Vault.
 - **Tear down** — `cd infra/terraform/environments/staging &&
   terraform destroy`. Repeat for production. The bootstrap-managed
   `boat-app-tfstate-rg` is safe to keep across destroys.
