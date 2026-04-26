@@ -262,8 +262,10 @@ SECRETS=(
 
 for env in staging production; do
   for name in "${SECRETS[@]}"; do
+    # `gh secret set` reads from stdin when --body is omitted.
+    # Do NOT use `--body -` — that stores the literal string "-".
     openssl rand -base64 32 \
-      | gh secret set "$name" --env "$env" --repo "$REPO" --body -
+      | gh secret set "$name" --env "$env" --repo "$REPO"
   done
 done
 ```
