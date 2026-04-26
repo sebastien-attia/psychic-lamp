@@ -23,9 +23,12 @@ import org.springframework.web.client.RestClient;
  * <p>Configures an OAuth2 session-based login against Keycloak. Sessions are
  * stored server-side in PostgreSQL via Spring Session JDBC (configured in
  * {@code application.yml}) — the browser only ever sees the opaque
- * {@code SESSION} cookie. The OAuth2 access token is forwarded as a
- * {@code Bearer} header on outbound calls to the Business Service by an
- * interceptor wired in {@code BffConfig}.
+ * {@code SESSION} cookie. Outbound proxying to the Business Service is
+ * handled by Spring Cloud Gateway: routes are declared in
+ * {@code application-routes.yml} and the {@code TokenRelay} filter forwards
+ * the user's access token (resolved via the
+ * {@code OAuth2AuthorizedClientManager} bean defined in {@code BffConfig})
+ * as a {@code Bearer} header on every upstream call.
  *
  * <p>CSRF uses a non-HttpOnly cookie ({@code XSRF-TOKEN}) plus the
  * {@link SpaCsrfTokenRequestHandler} so the SPA's {@code fetch} /
@@ -81,10 +84,13 @@ public class SecurityConfig {
         http
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers(
-                                PathPatternRequestMatcher.withDefaults().matcher("/"),
-                                PathPatternRequestMatcher.withDefaults().matcher("/index.html"),
-                                PathPatternRequestMatcher.withDefaults().matcher("/assets/**"),
-                                PathPatternRequestMatcher.withDefaults().matcher("/favicon.ico"),
+                                // SPA static surface (`/`, `/index.html`, `/assets/**`,
+                                // `/favicon.ico`) is intentionally NOT in this list —
+                                // the SPA leaves the BFF jar after the SCG migration.
+                                // In dev / local-intg the SPA is served by Vite at :5173;
+                                // in staging / prod it is hosted on Azure Static Web Apps.
+                                // Hitting these paths on the BFF must 404, and
+                                // `BffStaticContentRegressionTest` enforces that.
                                 PathPatternRequestMatcher.withDefaults().matcher("/.well-known/jwks.json"),
                                 PathPatternRequestMatcher.withDefaults().matcher("/actuator/health"),
                                 PathPatternRequestMatcher.withDefaults().matcher("/actuator/health/**"),

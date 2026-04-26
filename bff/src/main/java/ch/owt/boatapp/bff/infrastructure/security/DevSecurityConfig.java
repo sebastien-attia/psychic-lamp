@@ -17,10 +17,11 @@ import org.springframework.security.web.SecurityFilterChain;
  *
  * <p>The filter chain {@code permitAll}s every request, runs stateless
  * (no session, no Spring Session JDBC schema needed) and disables CSRF.
- * Because we exclude {@link org.springframework.boot.autoconfigure.security.oauth2.client.servlet.OAuth2ClientAutoConfiguration}
- * is NOT done here (Boot's autoconfig only fails when oauth2Login is
- * activated, and we never call it in dev), the dev profile boots cleanly
- * without a stub Keycloak registration.
+ *
+ * <p>Note: {@code OAuth2ClientAutoConfiguration} is NOT excluded here.
+ * Boot's autoconfiguration only fails when {@code oauth2Login} is activated,
+ * which we never do in dev — so the dev profile boots cleanly without a
+ * stub Keycloak registration.
  */
 @Configuration
 @Profile("dev")

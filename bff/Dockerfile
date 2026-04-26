@@ -1,82 +1,46 @@
 # bff/Dockerfile
 #
-# Four-stage build for the BFF service.
+# Two-stage build for the BFF service.
 #
-#   1. ts-codegen — openapitools/openapi-generator-cli:v7.21.0 (bundles Java
-#                   + the generator JAR). Generates the typescript-axios
-#                   client from contracts/openapi.yaml into /out, driven
-#                   by contracts/codegen-typescript-axios.json (the same
-#                   config consumed by `npm run generate:api` — single
-#                   source of truth, no flag drift). Pulled out of the
-#                   Node stage because the npm wrapper shells out to
-#                   `java -jar`, and node:22-alpine has no JRE.
-#   2. frontend   — node:22-alpine. Runs `npm ci && npm run build:no-codegen`
-#                   against ../frontend (build:no-codegen skips
-#                   generate:api — the generated client is COPYed in
-#                   from ts-codegen), producing the Vue SPA bundle in
-#                   dist/.
-#   3. bff-build  — eclipse-temurin:25-jdk. Copies the SPA into
-#                   bff/src/main/resources/static/ so the Spring Boot JAR
-#                   serves it as static files at the application root,
-#                   then runs `./mvnw package -DskipTests`.
-#   4. runtime    — eclipse-temurin:25-jre. Non-root user, container-aware
-#                   JVM flags, HEALTHCHECK on /actuator/health.
+#   1. bff-build — eclipse-temurin:25-jdk. Runs `./mvnw package -DskipTests`
+#                  to produce the Spring Boot fat jar. The OpenAPI codegen
+#                  bound to `generate-sources` runs implicitly during the
+#                  Maven lifecycle; only the User-tag DTOs (UserInfoResponse)
+#                  are emitted now that the BFF is a Spring Cloud Gateway
+#                  and no longer hosts an outbound HTTP-Interface client.
+#   2. runtime   — eclipse-temurin:25-jre. Non-root user, container-aware
+#                  JVM flags, HEALTHCHECK on /actuator/health.
 #
-# Build context: REPO ROOT (compose passes context=.). The frontend/, bff/
-# and contracts/ directories must all be present at the context root.
+# The SPA is no longer baked into this image. In dev / local-intg the SPA
+# is served by Vite at :5173; in staging / prod it is hosted on Azure
+# Static Web Apps with a linked-backend pointing at this Container App.
+#
+# Build context: REPO ROOT (compose passes context=.). Both bff/ and
+# contracts/ must be present at the context root.
 #
 # Build:
 #   docker build -t boatapp/bff:local -f bff/Dockerfile .
 # Run (compose handles this; standalone for sanity):
 #   docker run --rm -p 8080:8080 boatapp/bff:local
 
-# ── Stage 1: TypeScript client codegen ────────────────────────────────────
-# Pin matches the version the npm wrapper auto-selects (frontend log shows
-# "Did set selected version to 7.21.0"). Bumping requires bumping both.
-FROM openapitools/openapi-generator-cli:v7.21.0 AS ts-codegen
-WORKDIR /work
-# Copy the whole contracts/ dir (not just openapi.yaml) so future $ref
-# splits keep working without a Dockerfile change.
-COPY contracts/ ./contracts/
-# `RUN` does not invoke ENTRYPOINT, so we call the entrypoint script by
-# absolute path. Same script `docker run` would invoke implicitly.
-RUN /usr/local/bin/docker-entrypoint.sh generate \
-      -i /work/contracts/openapi.yaml \
-      -c /work/contracts/codegen-typescript-axios.json \
-      -o /out
-
-# ── Stage 2: frontend bundle ──────────────────────────────────────────────
-FROM node:22-alpine AS frontend
-WORKDIR /workspace/frontend
-COPY frontend/package.json frontend/package-lock.json ./
-RUN npm ci
-COPY frontend/ ./
-# Drop in the pre-generated TS client so build:no-codegen can skip
-# generate:api (which would otherwise need a JRE in this stage).
-# --chown normalizes ownership regardless of the codegen image's user.
-COPY --from=ts-codegen --chown=root:root /out/ ./src/services/api-client/generated/
-RUN npm run build:no-codegen
-
-# ── Stage 3: BFF Maven build ──────────────────────────────────────────────
+# ── Stage 1: BFF Maven build ──────────────────────────────────────────────
 FROM eclipse-temurin:25-jdk AS bff-build
 WORKDIR /workspace
-# Copy Maven wrapper + pom first to leverage the Docker layer cache when
-# only sources change.
+# Copy Maven wrapper + pom first so the dependency-resolution layer is reused
+# when only `bff/src` or `contracts/` changes. Note: `dependency:go-offline`
+# does not pre-resolve the openapi-generator-maven-plugin's codegen
+# transitives (that plugin runs in `generate-sources`, after this layer), so
+# the first `package` invocation on a clean cache will still pull a few
+# codegen artifacts. Subsequent builds cache them through Maven's local repo
+# layer.
 COPY bff/.mvn ./bff/.mvn
 COPY bff/mvnw bff/mvnw.cmd bff/pom.xml ./bff/
 RUN cd bff && ./mvnw -B -ntp dependency:go-offline
 COPY bff/src ./bff/src
 COPY contracts ./contracts
-# Splice the SPA bundle into resources/static so Spring Boot serves it from
-# the JAR. Wipe any committed contents of resources/static first so the
-# bundle from stage 1 is the sole source of truth (prevents tracked
-# placeholder files from shadowing the real index.html).
-RUN rm -rf /workspace/bff/src/main/resources/static \
- && mkdir -p /workspace/bff/src/main/resources/static
-COPY --from=frontend /workspace/frontend/dist/ ./bff/src/main/resources/static/
 RUN cd bff && ./mvnw -B -ntp package -DskipTests
 
-# ── Stage 4: runtime ──────────────────────────────────────────────────────
+# ── Stage 2: runtime ──────────────────────────────────────────────────────
 FROM eclipse-temurin:25-jre AS runtime
 # curl is needed by HEALTHCHECK below; --no-install-recommends keeps the
 # image lean. The temurin image is Ubuntu-based.

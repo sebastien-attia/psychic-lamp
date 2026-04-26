@@ -21,12 +21,18 @@ else
   fail "business-service controller does NOT implement BusinessServiceApi — signatures may drift from spec"
 fi
 
-# Architecture: BFF controllers must NOT directly import BusinessServiceClient
-if grep -rq 'adapter.out.client.generated.BusinessServiceClient' \
-     bff/src/main/java/ch*/*/bff/adapter/in/web/ 2>/dev/null; then
-  fail "BFF controllers import BusinessServiceClient directly — must go through BoatBffService"
+# Architecture: BFF must not (re-)introduce an outbound HTTP-Interface client.
+# After the SCG migration proxying lives entirely in application-routes.yml,
+# not in Java code. The adapter.out.client package and BoatBffService are gone.
+if find bff/src/main/java -path '*adapter/out/client*' -name '*.java' 2>/dev/null | grep -q .; then
+  fail "BFF re-introduced adapter.out.client.* — proxying must stay in application-routes.yml (SCG)"
 else
-  pass "BFF controllers do not depend on BusinessServiceClient directly"
+  pass "BFF has no adapter.out.client package (proxying lives in SCG config)"
+fi
+if find bff/src/main/java -path '*infrastructure/service*' -name '*BffService.java' 2>/dev/null | grep -q .; then
+  fail "BFF re-introduced *BffService — orchestration is now declarative in application-routes.yml"
+else
+  pass "BFF has no *BffService class (declarative SCG routes)"
 fi
 
 # No hand-written dto package in business-service (should be generated)
@@ -58,18 +64,21 @@ else
   fail "business-service does not reference audit logic"
 fi
 
-# ── BFF wires RestClient with Bearer interceptor ───────────────────────────
-if grep -rqE 'RestClient|DefaultOAuth2AuthorizedClientManager' bff/src/main/java/ 2>/dev/null; then
-  pass "BFF wires RestClient / OAuth2AuthorizedClientManager"
+# ── BFF wires SCG TokenRelay + the OAuth2AuthorizedClientManager bean ─────
+if grep -rq 'spring-cloud-starter-gateway-server-webmvc' bff/pom.xml 2>/dev/null; then
+  pass "BFF declares spring-cloud-starter-gateway-server-webmvc (SCG MVC)"
 else
-  fail "BFF does not wire RestClient with OAuth2 token forwarding"
+  fail "BFF missing spring-cloud-starter-gateway-server-webmvc — SCG migration not applied"
 fi
-
-# BFF service must be suffixed with "BffService" (hint from ArchUnit rule)
-if find bff/src/main/java -path '*infrastructure/service*' -name '*BffService.java' 2>/dev/null | grep -q .; then
-  pass "BFF service class follows *BffService naming"
+if grep -rq 'TokenRelay' bff/src/main/resources/application-routes.yml 2>/dev/null; then
+  pass "application-routes.yml declares the TokenRelay filter"
 else
-  warn "no *BffService class found under bff/infrastructure/service"
+  fail "application-routes.yml missing TokenRelay filter — Bearer token won't be forwarded"
+fi
+if grep -rq 'DefaultOAuth2AuthorizedClientManager' bff/src/main/java/ 2>/dev/null; then
+  pass "BFF wires DefaultOAuth2AuthorizedClientManager (consumed by TokenRelay per request)"
+else
+  fail "BFF missing OAuth2AuthorizedClientManager bean — TokenRelay will not resolve"
 fi
 
 # ── Contract fidelity: regenerate codegen; target/ diff should be empty ─────
@@ -84,28 +93,36 @@ for svc in business-service bff; do
 done
 
 # ── Unified Validation & Messaging design (RFC 9457) ────────────────────────
-# Each service must carry: @Valid at the controller, full set of exception
-# handlers, ProblemTypes URI registry, JakartaCodeTranslator, messages.properties,
-# and use Spring's ProblemDetail with populated type + instance.
+# Bean Validation lives ONLY in business-service after the SCG migration —
+# the BFF dropped spring-boot-starter-validation (proxying lives in SCG
+# config; the BS is the trust boundary that owns validation). The RFC 9457
+# envelope (ProblemTypes registry, JakartaCodeTranslator, messages.properties,
+# ProblemDetail.type/instance) is required in BOTH services so error
+# responses share an identical shape.
+if grep -rqE '@Valid\b' business-service/src/main/java 2>/dev/null; then
+  pass "business-service: @Valid present in controllers"
+else
+  fail "business-service: no @Valid found — Bean Validation is not wired"
+fi
+if grep -rqE '@Validated\b' business-service/src/main/java 2>/dev/null; then
+  pass "business-service: @Validated present (path/query param constraints)"
+else
+  warn "business-service: no @Validated found — path/query-param constraints will silently not fire"
+fi
+# BFF must NOT depend on spring-boot-starter-validation any more.
+if grep -q 'spring-boot-starter-validation' bff/pom.xml 2>/dev/null; then
+  fail "BFF still declares spring-boot-starter-validation — Bean Validation moved to BS-only"
+else
+  pass "BFF no longer declares spring-boot-starter-validation (validation owned by BS)"
+fi
+
 for svc in business-service bff; do
   SRC="${svc}/src/main/java"
-  [ -d "${SRC}" ] || { warn "${svc}: src/main/java missing — skipping validation checks"; continue; }
+  [ -d "${SRC}" ] || { warn "${svc}: src/main/java missing — skipping envelope checks"; continue; }
 
-  # @Valid in at least one controller
-  if grep -rqE '@Valid\b' "${SRC}" 2>/dev/null; then
-    pass "${svc}: @Valid present in controllers (syntactic validation at REST adapter)"
-  else
-    fail "${svc}: no @Valid found — Bean Validation is not wired; syntactic errors will not produce 400"
-  fi
-
-  # @Validated on at least one controller (for @PathVariable / @RequestParam)
-  if grep -rqE '@Validated\b' "${SRC}" 2>/dev/null; then
-    pass "${svc}: @Validated present (path/query param constraints)"
-  else
-    warn "${svc}: no @Validated found — path/query-param constraints will silently not fire"
-  fi
-
-  # Handlers for Bean Validation exceptions
+  # Handlers for Bean Validation exceptions — required in both services
+  # (BFF keeps them as a defense-in-depth shell so the envelope shape stays
+  # consistent if a future BFF-local endpoint re-introduces @Valid).
   for exc in MethodArgumentNotValidException ConstraintViolationException HttpMessageNotReadableException; do
     if grep -rq "${exc}" "${SRC}" 2>/dev/null; then
       pass "${svc}: GlobalExceptionHandler references ${exc}"
@@ -118,15 +135,14 @@ for svc in business-service bff; do
   if grep -rq 'class ProblemTypes' "${SRC}" 2>/dev/null; then
     pass "${svc}: ProblemTypes URI constants class present"
   else
-    fail "${svc}: ProblemTypes.java missing — handlers must reference registry URIs, not hand-written strings"
+    fail "${svc}: ProblemTypes.java missing — handlers must reference registry URIs"
   fi
   if grep -rq 'JakartaCodeTranslator' "${SRC}" 2>/dev/null; then
     pass "${svc}: JakartaCodeTranslator present (no Jakarta constraint names on the wire)"
   else
-    fail "${svc}: JakartaCodeTranslator.java missing — Jakarta constraint names will leak as error codes"
+    fail "${svc}: JakartaCodeTranslator.java missing — Jakarta constraint names will leak"
   fi
 
-  # Handlers populate RFC 9457 type + instance (Spring ProblemDetail setters)
   if grep -rqE '\.setType\s*\(' "${SRC}" 2>/dev/null; then
     pass "${svc}: handlers call .setType(...) (RFC 9457 type URI)"
   else
@@ -138,14 +154,12 @@ for svc in business-service bff; do
     fail "${svc}: no .setInstance(...) calls — ProblemDetail.instance will be empty"
   fi
 
-  # about:blank must NOT appear in handler source (dead giveaway of a missed setType)
   if grep -rqE '"about:blank"' "${SRC}" 2>/dev/null; then
     fail "${svc}: about:blank literal in source — must always be a registry URI"
   else
     pass "${svc}: no about:blank literal in source"
   fi
 
-  # messages.properties present
   if [ -f "${svc}/src/main/resources/messages.properties" ]; then
     pass "${svc}: messages.properties present (i18n source)"
   else

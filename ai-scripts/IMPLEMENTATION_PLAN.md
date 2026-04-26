@@ -1,3 +1,5 @@
+
+
 # The Boat App — Implementation Plan
 
 ## Architecture
@@ -5,16 +7,25 @@
 ```
 Browser
   │ session cookie (HttpOnly)
+  │  dev/local-intg: Vite (:5173) serves SPA, proxies /api → BFF :8080
+  │  staging/prod:   Azure Static Web Apps serves SPA, BYOB → BFF
   ▼
 ┌──────────────────────────────────────────────┐
 │ BFF (bff/, port 8080)                        │
-│  adapter.in.web (BoatController, AuthCtrl)   │
-│  infrastructure.service (BoatBffService)     │
-│  adapter.out.client (BusinessServiceClient)  │
+│  Spring Cloud Gateway Server Web MVC 5.0.1   │
+│  adapter.in.web — AuthController, JwksCtrl,  │
+│                   GlobalExceptionHandler     │
+│                   (NO controller for boats)  │
+│  infrastructure.config.BffConfig             │
+│   — bffSigningJwk + private_key_jwt clients  │
+│   — OAuth2AuthorizedClientManager            │
 │  infrastructure.security (OAuth2 + CSRF)     │
-│  Serves Vue SPA static files                 │
+│  infrastructure.web.ScgUpstreamFailureFilter │
+│  application-routes.yml                      │
+│   — Path=/api/v1/boats/{*subpath}            │
+│   — TokenRelay=keycloak                      │
 └────────────────────┬─────────────────────────┘
-                     │ Bearer <access_token>
+                     │ Bearer <access_token> (TokenRelay)
                      ▼
 ┌──────────────────────────────────────────────┐
 │ Business Service (business-service/, port 8081)│

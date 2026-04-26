@@ -31,7 +31,12 @@ const DEV_DUMMY_USER = {
  *     No `/oauth2` or `/login` proxy: there is no Keycloak in dev mode.
  *
  * - `local-intg` (`npm run dev:intg`):
- *     proxy `/api,/oauth2,/login,/logout` → `http://localhost:8080` (BFF).
+ *     proxy `/api,/oauth2,/login,/logout` → BFF. The default target is
+ *     `http://localhost:8080` (host-run path: `cd frontend && npm run
+ *     dev:intg` against a BFF reachable on the host). The target is
+ *     overridable via `VITE_BFF_TARGET`, which is what the in-compose
+ *     `frontend` service uses to reach the BFF over the compose network
+ *     (`http://bff:8080`).
  *     The BFF performs the OAuth2 Authorization-Code flow, sets the
  *     session cookie, and forwards Bearer tokens to the Business Service.
  *
@@ -44,6 +49,24 @@ const DEV_DUMMY_USER = {
  */
 export default defineConfig(({ mode }) => {
   const isLocalIntg = mode === 'local-intg'
+  // Host-run default; the in-compose `frontend` service overrides this with
+  // `http://bff:8080` so the proxy resolves over the compose network.
+  const bffTarget = process.env.VITE_BFF_TARGET ?? 'http://localhost:8080'
+  // What the BFF must see as `Host:` so Spring Security builds an
+  // OAuth2 `redirect_uri` the BROWSER can resolve. Defaults to the host
+  // portion of `bffTarget` (correct for the host-run path where the proxy
+  // target IS the public URL). In compose the target is `bff:8080` (only
+  // resolvable on the docker network) but the browser must follow the
+  // OAuth callback to `localhost:8080`, so the in-compose `frontend`
+  // service sets `VITE_BFF_PUBLIC_HOST=localhost:8080`.
+  const bffPublicHost =
+    process.env.VITE_BFF_PUBLIC_HOST ?? new URL(bffTarget).host
+
+  const bffProxy = {
+    target: bffTarget,
+    changeOrigin: false,
+    headers: { host: bffPublicHost },
+  }
 
   return {
     plugins: [vue()],
@@ -51,10 +74,10 @@ export default defineConfig(({ mode }) => {
       proxy: isLocalIntg
         ? {
             // local-intg: full OAuth2 + session via BFF
-            '/api':    'http://localhost:8080',
-            '/oauth2': 'http://localhost:8080',
-            '/login':  'http://localhost:8080',
-            '/logout': 'http://localhost:8080',
+            '/api':    { ...bffProxy },
+            '/oauth2': { ...bffProxy },
+            '/login':  { ...bffProxy },
+            '/logout': { ...bffProxy },
           }
         : {
             // dev: Business Service direct, no auth, /api/me bypassed

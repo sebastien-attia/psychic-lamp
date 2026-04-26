@@ -1,6 +1,5 @@
 package ch.owt.boatapp.bff.infrastructure.config;
 
-import ch.owt.boatapp.bff.adapter.out.client.generated.BusinessServiceClient;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.RSAKey;
@@ -8,12 +7,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
-import org.springframework.security.authentication.AnonymousAuthenticationToken;
-import org.springframework.security.authentication.InsufficientAuthenticationException;
-import org.springframework.security.core.Authentication;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.security.oauth2.client.ClientAuthorizationException;
-import org.springframework.security.oauth2.client.OAuth2AuthorizedClient;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientProvider;
 import org.springframework.security.oauth2.client.OAuth2AuthorizedClientProviderBuilder;
@@ -24,12 +17,8 @@ import org.springframework.security.oauth2.client.endpoint.OAuth2RefreshTokenGra
 import org.springframework.security.oauth2.client.endpoint.RestClientAuthorizationCodeTokenResponseClient;
 import org.springframework.security.oauth2.client.endpoint.RestClientRefreshTokenTokenResponseClient;
 import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
-import org.springframework.security.oauth2.client.OAuth2AuthorizeRequest;
 import org.springframework.security.oauth2.client.web.DefaultOAuth2AuthorizedClientManager;
 import org.springframework.security.oauth2.client.web.OAuth2AuthorizedClientRepository;
-import org.springframework.web.client.RestClient;
-import org.springframework.web.client.support.RestClientAdapter;
-import org.springframework.web.service.invoker.HttpServiceProxyFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -45,9 +34,9 @@ import java.security.spec.RSAPublicKeySpec;
 import java.util.Base64;
 
 /**
- * BFF infrastructure wiring for the OAuth2 + token-forwarding stack.
+ * BFF infrastructure wiring for the OAuth2 stack.
  *
- * <p>This configuration assembles four collaborating beans:
+ * <p>This configuration assembles three collaborating beans:
  * <ol>
  *   <li>{@link #bffSigningJwk(Path, String) bffSigningJwk} — loads the BFF's
  *       PKCS#8 PEM signing key from disk and exposes it as a Nimbus
@@ -67,12 +56,15 @@ import java.util.Base64;
  *       the {@link OAuth2AuthorizedClientRepository} (backed by Spring
  *       Session JDBC) so refresh-token rotation happens transparently
  *       across BFF restarts.</li>
- *   <li>{@link #businessServiceRestClient} — the {@link RestClient} used to
- *       call the upstream Business Service. Its sole interceptor pulls the
- *       current user's access token from the {@link OAuth2AuthorizedClientManager}
- *       and attaches it as a {@code Bearer} header on every outbound
- *       request.</li>
  * </ol>
+ *
+ * <p>Outbound proxying to the Business Service is no longer wired here.
+ * Spring Cloud Gateway's {@code TokenRelay} filter (declared in
+ * {@code application-routes.yml}) discovers this configuration's
+ * {@link OAuth2AuthorizedClientManager} bean at request time via the servlet
+ * application context, attaches the current user's access token as a
+ * {@code Bearer} header on the outbound request, and triggers refresh
+ * transparently when the access token has expired.
  *
  * <p>Dev profile note: this configuration is gated on {@code @Profile("!dev")}
  * because the dev profile does not start the BFF and the
@@ -82,8 +74,6 @@ import java.util.Base64;
 @Configuration
 @Profile("!dev")
 public class BffConfig {
-
-    private static final String CLIENT_REGISTRATION_ID = "keycloak";
 
     /**
      * Load the BFF's signing key from {@code bff.signing-key.path} (a PKCS#8
@@ -189,9 +179,13 @@ public class BffConfig {
     }
 
     /**
-     * Build the {@link OAuth2AuthorizedClientManager} used by the
-     * Business-Service interceptor to fetch (and refresh, on expiry) the
-     * current user's access token.
+     * Build the {@link OAuth2AuthorizedClientManager} consumed by Spring Cloud
+     * Gateway's {@code TokenRelay} filter (declared in
+     * {@code application-routes.yml}) to fetch — and refresh, on expiry — the
+     * current user's access token before relaying it on the upstream call to
+     * the Business Service. {@code TokenRelayFilterFunctions} resolves this
+     * bean per request via the servlet application context, so no explicit
+     * SCG wiring is required beyond the starter.
      *
      * <p>The provider chain accepts authorization-code grants (the manager
      * does not actually fetch them — login does — but the chain must allow
@@ -199,7 +193,7 @@ public class BffConfig {
      * refresh-token grants (here we wire our private_key_jwt token client).
      *
      * <p><strong>Servlet-scoped.</strong> {@link DefaultOAuth2AuthorizedClientManager}
-     * looks up the {@link OAuth2AuthorizedClient} via the current servlet
+     * looks up the per-principal authorized-client via the current servlet
      * request — calling {@code authorize(...)} from a non-request thread
      * (e.g. {@code @Async}, {@code @Scheduled}) throws
      * {@code IllegalArgumentException}. Any future background flow that
@@ -229,76 +223,4 @@ public class BffConfig {
         return manager;
     }
 
-    /**
-     * Build the {@link RestClient} used by the {@link BusinessServiceClient}
-     * proxy to call the upstream Business Service.
-     *
-     * <p>Adds a single request interceptor: read the current
-     * {@link Authentication} from the {@link SecurityContextHolder}, ask the
-     * {@link OAuth2AuthorizedClientManager} for the {@code keycloak}
-     * authorized client (which transparently refreshes the access token if
-     * it has expired), and attach the access token as a
-     * {@code Bearer} header on the outbound request.
-     *
-     * <p>Anonymous principals (the default Spring Security places when no
-     * session exists) and missing authentications skip the lookup — the
-     * upstream then rejects the request with 401, which the BFF's filter
-     * chain converts to an RFC 9457 envelope. A
-     * {@link ClientAuthorizationException} (typically: refresh token
-     * revoked or Keycloak unreachable) is translated to
-     * {@link InsufficientAuthenticationException} so
-     * {@code GlobalExceptionHandler} emits the same 401 envelope as a
-     * missing-session 401, rather than leaking the OAuth2 stack trace as 500.
-     *
-     * @param baseUrl                  base URL of the upstream Business Service
-     * @param authorizedClientManager  manages access-token retrieval and
-     *                                 refresh
-     * @return a {@link RestClient} bound to the upstream base URL
-     */
-    @Bean
-    public RestClient businessServiceRestClient(
-            @Value("${business-service.url:http://localhost:8081}") String baseUrl,
-            OAuth2AuthorizedClientManager authorizedClientManager) {
-        return RestClient.builder()
-                .baseUrl(baseUrl)
-                .requestInterceptor((request, body, execution) -> {
-                    Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
-                    if (authentication != null && !(authentication instanceof AnonymousAuthenticationToken)) {
-                        OAuth2AuthorizedClient authorizedClient;
-                        try {
-                            authorizedClient = authorizedClientManager.authorize(
-                                    OAuth2AuthorizeRequest
-                                            .withClientRegistrationId(CLIENT_REGISTRATION_ID)
-                                            .principal(authentication)
-                                            .build());
-                        } catch (ClientAuthorizationException ex) {
-                            throw new InsufficientAuthenticationException(
-                                    "OAuth2 token refresh failed for clientRegistrationId="
-                                            + CLIENT_REGISTRATION_ID, ex);
-                        }
-                        if (authorizedClient != null) {
-                            request.getHeaders()
-                                    .setBearerAuth(authorizedClient.getAccessToken().getTokenValue());
-                        }
-                    }
-                    return execution.execute(request, body);
-                })
-                .build();
-    }
-
-    /**
-     * Build the OpenAPI-generated {@link BusinessServiceClient} HTTP-Interface
-     * proxy backed by the configured {@link RestClient}.
-     *
-     * @param restClient the BFF's outbound HTTP client (with Bearer-token
-     *                   interceptor)
-     * @return the proxy implementing {@link BusinessServiceClient}
-     */
-    @Bean
-    public BusinessServiceClient businessServiceClient(RestClient restClient) {
-        return HttpServiceProxyFactory
-                .builderFor(RestClientAdapter.create(restClient))
-                .build()
-                .createClient(BusinessServiceClient.class);
-    }
 }

@@ -10,10 +10,20 @@
 # file. The shared artefact across environments is infra/keycloak/realm.yaml.
 #
 # Usage: docker compose up
-# Starts: postgres + keycloak + keycloak-config (sidecar) + business-service + bff
-# Browser: http://localhost:8080  (BFF serves Vue SPA + handles OAuth)
-# Business Service API (internal only): http://localhost:8081  (not for browser use)
-# Keycloak admin (debug only):          http://localhost:8180
+# Starts: postgres + keycloak + keycloak-config (sidecar) + business-service +
+#         bff + frontend-codegen (sidecar) + frontend (Vite dev server)
+#
+# Browser: open http://localhost:5173 — the `frontend` service runs Vite in
+#   `local-intg` mode and proxies /api, /oauth2, /login, /logout to the BFF
+#   over the compose network (VITE_BFF_TARGET=http://bff:8080). The SPA is
+#   not baked into the BFF image; in staging/prod it lives on Azure Static
+#   Web Apps. The host-run path (`cd frontend && npm run dev:intg`) still
+#   works — it falls back to http://localhost:8080 when VITE_BFF_TARGET is
+#   unset.
+# BFF (Spring Cloud Gateway, OAuth2/session/CSRF + TokenRelay to BS):
+#                                          http://localhost:8080
+# Business Service API (internal only):    http://localhost:8081  (not for browser use)
+# Keycloak admin (debug only):             http://localhost:8180
 # All host-published ports are bound to 127.0.0.1 so the local-intg stack
 # is not reachable from the LAN even if the workstation has no firewall.
 #
@@ -310,9 +320,114 @@ services:
       # bff-keygen writes the PEM mode 0644 so that uid can read it.
       - bff-signing-key:/var/lib/bff-keys:ro
 
+  # One-shot init container: regenerates the SPA's TypeScript API client from
+  # contracts/openapi.yaml on every `up`. The generator
+  # (@openapitools/openapi-generator-cli) shells out to a Java process — so
+  # this image carries Node AND a JRE (installed via apk on cold start, ~5s
+  # after the package mirror is cached). The npm install step is skipped when
+  # node_modules is already populated (the named volume `frontend-node-modules`
+  # persists across `down`); generate:api always runs so a change to
+  # contracts/openapi.yaml is picked up on the next `up`.
+  #
+  # Capability note: unlike `bff-keygen` (which writes to a Docker-managed
+  # named volume and can safely run with `cap_drop: [ALL]`), this service
+  # writes generated TS into the host bind-mount `./frontend`. Stripping
+  # CAP_DAC_OVERRIDE would block that write because the bind-mount is
+  # owned by the host user, not container root. We keep the default Docker
+  # capability set (already a small subset of full root) and only retain
+  # `no-new-privileges` to forbid setuid escalation inside the container.
+  frontend-codegen:
+    image: node:22-alpine
+    security_opt:
+      - no-new-privileges:true
+    restart: "no"
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - ./contracts:/contracts:ro
+      - frontend-node-modules:/app/node_modules
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        # apk output is intentionally NOT silenced — if the Alpine package
+        # mirror is unreachable (corporate VPN, flight, CI cache miss), the
+        # error must surface in the codegen log instead of being swallowed.
+        # The package name itself pins us to OpenJDK 21.
+        apk add --no-cache openjdk21-jre-headless
+        # Files written below land on the host bind-mount with root ownership
+        # (this container runs as container-root). Devs cleaning up by hand
+        # may need `sudo rm -rf frontend/node_modules` outside docker.
+        if [ ! -d node_modules ] || [ ! -f node_modules/.package-lock.json ]; then
+          echo "▸ Installing frontend npm dependencies (first run)..."
+          npm ci --no-audit --no-fund --prefer-offline
+        else
+          echo "▸ node_modules already populated — skipping npm ci."
+        fi
+        echo "▸ Generating SPA TypeScript API client from contracts/openapi.yaml..."
+        npm run generate:api
+
+  # Long-running Vite dev server for the SPA. Serves at http://localhost:5173
+  # and proxies /api, /oauth2, /login, /logout to the BFF on the compose
+  # network (VITE_BFF_TARGET=http://bff:8080 — the in-container override of
+  # vite.config.ts's host-run default of http://localhost:8080).
+  # CHOKIDAR_USEPOLLING=true is needed because inotify events from a Linux
+  # host bind mount are not reliably propagated into the container — without
+  # it, file edits don't trigger HMR.
+  frontend:
+    image: node:22-alpine
+    security_opt:
+      - no-new-privileges:true
+    ports: ["127.0.0.1:5173:5173"]
+    working_dir: /app
+    depends_on:
+      frontend-codegen: { condition: service_completed_successfully }
+      # `service_healthy` (not `service_started`): the BFF defines a
+      # HEALTHCHECK in its Dockerfile, so compose will wait until /actuator
+      # /health returns 200 before starting Vite. Without that gate, the
+      # SPA's first hit to /api/me / /oauth2/* through the proxy would race
+      # the BFF and surface as a 502 to the developer.
+      bff:              { condition: service_healthy }
+    healthcheck:
+      # Vite serves the SPA bootstrap HTML at `/`. wget ships with Alpine's
+      # busybox, so no extra package install is needed for the probe.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5173/"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
+    environment:
+      # Where the Vite proxy actually sends bytes (compose-network DNS):
+      VITE_BFF_TARGET: http://bff:8080
+      # What the BFF sees as `Host:` so Spring Security's OAuth2 client
+      # builds a `redirect_uri` the browser can follow back. Without this
+      # override, Spring would build `http://bff:8080/login/oauth2/code/...`
+      # — unresolvable outside the docker network.
+      VITE_BFF_PUBLIC_HOST: localhost:8080
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        # Defensive: codegen has populated node_modules, but cover the case
+        # where someone deletes the named volume without re-running codegen.
+        if [ ! -d node_modules ] || [ ! -f node_modules/.package-lock.json ]; then
+          npm ci --no-audit --no-fund --prefer-offline
+        fi
+        exec npx vite --mode local-intg --host 0.0.0.0 --port 5173
+
 volumes:
   postgres-data:
   # Shared between bff-keygen (writer) and bff (reader). Persists across
   # `docker compose down` so the key is generated only once. Wipe with
   # `docker compose down -v` to force regeneration.
   bff-signing-key:
+  # Shared between frontend-codegen (writer) and frontend (reader). Persists
+  # across `docker compose down` so `npm ci` only runs on first up. Wipe with
+  # `docker volume rm <project>_frontend-node-modules` to force a clean
+  # reinstall (e.g. after editing frontend/package.json).
+  frontend-node-modules:

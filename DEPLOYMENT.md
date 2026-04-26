@@ -378,8 +378,19 @@ gh run watch                              # deploy-staging.yml
 ```
 
 You should see Terraform create the `boat-app-staging-rg` resource
-group and three Container Apps. The BFF's external hostname is
-printed in the deploy summary.
+group, three Container Apps (bff / business-service / keycloak), and
+an Azure Static Web App with a linked-backend pointing at the BFF
+Container App. The SWA hostname (where the SPA is served) and the
+BFF's Container App FQDN (consumed only by the SWA, not by browsers
+post-cutover) are printed in the deploy summary.
+
+> **Cutover note:** before SWA is wired the BFF Container App
+> ingress can stay `external = true` (so you can hit the BFF
+> directly during smoke tests). Once SWA's linked-backend is
+> active and the SPA loads through `https://<swa-hostname>/`,
+> flip the BFF ingress to `external = false` so all browser
+> traffic must traverse SWA. The change is a single Terraform
+> diff and is reversible.
 
 ## 5. Part C — Lock-down
 

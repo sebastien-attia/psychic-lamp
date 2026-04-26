@@ -2,6 +2,9 @@
 # Signing key PEM is mounted from an Azure Key Vault secret-volume; only the
 # absolute path inside the container is referenced here.
 spring:
+  # Spring Cloud Gateway route table — see comment in application-local-intg.yml.
+  config:
+    import: classpath:application-routes.yml
   datasource:
     url: jdbc:postgresql://${POSTGRES_FQDN}:5432/${BFF_DB_NAME:bff_session}?sslmode=require
     username: ${BFF_DB_USER}

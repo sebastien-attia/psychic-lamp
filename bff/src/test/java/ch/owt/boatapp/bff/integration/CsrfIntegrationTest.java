@@ -7,7 +7,7 @@ import com.github.tomakehurst.wiremock.client.WireMock;
 
 import static ch.owt.boatapp.bff.support.SessionTestSupport.authenticatedSession;
 import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
-import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -30,10 +30,21 @@ class CsrfIntegrationTest extends BffIntegrationTestBase {
                 .andExpect(status().isForbidden());
     }
 
-    /** Mutating request with CSRF token → forwarded to upstream and 201 returned. */
+    /**
+     * Mutating request with CSRF token → forwarded to upstream and 201
+     * returned.
+     *
+     * <p>Stub uses {@code urlPathEqualTo} (not {@code urlEqualTo}) because
+     * SCG MVC forwards the entire request URI byte-identically, including
+     * the {@code ?_csrf=…} query parameter that
+     * {@code SecurityMockMvcRequestPostProcessors.csrf()} appends. The
+     * production SPA sends the CSRF token via the {@code X-XSRF-TOKEN}
+     * header (no query string), so this test-only artefact does not affect
+     * production wire shape.
+     */
     @Test
     void postWithCsrf_isForwarded_andReturns201() throws Exception {
-        wireMock.stubFor(WireMock.post(urlEqualTo("/api/v1/boats"))
+        wireMock.stubFor(WireMock.post(urlPathEqualTo("/api/v1/boats"))
                 .willReturn(aResponse().withStatus(201)
                         .withHeader("Content-Type", "application/json")
                         .withHeader("Location", "/api/v1/boats/abc")

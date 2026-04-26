@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json.schemastore.org/staticwebapp.config.json",
+  "navigationFallback": {
+    "rewrite": "/index.html",
+    "exclude": [
+      "/api/*",
+      "/oauth2/*",
+      "/login/*",
+      "/logout",
+      "/.well-known/*",
+      "/actuator/*",
+      "/assets/*",
+      "/*.{js,css,png,jpg,jpeg,gif,svg,ico,woff,woff2,map,json}"
+    ]
+  },
+  "routes": [
+    { "route": "/api/*",         "rewrite": "/api/*",         "allowedRoles": ["anonymous"] },
+    { "route": "/oauth2/*",      "rewrite": "/oauth2/*",      "allowedRoles": ["anonymous"] },
+    { "route": "/login/*",       "rewrite": "/login/*",       "allowedRoles": ["anonymous"] },
+    { "route": "/logout",        "rewrite": "/logout",        "allowedRoles": ["anonymous"] },
+    { "route": "/.well-known/*", "rewrite": "/.well-known/*", "allowedRoles": ["anonymous"] },
+    { "route": "/actuator/*",    "rewrite": "/actuator/*",    "allowedRoles": ["anonymous"] }
+  ],
+  "responseOverrides": {
+    "401": { "statusCode": 401 },
+    "403": { "statusCode": 403 }
+  },
+  "globalHeaders": {
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin"
+  },
+  "platform": {
+    "apiRuntime": "static"
+  }
+}

@@ -17,19 +17,24 @@
     These are non-negotiable per CLAUDE.md › Project conventions.
   </project_conventions>
 
-  <role>You are a senior Java architect implementing use case services (pure Java), web adapters, and BFF client layer.</role>
+  <role>You are a senior Java architect implementing use case services (pure Java), web adapters, and the BFF Spring Cloud Gateway route table.</role>
 
   <context>
-    <project>The Boat App — Business Service domain + BFF proxy layer</project>
+    <project>The Boat App — Business Service domain + Spring Cloud Gateway BFF</project>
     <existing-code>Domain models, ports, persistence adapter from Step 02A.2. Read them.</existing-code>
     <hexagonal-rule>
       Business Service: domain.service implements domain.port.in interfaces. Pure Java. Zero Spring.
       infrastructure.service.BoatApplicationService is the Spring @Transactional bridge.
       adapter.in.web.BoatController is the HTTP adapter that depends on infrastructure.service only.
 
-      BFF: adapter.in.web.BoatController depends on infrastructure.service.BoatBffService.
-      infrastructure.service.BoatBffService depends on adapter.out.client.BusinessServiceClient.
-      No @Transactional in BFF. No JPA in BFF.
+      BFF (Spring Cloud Gateway Server Web MVC 5.0.1): proxying to the
+      Business Service is DECLARATIVE in `bff/src/main/resources/application-routes.yml`,
+      not Java code. There is no BoatController in the BFF, no BoatBffService,
+      no outbound BusinessServiceClient — those would be a regression. The
+      BFF still has Java for: BFF-LOCAL endpoints (AuthController for /api/me,
+      JwksController, GlobalExceptionHandler), OAuth2 wiring (BffConfig +
+      SecurityConfig), and the SCG response filter
+      (ScgUpstreamFailureFilter). No @Transactional in BFF. No JPA in BFF.
     </hexagonal-rule>
     <logging-rule>
       EVERY class that catches or handles exceptions MUST log them. Rules:
@@ -362,234 +367,232 @@
   </instructions-business-service>
 
   <!-- ═══════════════════════════════════════════════════════════════════════ -->
-  <!-- PART B: BFF                                                             -->
+  <!-- PART B: BFF (Spring Cloud Gateway Server Web MVC)                       -->
   <!-- ═══════════════════════════════════════════════════════════════════════ -->
 
   <instructions-bff>
     <step order="7">
-      BusinessServiceClient is GENERATED — do NOT create it by hand.
+      The BFF proxies via Spring Cloud Gateway Server Web MVC (5.0.1, Spring
+      Cloud 2025.1.1). Routes are DECLARATIVE — there is no
+      BusinessServiceClient, no `@HttpExchange` interface, no
+      `BoatBffService`, no `BoatController` in the BFF. Anyone re-introducing
+      those is reverting the SCG migration.
 
-      The `openapi-generator-maven-plugin` in bff/pom.xml (02a1 step 2) produces:
-      - `ch.owt.boatapp.bff.adapter.out.client.generated.BusinessServiceClient`
-          — a Spring @HttpExchange declarative interface with one method per
-            BusinessService-tagged operation in contracts/openapi.yaml.
-      - `ch.owt.boatapp.bff.adapter.in.web.dto.generated.*`
-          — the same set of DTOs listed in step 3 above.
+      Required pom dependency (already in bff/pom.xml from 02a1 — verify):
+        - `org.springframework.cloud:spring-cloud-starter-gateway-server-webmvc`
+          (BOM-managed via `spring-cloud-dependencies:2025.1.1`).
+        - `spring-boot-starter-validation` is REMOVED — Bean Validation now
+          lives only on the Business Service. The BFF is a transparent
+          gateway and does not re-validate request bodies.
 
-      The plugin is configured with `library=spring-http-interface` and
-      `apiNameSuffix=Client`, so the generated interface is literally named
-      `BusinessServiceClient` (derived from the `BusinessService` tag). The generated
-      signatures carry all Spring annotations (@GetExchange / @PostExchange /
-      @PathVariable / @RequestParam / @RequestHeader / @RequestBody) automatically.
-
-      `useResponseEntity=true` ensures headers-returning operations (GET by id, POST,
-      PUT) return `ResponseEntity&lt;T&gt;` so the BFF controller can forward ETag and
-      Location transparently.
-
-      The base URL and Bearer token injection are configured in BffConfig (step 02A.4),
-      which calls `HttpServiceProxyFactory.createClient(BusinessServiceClient.class)`
-      against the generated interface.
-
-      HTTP error handling: when Business Service returns 4xx/5xx, RestClient throws
-      RestClientResponseException → caught by BFF GlobalExceptionHandler.
+      The OpenAPI codegen on the BFF side is narrowed to the BFF-LOCAL DTOs
+      only (see step 12 below): `UserInfoResponse`, `Severity`, and
+      `ValidationMessageResponse`. The `BusinessService` tag is no longer
+      generated — there is no outbound HTTP-Interface client to feed.
     </step>
 
     <step order="8">
-      Implement BoatBffService for BFF (infrastructure.service.BoatBffService in bff/):
-      - @Service (NOT @Transactional — BFF has no DB transaction)
-      - private static final Logger log = LoggerFactory.getLogger(BoatBffService.class) (MANDATORY)
-      - Injects BusinessServiceClient (the GENERATED @HttpExchange interface)
-      - Thin orchestrator: delegates all calls to BusinessServiceClient, logs operations.
+      Declare the SCG route table in `bff/src/main/resources/application-routes.yml`:
 
-      Types come from the generated packages:
-        ch.owt.boatapp.bff.adapter.in.web.dto.generated.*   (BoatCreateRequest, BoatUpdateRequest,
-                                                             BoatResponse, PageBoatResponse, ...)
-        ch.owt.boatapp.bff.adapter.out.client.generated.BusinessServiceClient
-
-      Because `useResponseEntity=true` is set in codegen, EVERY client method returns
-      `ResponseEntity&lt;T&gt;` (even the list endpoint). The service returns the
-      ResponseEntity directly so the controller can forward headers transparently.
-
-        ```java
-        public ResponseEntity&lt;PageBoatResponse&gt; listBoats(int page, int size, String sort, String search) {
-            return businessServiceClient.listBoats(page, size, sort, search);
-        }
-
-        public ResponseEntity&lt;BoatResponse&gt; getBoat(UUID id) {
-            return businessServiceClient.getBoat(id);   // ETag header preserved
-        }
-
-        public ResponseEntity&lt;BoatResponse&gt; createBoat(BoatCreateRequest request) {
-            return businessServiceClient.createBoat(request);   // Location + ETag preserved
-        }
-
-        public ResponseEntity&lt;BoatResponse&gt; updateBoat(UUID id, Long ifMatch, BoatUpdateRequest request) {
-            return businessServiceClient.updateBoat(id, ifMatch, request);   // ETag preserved
-        }
-
-        public ResponseEntity&lt;Void&gt; deleteBoat(UUID id) {
-            return businessServiceClient.deleteBoat(id);
-        }
+        ```yaml
+        spring:
+          cloud:
+            gateway:
+              server:
+                webmvc:
+                  routes:
+                    - id: boats-api
+                      uri: ${business-service.url}
+                      predicates:
+                        - Path=/api/v1/boats/{*subpath}
+                      filters:
+                        - TokenRelay=keycloak
         ```
+
+      Notes:
+      - Path predicate uses the named-capture wildcard `{*subpath}` because
+        Spring's PathPattern only formally guarantees zero-segment matching
+        for that form. It cleanly covers `/api/v1/boats`, `/api/v1/boats/`,
+        and `/api/v1/boats/{id}` from one declaration.
+      - The `TokenRelay=keycloak` filter resolves the
+        `OAuth2AuthorizedClientManager` bean (defined in BffConfig — see 02a4)
+        per request via `getApplicationContext(request).getBean(...)` and
+        attaches the user's access token as a `Bearer` header. Refresh is
+        transparent — no extra wiring beyond the manager bean is needed.
+      - `uri: ${business-service.url}` resolves from the active profile's
+        property file.
+
+      Wire the import from each non-dev profile YAML so dev never registers
+      TokenRelay-bearing routes (BffConfig is `@Profile("!dev")` and would
+      have no manager bean):
+
+        ```yaml
+        # application-local-intg.yml / application-staging.yml / application-prod.yml
+        spring:
+          config:
+            import: classpath:application-routes.yml
+        ```
+
+      Do NOT put the import in `application.yml` — the dev profile would
+      pick it up and TokenRelay would fail at request time.
     </step>
 
     <step order="9">
-      Implement BoatController for BFF (adapter.in.web.BoatController in bff/):
-      - @RestController @RequestMapping("/api/v1/boats")
-      - @Validated on the class — required for @PathVariable / @RequestParam
-        constraints to fire (same reason as the Business Service controller).
-      - Hand-written, one method per BusinessServiceClient operation. Do NOT `implement`
-        BusinessServiceClient on the controller: that interface carries `@HttpExchange`
-        annotations (outbound), whereas the controller needs `@RequestMapping`-family
-        annotations (inbound). Use the same method signatures but fresh Spring MVC
-        annotations; the controller delegates to BoatBffService and returns the
-        `ResponseEntity&lt;T&gt;` it receives unchanged — ETag / Location / status code
-        are forwarded automatically.
+      Pin the BFF's outbound RestClient to HTTP/1.1.
+      Spring Cloud Gateway MVC's `RestClientProxyExchange` builds its
+      RestClient from Spring Boot's autoconfigured builder. The default
+      `JdkClientHttpRequestFactory` on Java 25 negotiates HTTP/2 cleartext
+      (h2c) on plaintext upstreams. WireMock 3.x and many Container Apps
+      ingresses are HTTP/1.1 only and surface this as
+      `Received RST_STREAM: Stream cancelled`. Provide a
+      `ClientHttpRequestFactory` bean that SCG's `gatewayRestClientCustomizer`
+      consumes via its `ObjectProvider`:
 
-      - THE BFF IS A REST ADAPTER AT THE TRUST BOUNDARY TO THE BROWSER. It MUST
-        enforce syntactic validation on inbound DTOs — do not merely proxy.
-        Every @RequestBody parameter MUST be annotated `@Valid`, and the
-        generated DTO classes carry `@NotBlank` / `@Size` / `@NotNull` /
-        `@Pattern` because bff/pom.xml's openapi-generator now runs with
-        `useBeanValidation=true` (02a1 step 2). Example:
-          ```java
-          @PostMapping
-          public ResponseEntity&lt;BoatResponse&gt; createBoat(@Valid @RequestBody BoatCreateRequest request) {
-              return boatBffService.createBoat(request);
-          }
-          ```
-        Rationale: failing fast at the BFF means invalid payloads never hit
-        the upstream Business Service, cutting upstream load and producing
-        clean 400s to the browser with the same RFC 9457 envelope the browser
-        sees for upstream errors.
+        ```java
+        // bff/.../infrastructure/web/Http11RestClientCustomizer.java
+        @Configuration
+        public class Http11RestClientCustomizer {
+            @Bean
+            public ClientHttpRequestFactory gatewayHttp11ClientHttpRequestFactory() {
+                HttpClient http11 = HttpClient.newBuilder()
+                        .version(HttpClient.Version.HTTP_1_1)
+                        .build();
+                return new JdkClientHttpRequestFactory(http11);
+            }
+        }
+        ```
 
-        Optional hardening (not required): configure a SECOND openapi-generator execution
-        in bff/pom.xml with `interfaceOnly=true` (spring generator, no spring-http-interface
-        library) to produce an inbound `BusinessServiceApi` server interface the BFF
-        controller can `implement`, locking the BFF's inbound contract to the spec too.
-        Start without it; add it only if BFF controller signatures drift.
-
-      - Depends on BoatBffService — NOT on BusinessServiceClient directly (enforced by ArchUnit).
-        The ArchUnit rule `bff_controllers_depend_on_service_only` (02a5) permits
-        `..bff.adapter.in.web..` (which transitively includes `dto.generated`) but NOT
-        `..adapter.out.client.generated..`. Do not import `BusinessServiceClient` in the
-        controller — only in BoatBffService.
-      - NEVER @Transactional
-      - Forwards headers (Location, ETag, If-Match) to/from Business Service transparently
-        by returning the `ResponseEntity&lt;T&gt;` from BoatBffService as-is.
-
-      Endpoints (same routes as Business Service):
-      - GET /api/v1/boats → ResponseEntity&lt;PageBoatResponse&gt; 200  (page/size validated → 400)
-      - GET /api/v1/boats/{id} → ResponseEntity&lt;BoatResponse&gt; 200 + ETag  (forwarded from Business Service)
-      - POST /api/v1/boats → ResponseEntity&lt;BoatResponse&gt; 201 + Location + ETag  (@Valid body → 400 on bad input; else forwarded)
-      - PUT /api/v1/boats/{id} → ResponseEntity&lt;BoatResponse&gt; 200 + ETag  (If-Match from browser → client; @Valid body)
-      - DELETE /api/v1/boats/{id} → ResponseEntity&lt;Void&gt; 204
+      A naive `RestClientCustomizer` does NOT work here: SCG's own
+      `gatewayRestClientCustomizer` runs after yours and overrides the
+      request factory unless an explicit `ClientHttpRequestFactory` bean is
+      provided.
     </step>
 
     <step order="10">
-      Implement AuthController for BFF (adapter.in.web.AuthController in bff/):
+      Implement AuthController for the BFF
+      (`adapter.in.web.AuthController`) — the only BFF-LOCAL boats-domain
+      adjacent endpoint that survives the SCG migration:
       - GET /api/me → returns `ch.owt.boatapp.bff.adapter.in.web.dto.generated.UserInfoResponse`
-        (generated from the `User` tag in contracts/openapi.yaml — id, username, email, firstName, lastName)
-      - Reads from the current OidcUser in SecurityContext (available after oauth2Login)
-      - In dev profile (fallback): returns hardcoded dev user info
+        (generated from the `User` tag in contracts/openapi.yaml — id, username, email, firstName, lastName).
+      - Reads from the current OidcUser in SecurityContext (available after oauth2Login).
+      - When the principal is anonymous or non-OIDC (dev fallback or test
+        with `@WithMockUser`), returns the dummy dev user info.
 
-      Note: UserInfoResponse is generated from the OpenAPI spec on the BFF side only.
-      The Business Service's codegen filters out the User tag (see 02a1 step 6's
-      globalProperties.apis=BusinessService), so Business Service never sees UserInfoResponse.
+      `/api/me` is BFF-local (NOT proxied via SCG) because the user profile
+      lives only in the BFF's session. SCG never sees it. The endpoint is
+      under `/api/**` so the security filter chain still applies — anonymous
+      callers receive 401 from `RestAuthenticationEntryPoint`, NOT the dev
+      fallback. The dev fallback only fires for an authenticated principal
+      that is not an `OidcUser`.
+
+      Note: `UserInfoResponse` is generated from the OpenAPI spec on the BFF
+      side only. The Business Service's codegen filters out the User tag.
     </step>
 
     <step order="11">
-      Implement GlobalExceptionHandler for BFF (@RestControllerAdvice in bff/adapter.in.web/GlobalExceptionHandler).
-      MANDATORY: private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class) + log all handlers.
+      Implement GlobalExceptionHandler for BFF
+      (`@RestControllerAdvice` in `bff/adapter/in/web/GlobalExceptionHandler`).
+      MANDATORY: `private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class)` + every handler logs.
 
-      The BFF handles TWO classes of errors:
+      Since the SCG migration the BFF only handles errors raised by its own
+      locally-served endpoints (`/api/me`, `/.well-known/jwks.json`,
+      `/api/logout`, `/actuator/**`). Upstream errors from the Business
+      Service no longer flow through this advice — Spring Cloud Gateway
+      forwards the BS's RFC 9457 response back to the client unchanged.
+      Upstream 5xx WITHOUT an RFC 9457 body is rewritten to a 502
+      `upstream-failure` envelope by a dedicated SCG response filter (see
+      step 11b), NOT by this advice.
 
-      CLASS 1 — Errors that ORIGINATE AT THE BFF (before the upstream hop):
-      The BFF runs Jakarta Bean Validation on inbound requests (step 9). When
-      the request is syntactically invalid, the BFF MUST produce its own RFC 9457
-      ProblemDetail — it never reaches the Business Service.
-
-      Replicate the Business Service's supporting artifacts on the BFF side so
-      the wire shape is byte-identical to what the Business Service would emit:
-        - bff/.../adapter/in/web/ProblemTypes.java             (same URI constants as 02a3 step 5 — copy verbatim)
+      Replicate the Business Service's supporting artifacts on the BFF side
+      so any locally-raised error envelope is byte-identical to the BS's:
+        - bff/.../adapter/in/web/ProblemTypes.java             (same URI constants — copy verbatim, plus add `UPSTREAM_FAILURE`)
         - bff/.../adapter/in/web/JakartaCodeTranslator.java    (same translation table — copy verbatim)
-        - bff/src/main/resources/messages.properties           (same keys — copy verbatim)
-      These three files are duplicated intentionally: each service is a
-      standalone Spring Boot app with its own classpath, and they stay in
-      sync via the prompt and the check-script (02a3 run.sh greps for
-      ProblemTypes + messages.properties in BOTH services).
+        - bff/src/main/resources/messages.properties           (same keys — copy verbatim, plus `upstream.failure`)
 
-      Handlers for CLASS 1 (same bodies as the Business Service equivalents — see step 5a):
-        1) MethodArgumentNotValidException → 400 (type=VALIDATION, messages[])
-        2) ConstraintViolationException    → 400 (type=VALIDATION, messages[])
+      Reachability of the validation handlers is narrow now:
+      `spring-boot-starter-validation` was removed from the BFF along with
+      the SPA-edge `@Valid` contracts, so `MethodArgumentNotValidException`
+      and `ConstraintViolationException` are not raised by anything on the
+      current BFF surface. Keep them as a defense-in-depth shell so the
+      envelope shape stays consistent if a future BFF-local endpoint
+      re-introduces Bean Validation. Today only
+      `HttpMessageNotReadableException`, `MissingRequestHeaderException`,
+      `AuthenticationException`, `NoResourceFoundException`, and the
+      `Exception` fallback are reachable.
+
+      Handlers (each MUST log + emit `application/problem+json` + `Content-Language`):
+        1) MethodArgumentNotValidException → 400 (type=VALIDATION, messages[])  [shell]
+        2) ConstraintViolationException    → 400 (type=VALIDATION, messages[])  [shell]
         3) HttpMessageNotReadableException → 400 (type=VALIDATION, messages=[{ERROR, "request.body.malformed"}])
+        4) MissingRequestHeaderException   → 428 (type=PRECONDITION_REQUIRED)
+        5) AuthenticationException         → 401 (type=AUTH_REQUIRED)
+        6) NoResourceFoundException        → 404 (type=NOT_FOUND)
+        7) Exception fallback              → 500 (type=INTERNAL, never leak ex.getMessage())
 
-      CLASS 2 — UPSTREAM errors forwarded from the Business Service:
-      The upstream Business Service already returns RFC 9457 ProblemDetail
-      (single shape, populated type/instance/messages). The BFF forwards the
-      body and headers verbatim, preserving the status code and
-      `Content-Language`.
+      Do NOT add a `RestClientResponseException` handler — there is no
+      outbound `RestClient` left in the BFF (proxying is in SCG config).
+      Such a handler would be dead code and a confusing breadcrumb.
+    </step>
 
-      Handler for CLASS 2:
-        4) RestClientResponseException:
-           - If ex.getStatusCode() is 4xx:
-               * Copy the upstream body (already RFC 9457 JSON) into the outgoing
-                 ResponseEntity. Preserve Content-Type=application/problem+json
-                 and Content-Language. Preserve status.
-               * log.warn("Upstream {} at {} {} — forwarding", status, method, path).
-           - If ex.getStatusCode() is 5xx:
-               * Build a fresh ProblemDetail(502) with type=UPSTREAM_FAILURE
-                 (add `UPSTREAM_FAILURE = URI.create("https://boatapp.owt.ch/problems/upstream-failure")`
-                 to the BFF's ProblemTypes), title="Upstream service failed",
-                 instance=requestURI. Do NOT leak the upstream body — the
-                 Business Service is an internal component.
-               * log.error("Upstream 5xx at {} {}", method, path, ex).
+    <step order="11b">
+      Implement `ScgUpstreamFailureFilter` for upstream 5xx without an RFC
+      9457 body (e.g. connection reset, plain-text 500). Servlet
+      `OncePerRequestFilter` scoped to the SCG-routed prefix `/api/v1/`,
+      gated on `@Profile("!dev")`. Wraps the response with
+      `ContentCachingResponseWrapper`, lets the SCG handler write into it,
+      then inspects the committed status:
 
-      Handler for UNEXPECTED errors:
-        5) Exception (fallback) → 500:
-           - type=INTERNAL (same URI registry as business-service),
-             title="Internal server error", instance=requestURI.
-           - log.error(..., ex).
+      - If the status is &lt; 500 → copy the buffered body to the original
+        response untouched.
+      - If the status is &ge; 500 AND the content type is already
+        `application/problem+json` → copy the buffered body untouched (the
+        BS may legitimately emit a 5xx envelope from its own registry;
+        rewriting it would lose fidelity).
+      - Else (5xx without RFC 9457 body) → reset the response, write a 502
+        `application/problem+json` envelope: type=UPSTREAM_FAILURE
+        (`https://boatapp.owt.ch/problems/upstream-failure`), title="Upstream service failed",
+        detail from `messages.properties` key `upstream.failure`,
+        instance=request URI. NEVER leak the upstream body — the BS is an
+        internal component.
 
-      Every response in every handler MUST carry `Content-Type: application/problem+json`
-      AND `Content-Language` (default `en` if no Accept-Language).
-
-      IMPORTANT: Remove any prior code that special-cased `ValidationErrorResponse`
-      (the schema is deleted — see 01-openapi-contract.md and step 12 below).
-      The upstream 422 body is just another ProblemDetail; pass-through handles it.
+      MANDATORY: SLF4J Logger field; `log.warn` on every rewrite with
+      `(originalStatus, method, requestURI)`.
     </step>
 
     <step order="12">
-      BFF DTOs are GENERATED — do NOT create them by hand.
+      BFF DTOs are GENERATED — do NOT create them by hand. The BFF
+      `openapi-generator-maven-plugin` execution in bff/pom.xml is configured
+      with `generateApis=false` (no outbound interface generation) and a
+      `models` allow-list that emits ONLY:
+      - `UserInfoResponse`              ← consumed by AuthController
+      - `Severity`                      ← consumed by GlobalExceptionHandler
+      - `ValidationMessageResponse`     ← consumed by GlobalExceptionHandler
 
-      The BFF pom's openapi-generator-maven-plugin (02a1 step 2, with
-      `useBeanValidation=true`) produces all DTOs in
-      `ch.owt.boatapp.bff.adapter.in.web.dto.generated.*`:
-      - BoatResponse, BoatCreateRequest, BoatUpdateRequest, PageBoatResponse
-        (request DTOs carry `@NotBlank` / `@Size` / `@NotNull` / `@Pattern` —
-        the controller's `@Valid` triggers them → HTTP 400)
-      - ProblemDetail   ← RFC 9457 shape, optional `messages[]` extension
-      - ValidationMessageResponse
-      - UserInfoResponse   ← generated on the BFF only (User tag); consumed by AuthController
+      The generated package is `ch.owt.boatapp.bff.adapter.in.web.dto.generated`.
+      Do NOT add any additional model to the allow-list unless a new
+      BFF-LOCAL endpoint genuinely needs it — `BoatResponse`,
+      `BoatCreateRequest`, `BoatUpdateRequest`, `PageBoatResponse`, etc.
+      are NOT BFF-side concerns under the SCG model.
 
-      NOTE: `ValidationErrorResponse` is NO LONGER generated (removed from
-      contracts/openapi.yaml per 01-openapi-contract.md). Multi-error responses
-      use `ProblemDetail.messages`.
+      The `ch.owt.boatapp.bff.adapter.out.client.generated` package MUST
+      remain absent — `BffArchitectureTest` enforces this. Re-introducing
+      it is a regression.
 
-      Because both services generate from the same contracts/openapi.yaml, the wire
-      format is guaranteed to be identical on both sides. Controllers and services
-      import these types from their respective `*.dto.generated` package.
-
-      IMPORTANT: Do NOT edit files under dto.generated/ — they are overwritten on every
-      build. Change contracts/openapi.yaml and re-run `./mvnw generate-sources`.
+      IMPORTANT: Do NOT edit files under dto.generated/ — they are
+      overwritten on every build. Change contracts/openapi.yaml and re-run
+      `./mvnw generate-sources`.
     </step>
   </instructions-bff>
 
   <verification>
     Run the phase's verification script — it compiles both services,
-    confirms controllers implement the generated API interfaces, the BFF
-    does not import BusinessServiceClient directly, ETag/409/audit logic
-    is present, and `generate-sources` is clean (no spec drift):
+    confirms business-service controller implements the generated
+    BusinessServiceApi interface, the BFF declares
+    `spring-cloud-starter-gateway-server-webmvc` and the TokenRelay route
+    in `application-routes.yml`, the BFF's `adapter.out.client` package and
+    `*BffService` classes are absent (regression guards), ETag/409/audit
+    logic is present in business-service, and `generate-sources` is clean
+    (no spec drift):
     ```bash
     ai-scripts/checks/02a3/run.sh .
     ```
@@ -600,33 +603,35 @@
   <commit>
     ```bash
     git add -A
-    git commit -m "feat: Business Service domain services + BFF proxy layer (two-layer validation, RFC 9457)
+    git commit -m "feat: Business Service domain services + BFF Spring Cloud Gateway routes (RFC 9457 envelope)
 
     Business Service:
     - DTOs + BusinessServiceApi interface generated from contracts/openapi.yaml
       (openapi-generator-maven-plugin, useBeanValidation=true, useResponseEntity=true)
     - BoatDomainService: pure Java, SyntacticValidator + SemanticValidator as
-      defense-in-depth; primary syntactic gate is now Jakarta Bean Validation at the adapter
+      defense-in-depth; primary syntactic gate is Jakarta Bean Validation at the adapter
     - BoatApplicationService: @Service @Transactional bridge, throws ValidationFailureException
     - BoatController implements BusinessServiceApi with @Valid @RequestBody and @Validated;
       DTO → domain command mapper (BoatCommandMapper) wraps raw UUIDs in BoatId/UserId
-    - GlobalExceptionHandler: RFC 9457 ProblemDetail (Spring 3 built-in) for every error;
+    - GlobalExceptionHandler: RFC 9457 ProblemDetail for every error;
       populated type/instance/Content-Language; handlers for MethodArgumentNotValidException,
-      ConstraintViolationException, HttpMessageNotReadableException → 400; ValidationFailureException → 422;
-      BoatNotFoundException → 404; ConcurrentModificationException → 409;
-      MissingRequestHeaderException → 428; fallback → 500
+      ConstraintViolationException, HttpMessageNotReadableException → 400;
+      ValidationFailureException → 422; BoatNotFoundException → 404;
+      ConcurrentModificationException → 409; MissingRequestHeaderException → 428; fallback → 500
     - ProblemTypes constants + JakartaCodeTranslator + messages.properties (i18n-ready)
 
-    BFF:
-    - DTOs + BusinessServiceClient @HttpExchange interface generated from contracts/openapi.yaml
-      (openapi-generator-maven-plugin, library=spring-http-interface, apiNameSuffix=Client,
-      useBeanValidation=true — BFF is itself a trust boundary)
-    - BoatBffService: thin orchestrator, NO @Transactional, delegates to generated BusinessServiceClient
-    - BoatController: @Valid on inbound DTOs (syntactic → 400 locally);
-      proxies the rest to BoatBffService, forwards ResponseEntity headers (Location/ETag/If-Match) transparently
+    BFF (Spring Cloud Gateway Server Web MVC 5.0.1):
+    - application-routes.yml declares the boats-api route
+      (Path=/api/v1/boats/{*subpath}, TokenRelay=keycloak, uri=\${business-service.url}),
+      imported from each non-dev profile YAML
+    - Http11RestClientCustomizer pins SCG's outbound RestClient to HTTP/1.1
+      via a ClientHttpRequestFactory bean (gatewayRestClientCustomizer picks it up)
     - AuthController: GET /api/me from OidcUser session, returns generated UserInfoResponse
-    - GlobalExceptionHandler: same RFC 9457 envelope as Business Service for locally-raised errors;
-      pass-through for upstream 4xx (body already compliant); 5xx wrapped as 502 upstream-failure"
+    - GlobalExceptionHandler: RFC 9457 envelope for BFF-local handlers
+      (validation handlers kept as defense-in-depth shell)
+    - ScgUpstreamFailureFilter: rewrites upstream 5xx without RFC 9457 body
+      to a 502 upstream-failure envelope; 4xx and RFC-9457-bearing 5xx are pass-through
+    - No BoatController, no BoatBffService, no BusinessServiceClient — proxying is YAML"
     ```
   </commit>
 </task>

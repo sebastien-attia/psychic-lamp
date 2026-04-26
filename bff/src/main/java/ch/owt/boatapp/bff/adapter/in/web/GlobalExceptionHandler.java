@@ -2,8 +2,6 @@ package ch.owt.boatapp.bff.adapter.in.web;
 
 import ch.owt.boatapp.bff.adapter.in.web.dto.generated.Severity;
 import ch.owt.boatapp.bff.adapter.in.web.dto.generated.ValidationMessageResponse;
-import tools.jackson.core.JacksonException;
-import tools.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
@@ -25,7 +23,6 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-import org.springframework.web.client.RestClientResponseException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
 import java.net.URI;
@@ -35,20 +32,28 @@ import java.util.Locale;
 /**
  * Centralized exception → RFC 9457 {@link ProblemDetail} mapper for the BFF.
  *
- * <p>The BFF handles two distinct classes of errors:
+ * <p>Since the SCG migration the BFF only handles errors raised by its own
+ * locally-served endpoints ({@code /api/me}, {@code /.well-known/jwks.json},
+ * {@code /api/logout}, {@code /actuator/**}). Upstream errors from the
+ * Business Service no longer pass through this advice — Spring Cloud Gateway
+ * forwards the Business Service's RFC 9457 response back to the client
+ * unchanged (the Business Service already emits the registry-defined
+ * {@code type} URIs, populated {@code messages}, etc.). Upstream 5xx without
+ * an RFC 9457 body is rewritten to a 502 {@code upstream-failure} envelope
+ * by a dedicated SCG response filter (see {@code ScgUpstreamFailureFilter}),
+ * NOT by this advice.
  *
- * <ul>
- *   <li><strong>Class 1 — locally raised.</strong> Bean Validation failures
- *       on inbound bodies / parameters and malformed JSON. The BFF emits its
- *       own RFC 9457 envelope identical in shape to what the Business
- *       Service would emit: same {@code type} URIs, same
- *       {@code messages[]} extension, same i18n source.</li>
- *   <li><strong>Class 2 — upstream.</strong> A {@link RestClientResponseException}
- *       from the Business Service hop. 4xx bodies are pass-through
- *       (already RFC 9457 compliant); 5xx is wrapped as 502
- *       {@code upstream-failure} without leaking the upstream body, which
- *       is internal.</li>
- * </ul>
+ * <p>Reachability of the validation handlers is narrow now:
+ * {@code spring-boot-starter-validation} was removed from the BFF along with
+ * the SPA-edge {@code @Valid} contracts, so {@link MethodArgumentNotValidException}
+ * and {@link ConstraintViolationException} are not raised by anything on the
+ * current BFF surface. They are kept for shape-symmetry with the Business
+ * Service and would only fire if a future BFF-local endpoint re-introduces
+ * Bean Validation. Today, only {@link HttpMessageNotReadableException},
+ * {@link MissingRequestHeaderException}, {@link AuthenticationException},
+ * {@link NoResourceFoundException} and the {@link Exception} fallback are
+ * actually reachable from BFF-local endpoints ({@code /api/me},
+ * {@code /api/logout}).
  *
  * <p>Every response carries {@code Content-Type: application/problem+json}
  * and {@code Content-Language}. The required SLF4J {@link Logger} field
@@ -61,20 +66,15 @@ public class GlobalExceptionHandler {
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     private final MessageSource messageSource;
-    private final ObjectMapper objectMapper;
 
     /**
      * @param messageSource Spring's i18n source — resolves application codes
      *                      (e.g. {@code field.required}) into the localized
      *                      {@code message} field of {@link ValidationMessageResponse}
      *                      and the {@code detail} field of the problem
-     * @param objectMapper  Jackson 3 mapper used to parse upstream RFC 9457
-     *                      bodies during 4xx pass-through so the
-     *                      {@code messages[]} extension survives the BFF hop
      */
-    public GlobalExceptionHandler(MessageSource messageSource, ObjectMapper objectMapper) {
+    public GlobalExceptionHandler(MessageSource messageSource) {
         this.messageSource = messageSource;
-        this.objectMapper = objectMapper;
     }
 
     // ── Class 1: locally raised — Bean Validation on the body ───────────────
@@ -171,44 +171,14 @@ public class GlobalExceptionHandler {
         return responseFor(problem, locale);
     }
 
-    // ── Class 2: upstream — pass-through 4xx, wrap 5xx ──────────────────────
+    // ── 401 from a downstream-call AuthenticationException ──────────────────
 
     /**
-     * @param ex  a non-2xx response from the upstream Business Service
-     * @param req the inbound BFF request — used for {@code instance} and logging
-     * @return on upstream 4xx: the upstream body verbatim with the original
-     *         status, {@code application/problem+json}, and an
-     *         {@code instance} pointing at the BFF request URI;
-     *         on upstream 5xx: a fresh 502 {@code upstream-failure} that
-     *         does not leak the upstream body
-     */
-    @ExceptionHandler(RestClientResponseException.class)
-    public ResponseEntity<ProblemDetail> handleUpstream(
-            RestClientResponseException ex, HttpServletRequest req) {
-        Locale locale = LocaleContextHolder.getLocale();
-        HttpStatusCode statusCode = ex.getStatusCode();
-        if (statusCode.is4xxClientError()) {
-            log.warn("Upstream {} at {} {} — forwarding",
-                    statusCode.value(), req.getMethod(), req.getRequestURI());
-            return passThrough(ex, statusCode, locale, req);
-        }
-        log.error("Upstream {} at {} {}",
-                statusCode.value(), req.getMethod(), req.getRequestURI(), ex);
-        ProblemDetail problem = baseProblem(HttpStatus.BAD_GATEWAY, ProblemTypes.UPSTREAM_FAILURE,
-                "Upstream service failed",
-                "The upstream service returned an unexpected error.", req);
-        return responseFor(problem, locale);
-    }
-
-    // ── 401 from BffConfig's Bearer-token interceptor ───────────────────────
-
-    /**
-     * Convert an {@link AuthenticationException} thrown by the BFF's
-     * Bearer-token interceptor (typically: refresh-token revoked or
-     * Keycloak unreachable, surfaced as
-     * {@code InsufficientAuthenticationException}) into the same RFC 9457
-     * 401 envelope that {@code RestAuthenticationEntryPoint} emits for
-     * missing-session calls.
+     * Convert an {@link AuthenticationException} raised inside a request
+     * handler (typically by a Spring Security collaborator that the SCG
+     * TokenRelay filter or its peers expose to the controller layer) into the
+     * same RFC 9457 401 envelope that {@code RestAuthenticationEntryPoint}
+     * emits for missing-session calls.
      *
      * <p>Without this handler the exception would fall through to
      * {@link #handleFallback(Exception, HttpServletRequest)} and surface as
@@ -259,7 +229,8 @@ public class GlobalExceptionHandler {
         String detail = messageSource.getMessage(code, new Object[0], code, locale);
         ProblemDetail problem = baseProblem(HttpStatus.NOT_FOUND, ProblemTypes.NOT_FOUND,
                 "Resource not found", detail, req);
-        log.debug("404 no static resource at {} {}", req.getMethod(), req.getRequestURI());
+        log.debug("404 no static resource at {} {} — {}",
+                req.getMethod(), req.getRequestURI(), ex.getMessage());
         return responseFor(problem, locale);
     }
 
@@ -303,74 +274,6 @@ public class GlobalExceptionHandler {
         // ones); it never throws, so the advice chain stays robust even if a future
         // handler sets an unusual status.
         return new ResponseEntity<>(problem, headers, HttpStatusCode.valueOf(problem.getStatus()));
-    }
-
-    /**
-     * Build a pass-through response for an upstream 4xx. The upstream body is
-     * already RFC 9457; we parse it so {@code messages[]} (populated by the
-     * upstream for 400 / 422) survives the BFF hop, then rewrite
-     * {@code instance} to the BFF request URI so the client sees the BFF
-     * endpoint rather than the internal upstream path.
-     *
-     * <p>If the upstream body cannot be parsed (empty, non-JSON or
-     * structurally unexpected) we fall back to a synthetic {@link ProblemDetail}
-     * so the client still gets a valid RFC 9457 envelope; the parse failure
-     * is logged.
-     */
-    private ResponseEntity<ProblemDetail> passThrough(RestClientResponseException ex,
-                                                      HttpStatusCode status, Locale locale,
-                                                      HttpServletRequest req) {
-        ProblemDetail problem = parseUpstreamBody(ex, status, req);
-        problem.setInstance(URI.create(req.getRequestURI()));
-        // RFC 9457 reserves the `about:` scheme for the placeholder type — if
-        // the upstream omitted `type` (and Jackson left it unset, or set it to
-        // the placeholder), substitute the registry URI for the status.
-        URI upstreamType = problem.getType();
-        if (upstreamType == null || "about".equals(upstreamType.getScheme())) {
-            problem.setType(typeForStatus(status));
-        }
-        return responseFor(problem, locale);
-    }
-
-    private ProblemDetail parseUpstreamBody(RestClientResponseException ex,
-                                            HttpStatusCode status, HttpServletRequest req) {
-        String body = ex.getResponseBodyAsString();
-        if (body != null && !body.isBlank()) {
-            try {
-                ProblemDetail parsed = objectMapper.readValue(body, ProblemDetail.class);
-                if (parsed != null) {
-                    return parsed;
-                }
-            } catch (JacksonException parseEx) {
-                log.warn("Upstream {} body unparseable at {} {} — falling back to synthetic envelope",
-                        status.value(), req.getMethod(), req.getRequestURI());
-            }
-        }
-        ProblemDetail synthetic = ProblemDetail.forStatus(status);
-        synthetic.setType(typeForStatus(status));
-        synthetic.setTitle(reasonPhrase(status));
-        synthetic.setDetail("Forwarded from upstream service.");
-        return synthetic;
-    }
-
-    private URI typeForStatus(HttpStatusCode status) {
-        HttpStatus resolved = HttpStatus.resolve(status.value());
-        if (resolved == null) {
-            return ProblemTypes.INTERNAL;
-        }
-        return switch (resolved) {
-            case BAD_REQUEST, UNPROCESSABLE_ENTITY -> ProblemTypes.VALIDATION;
-            case UNAUTHORIZED -> ProblemTypes.AUTH_REQUIRED;
-            case NOT_FOUND -> ProblemTypes.NOT_FOUND;
-            case CONFLICT -> ProblemTypes.CONCURRENCY_CONFLICT;
-            case PRECONDITION_REQUIRED -> ProblemTypes.PRECONDITION_REQUIRED;
-            default -> ProblemTypes.INTERNAL;
-        };
-    }
-
-    private static String reasonPhrase(HttpStatusCode status) {
-        HttpStatus resolved = HttpStatus.resolve(status.value());
-        return resolved != null ? resolved.getReasonPhrase() : "Upstream error";
     }
 
     private ValidationMessageResponse fieldErrorToWire(FieldError fe, Locale locale) {

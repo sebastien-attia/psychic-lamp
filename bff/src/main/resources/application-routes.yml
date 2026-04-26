@@ -1,0 +1,33 @@
+# Spring Cloud Gateway Server Web MVC route table — single source of truth for
+# what the BFF proxies to the upstream Business Service. Imported by each
+# non-dev profile YAML (local-intg / staging / prod) via `spring.config.import`.
+# The dev profile does not import it because `BffConfig` is `@Profile("!dev")`
+# and the TokenRelay filter would have no `OAuth2AuthorizedClientManager`
+# bean to resolve.
+#
+# The TokenRelay filter pulls the current user's access token from the
+# `OAuth2AuthorizedClientManager` bean defined in BffConfig and attaches it as
+# the `Authorization: Bearer ...` header on every outbound call. Token refresh
+# (transparent, via private_key_jwt) is handled by the same manager, so a
+# stale access token triggers a refresh round-trip to Keycloak before the
+# upstream call is made — no behaviour change vs. the deleted RestClient
+# interceptor. NOTE: TokenRelay calls `authorizedClientManager.authorize(...)`
+# per request, so the auth-code provider in the manager's chain is required,
+# not optional (see `BffConfig.authorizedClientManager`).
+#
+# Path predicate uses the named-capture wildcard `{*subpath}` because Spring's
+# PathPattern only formally guarantees zero-segment matching for that form
+# (per the PathPattern Javadoc). It cleanly covers `/api/v1/boats`,
+# `/api/v1/boats/`, and `/api/v1/boats/{id}` from a single declaration.
+spring:
+  cloud:
+    gateway:
+      server:
+        webmvc:
+          routes:
+            - id: boats-api
+              uri: ${business-service.url}
+              predicates:
+                - Path=/api/v1/boats/{*subpath}
+              filters:
+                - TokenRelay=keycloak

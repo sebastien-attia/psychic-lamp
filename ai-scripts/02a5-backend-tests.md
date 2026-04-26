@@ -27,7 +27,17 @@
       (SecurityMockMvcRequestPostProcessors.jwt()), NOT oidcLogin() — there is no session in Business Service.
       No Keycloak container needed for Business Service tests (jwt() bypasses token validation entirely).
 
-      BFF tests require Testcontainers Keycloak (real OAuth2 flow) + WireMock (mock Business Service).
+      BFF tests are layered:
+      - Most BFF tests use a Mockito @MockitoBean for `OAuth2AuthorizedClientManager`
+        and a JDK `com.sun.net.httpserver.HttpServer` (HTTP/1.1 only) as the
+        upstream Business Service stub, avoiding the JDK 25 + WireMock h2c
+        stream-cancel hazard.
+      - WireMock stays available via `BffIntegrationTestBase` for tests that
+        hit the BFF directly (CsrfIntegrationTest, SecurityBffIntegrationTest)
+        — these bypass SCG so the h2c hazard does not apply.
+      - One standalone `KeycloakOAuthFlowIntegrationTest` runs Testcontainers
+        Keycloak (real OAuth2 flow) to catch issuer / realm-import / JWT
+        signing regressions; the rest of the BFF suite stays fast with mocks.
     </key-difference-from-monolith>
   </context>
 
@@ -298,9 +308,12 @@
   <instructions-bff>
     <step order="4">
       Create ArchUnit tests for BFF
-      (bff/src/test/java/ch/owt/boatapp/bff/architecture/BffArchitectureTest.java):
+      (bff/src/test/java/ch/owt/boatapp/bff/architecture/BffArchitectureTest.java).
 
-      BFF has different architecture rules (no domain layer, no JPA):
+      The BFF's architecture rules (no domain layer, no JPA, no outbound
+      HTTP-Interface client — proxying lives in SCG config). The deleted
+      `adapter.out.client` package and `*BffService` classes MUST NOT come
+      back; the route YAML MUST be on the classpath:
 
       ```java
       @AnalyzeClasses(packages = "ch.owt.boatapp.bff", importOptions = ImportOption.DoNotIncludeTests.class)
@@ -313,54 +326,59 @@
               .should().dependOnClassesThat().resideInAPackage("jakarta.persistence..")
               .as("BFF must never import JPA — it has no database access of its own");
 
-          // Controller → Service → Client chain
-          @ArchTest
-          static final ArchRule bff_controllers_depend_on_service_only =
-              classes().that().resideInAPackage("..bff.adapter.in.web..")
-              .should().onlyDependOnClassesThat().resideInAnyPackage(
-                  "..bff.adapter.in.web..", "..bff.infrastructure.service..",
-                  "org.springframework..", "jakarta..", "java..", "org.slf4j.."
-              ).as("BFF controllers must depend on infrastructure.service only, not on adapter.out.client directly");
-
           // No @Transactional in BFF
           @ArchTest
           static final ArchRule no_transactional_in_bff =
               noClasses().that().resideInAPackage("ch.owt.boatapp.bff..")
               .should().beAnnotatedWith(org.springframework.transaction.annotation.Transactional.class)
-              .and(noMethods().that().areDeclaredInClassesThat().resideInAPackage("ch.owt.boatapp.bff..")
-                  .should().beAnnotatedWith(org.springframework.transaction.annotation.Transactional.class))
               .as("@Transactional is forbidden in BFF — BFF has no database transactions");
 
-          // BusinessServiceClient must be an interface
           @ArchTest
-          static final ArchRule business_service_client_must_be_interface =
-              classes().that().haveSimpleNameEndingWith("Client")
-                       .and().resideInAPackage("..bff.adapter.out.client..")
-              .should().beInterfaces()
-              .as("BusinessServiceClient must be a Spring HTTP Interface (interface, not class)");
+          static final ArchRule no_transactional_methods_in_bff =
+              noMethods().that().areDeclaredInClassesThat().resideInAPackage("ch.owt.boatapp.bff..")
+              .should().beAnnotatedWith(org.springframework.transaction.annotation.Transactional.class)
+              .as("@Transactional methods are forbidden in BFF");
 
-          // Logging enforcement (same as Business Service)
+          // The deleted outbound HTTP-Interface client must not come back —
+          // proxying lives in application-routes.yml under SCG, not Java.
+          @ArchTest
+          static final ArchRule no_outbound_client_package =
+              noClasses().that().resideInAPackage("ch.owt.boatapp.bff..")
+              .should().resideInAPackage("..bff.adapter.out.client..")
+              .as("BFF must not (re-)introduce an outbound HTTP client — proxying lives in SCG config");
+
+          // Forbid hand-rolled outbound HTTP via RestTemplate. KeycloakServerSideLogoutHandler
+          // legitimately uses RestClient for the back-channel logout call and is exempted by name.
+          @ArchTest
+          static final ArchRule no_resttemplate_in_bff =
+              noClasses().that().resideInAPackage("ch.owt.boatapp.bff..")
+                       .and().haveSimpleNameNotEndingWith("KeycloakServerSideLogoutHandler")
+              .should().dependOnClassesThat().haveFullyQualifiedName("org.springframework.web.client.RestTemplate")
+              .as("RestTemplate must not appear in the BFF — proxying to BS is owned by SCG config");
+
+          // Logging enforcement
           @ArchTest
           static final ArchRule controller_advice_must_have_logger =
-              classes()
-                  .that().areAnnotatedWith(ControllerAdvice.class)
-                  .should(haveAFieldOfType(org.slf4j.Logger.class))
-                  .because("@ControllerAdvice must declare a SLF4J Logger field");
+              classes().that().areAnnotatedWith(RestControllerAdvice.class)
+              .should(LoggerArchConditions.haveAFieldOfType(org.slf4j.Logger.class))
+              .because("@RestControllerAdvice must declare a private static final SLF4J Logger");
 
           @ArchTest
-          static final ArchRule exception_handlers_must_log =
-              methods()
-                  .that().areAnnotatedWith(ExceptionHandler.class)
-                  .should(callALoggerMethod())
-                  .because("Every @ExceptionHandler must call a Logger method");
+          static final ArchRule exception_handlers_must_call_logger =
+              methods().that().areAnnotatedWith(ExceptionHandler.class)
+              .should(LoggerArchConditions.callALoggerMethod())
+              .because("Every @ExceptionHandler must emit a log record");
 
-          // BFF service naming convention
+          // The SCG route table is the source of truth for all proxying;
+          // anchor a build-time check that the file is on the classpath.
           @ArchTest
-          static final ArchRule bff_services_suffixed =
-              classes().that().resideInAPackage("..bff.infrastructure.service..")
-                       .and().areAnnotatedWith(org.springframework.stereotype.Service.class)
-              .should().haveSimpleNameEndingWith("BffService")
-              .as("BFF application services must be suffixed BffService");
+          static final ArchRule scg_route_table_must_exist =
+              classes().should(routeYamlOnClasspath())
+              .because("application-routes.yml must be on the classpath — it is the SCG route table");
+
+          // routeYamlOnClasspath() is a small custom ArchCondition that opens
+          // the classloader's resources("application-routes.yml") and checks
+          // hasMoreElements(); fires once per analysis run.
       }
       ```
     </step>
@@ -369,84 +387,121 @@
       Create BFF integration tests
       (bff/src/test/java/ch/owt/boatapp/bff/integration/).
 
-      AbstractBffIntegrationTest (base):
-      - @SpringBootTest(webEnvironment = RANDOM_PORT) + @Testcontainers
-      - @ActiveProfiles("local-intg")
-      - @Container static KeycloakContainer (quay.io/keycloak/keycloak:26.6.1)
-        - Apply realm config from the canonical source: invoke adorsys/keycloak-config-cli
-          in a @BeforeAll hook (Docker run) against the running KeycloakContainer,
-          importing infra/keycloak/realm.yaml with IMPORT_VAR_SUBSTITUTION_ENABLED=true
-          (so the same source-of-truth YAML used by compose + Ansible is also used
-          in tests — no drift).
-        - Alternative (if preferred for test speed): ship a pre-materialised
-          realm-export.json under business-service/src/test/resources/ AND add a
-          test that regenerates it from realm.yaml via config-cli and diffs —
-          so drift is still caught on every build.
-      - @WireMockTest or @Container WireMockContainer — stubs Business Service responses
-      - DynamicPropertySource: override spring.security.oauth2.client.provider.keycloak.issuer-uri
-        with Keycloak container URL, and business-service.url with WireMock base URL
-      - @Container static PostgreSQLContainer — for Spring Session JDBC storage
+      BffIntegrationTestBase (base):
+      - @SpringBootTest(properties = "spring.config.import=classpath:application-routes.yml")
+        — required so the SCG routes load even though the test profile does
+        not import them by default.
+      - @AutoConfigureMockMvc + @Import(TestcontainersConfiguration.class)
+      - JVM-shared static WireMockServer (HTTP/1.1 only) for tests that
+        proxy through SCG to a stubbed upstream Business Service.
+      - @DynamicPropertySource binds `business-service.url` to the WireMock
+        port AND generates an ephemeral RSA signing key (so
+        `BffConfig.bffSigningJwk` can be created on context refresh — no
+        committed PEM material under src/test/resources/).
+      - @Container static PostgreSQLContainer wired via @ServiceConnection
+        for Spring Session JDBC storage.
 
-      BffBoatControllerTest extends AbstractBffIntegrationTest:
-      - GET /api/v1/boats: WireMock stubs Business Service → verify BFF forwards response correctly
-      - POST /api/v1/boats: WireMock stubs 201 → verify BFF returns 201 + Location + ETag
-      - GET /api/v1/boats/{id}: WireMock stubs 404 ProblemDetail (application/problem+json,
-        type=https://boatapp.owt.ch/problems/not-found) → verify BFF forwards body BYTE-IDENTICAL,
-        preserving Content-Type, Content-Language, type URI, instance, status.
-      - PUT /api/v1/boats/{id}: WireMock stubs 409 ProblemDetail → verify BFF returns 409 unchanged.
-      - PUT /api/v1/boats/{id}: WireMock stubs 422 ProblemDetail with populated messages[] →
-        verify BFF forwards body verbatim (type=VALIDATION_TYPE, status=422, messages preserved).
-      - GET /api/v1/boats: WireMock stubs 500 → verify BFF returns 502 with
-        type=https://boatapp.owt.ch/problems/upstream-failure and no leaked upstream body.
-      Tests are authenticated with a real Keycloak session (get session cookie via OidcLogin test helper).
+      Required BFF integration tests (REPLACES the deleted BoatController /
+      BoatBffService / RestClient-interceptor tests — those concepts no
+      longer exist):
 
-      BffValidationTest extends AbstractBffIntegrationTest (NEW — BFF enforces its own syntactic gate):
-      - POST /api/v1/boats with `{"name":""}`:
-          * expect 400 with RFC 9457 envelope — Content-Type application/problem+json,
-            Content-Language header present, type=VALIDATION_TYPE, messages[0].code=="field.required".
-          * assert WireMock received ZERO requests (the BFF's @Valid rejected the payload
-            BEFORE forwarding). This is the critical guarantee: the BFF is a trust
-            boundary, not a pass-through.
-      - POST /api/v1/boats with malformed JSON → 400, messages[0].code=="request.body.malformed",
-        WireMock received zero requests.
-      - GET /api/v1/boats?page=-1 → 400, code `field.range.invalid`, WireMock received zero requests.
+      ScgRouteRegistrationTest extends BffIntegrationTestBase
+        Static-config regression. Inject `GatewayMvcProperties` and assert
+        that route `boats-api` exists with predicate
+        `Path=/api/v1/boats/{*subpath}`, filter chain contains
+        `TokenRelay` configured with `keycloak`, URI is set. Catches YAML
+        typos before any traffic is served.
 
-      TokenForwardingTest extends AbstractBffIntegrationTest:
-      - Log in with demo/demo123 via real Keycloak, get session cookie
-      - Perform GET /api/v1/boats (BFF proxies to WireMock)
-      - Verify WireMock received request with Authorization: Bearer header
-      - Verify the token is a valid JWT with sub=keycloak-user-id
+      TokenRelayIntegrationTest extends BffIntegrationTestBase
+        Replace the live `OAuth2AuthorizedClientManager` with a Mockito
+        @MockitoBean stub that returns a pre-built OAuth2AuthorizedClient
+        carrying a synthetic JWT. Drive an authenticated request through
+        the SCG route and assert an embedded HTTP/1.1 server (JDK
+        com.sun.net.httpserver.HttpServer — NOT WireMock for this test;
+        see note below) received exactly one upstream call with
+        `Authorization: Bearer <synthetic-jwt>`. Negative path: anonymous
+        request → 401 RFC 9457, zero upstream calls, manager never invoked.
 
-      TokenRefreshTest extends AbstractBffIntegrationTest:
-      - Log in with demo/demo123, get session cookie
-      - WireMock stub for Business Service: first request returns 401 (simulates expired token),
-        second request (after BFF refreshes) returns 200
-      - Actually: DefaultOAuth2AuthorizedClientManager refreshes transparently when access_token
-        is expired. Test this by:
-        1. Log in and store session
-        2. Fast-forward time past access_token TTL (mock clock or use very short TTL in test Keycloak config)
-        3. Next BFF request should succeed (BFF refreshed token transparently)
-        4. WireMock verifies second call received a different (new) Bearer token
+      TokenRelayRefreshIntegrationTest extends BffIntegrationTestBase
+        Same fixture as TokenRelayIntegrationTest. Stub the manager to
+        return token-A on call 1 and token-B on call 2. Drive two
+        sequential authenticated requests; assert the upstream observed
+        `Bearer token-A` then `Bearer token-B` in order. Proves TokenRelay
+        re-resolves the manager per request rather than caching.
 
-      CsrfIntegrationTest extends AbstractBffIntegrationTest:
-      - POST /api/v1/boats without XSRF-TOKEN header → 403
-      - POST /api/v1/boats with valid XSRF-TOKEN cookie + X-XSRF-TOKEN header → 201 (WireMock stub)
+      BffStaticContentRegressionTest extends BffIntegrationTestBase
+        Regression guard for "BFF must NOT serve the SPA bundle":
+        - GET /, /index.html, /assets/foo.js → assert non-2xx (the
+          precise status is implementation-detail; today they yield 401
+          since the permitAll matchers were dropped).
+        - GET /.well-known/jwks.json → 200 with valid JWK Set.
+        - GET /actuator/health → 200.
+        - GET /api/me with @WithMockUser → 200 dev-fallback payload.
+        - GET /api/me anonymous → 401 with application/problem+json.
 
-      SessionPersistenceIntegrationTest extends AbstractBffIntegrationTest:
-      - Authenticate via real Keycloak, receive SESSION cookie
-      - Query SPRING_SESSION table via JdbcTemplate: verify session row exists.
-        The BFF Testcontainers PostgreSQLContainer (line 313) runs an isolated
-        instance per test class — the BFF's own Liquibase creates SPRING_SESSION
-        inside that container (any DB name — the test targets the container's
-        default). In runtime envs this schema lives in the `bff_session` database
-        owned by role `bff`; in Testcontainers there's no cross-service isolation
-        concern, so the test doesn't need to assert a specific DB name.
-      - Verify same SESSION cookie accepted on a second request
+      ScgErrorEnvelopePassThroughTest extends BffIntegrationTestBase
+        Stub the upstream (embedded HttpServer, see note below) to return
+        each of: 422 RFC 9457, 404 RFC 9457, 500 plain-text, 503 empty
+        body, 500 RFC 9457. Assert:
+        - 4xx with RFC 9457 body → forwarded byte-identical (status,
+          Content-Type, body).
+        - 5xx without RFC 9457 → rewritten by `ScgUpstreamFailureFilter`
+          to a 502 envelope with type=`.../upstream-failure` and no leak
+          of the upstream body.
+        - 5xx WITH RFC 9457 → forwarded byte-identical (the BS may
+          legitimately emit a 5xx envelope from its own registry).
 
-      SecurityBffIntegrationTest extends AbstractBffIntegrationTest:
-      - GET /api/v1/boats without session cookie → 401 JSON (not 302, since /api/** returns 401 for AJAX)
-      - GET /actuator/health without session → 200
-      - GET /oauth2/authorization/keycloak → 302 redirect to Keycloak
+      CsrfIntegrationTest extends BffIntegrationTestBase
+        - POST /api/v1/boats without XSRF-TOKEN header → 403
+        - POST /api/v1/boats with valid XSRF-TOKEN cookie + X-XSRF-TOKEN
+          header → 201 (WireMock stub). Stub uses `urlPathEqualTo` (not
+          `urlEqualTo`) because SCG forwards the entire request URI
+          byte-identically, including the `?_csrf=…` query param that
+          MockMvc's csrf() post-processor appends. Production SPAs send
+          the CSRF token via header only (no query string).
+
+      SecurityBffIntegrationTest extends BffIntegrationTestBase
+        - GET /api/v1/boats without session → 401 RFC 9457
+        - GET /actuator/health without session → 200
+        - GET /oauth2/authorization/keycloak → 302 redirect to Keycloak
+
+      KeycloakOAuthFlowIntegrationTest (standalone, not extending the base)
+        Real Keycloak Testcontainer (quay.io/keycloak/keycloak:26.6.1) +
+        realm fixture. Proves the BFF's OAuth2 wiring talks to a real
+        Keycloak end-to-end — the only test that catches issuer / realm
+        import / JWT-signing regressions. Other BFF tests can stay fast
+        with Mockito-stubbed managers.
+
+      KeycloakServerSideLogoutHandlerTest
+        Pure Mockito test of the back-channel logout handler.
+
+      WHY a JDK HttpServer instead of WireMock for the SCG-routed tests:
+      Spring Cloud Gateway MVC's `RestClientProxyExchange` uses Spring's
+      `RestClient`. On Java 25 / Spring Boot 4.0 the JDK HttpClient
+      negotiates HTTP/2 cleartext (h2c) on plaintext upstreams. WireMock
+      3.x's standalone server's HTTP/2 handling resets streams in this
+      combination ("Received RST_STREAM: Stream cancelled"), masking real
+      bugs as transport noise. Either:
+      (a) install `Http11RestClientCustomizer` (see 02a3 step 9 / 02a4)
+          which pins the SCG outbound RestClient to HTTP/1.1, OR
+      (b) use the JDK's bundled `com.sun.net.httpserver.HttpServer` which
+          is HTTP/1.1 only and has zero dependencies.
+      The current codebase does BOTH — (a) for production safety, (b) for
+      test isolation. WireMock stays in `BffIntegrationTestBase` for the
+      tests that hit the BFF directly without going through an SCG route
+      (CsrfIntegrationTest, SecurityBffIntegrationTest).
+
+      DELETED — do not create these (their assumptions are gone):
+        - BoatBffService (no service layer for boats anymore)
+        - BffShortCircuitIntegrationTest, BffValidationForwardingIntegrationTest
+          (asserted local @Valid → 400 short-circuit; Bean Validation moved
+          entirely to BS)
+        - TokenForwardingTest (asserted RestClient interceptor; replaced
+          by TokenRelayIntegrationTest)
+        - BffUpstreamFailureIntegrationTest (asserted
+          RestClientResponseException → 502 mapping; replaced by
+          ScgErrorEnvelopePassThroughTest with the supporting
+          ScgUpstreamFailureFilter)
     </step>
   </instructions-bff>
 
@@ -478,18 +533,27 @@
     - UserSyncFromJwtTest: AppUser synced from JWT claims on first request
     - DevModeTest: permits all, dummy user auto-created, no JWT needed
 
-    BFF:
-    - ArchUnit: no JPA imports, no @Transactional, controller→service→client chain enforced
-    - ArchUnit: BusinessServiceClient must be interface (HTTP Interface)
-    - Integration: Testcontainers Keycloak (real OAuth2 flow) + WireMock (Business Service mock)
-    - BffValidationTest: BFF's own @Valid rejects invalid payloads BEFORE upstream
-      (asserts WireMock received zero requests)
-    - BffBoatControllerTest: upstream RFC 9457 ProblemDetail forwarded byte-identical
-      for 4xx; 5xx wrapped as 502 upstream-failure (upstream body not leaked)
-    - TokenForwardingTest: BFF attaches Bearer token to Business Service calls
-    - TokenRefreshTest: BFF transparently refreshes expired access_token
-    - CsrfIntegrationTest: SPA cookie-based CSRF protection
-    - SessionPersistenceIntegrationTest: Spring Session JDBC stores sessions in PostgreSQL"
+    BFF (Spring Cloud Gateway Server Web MVC):
+    - ArchUnit: no JPA, no @Transactional, no adapter.out.client package
+      (regression guard), no RestTemplate (except KeycloakServerSideLogoutHandler),
+      application-routes.yml on classpath, RestControllerAdvice has Logger,
+      every @ExceptionHandler logs.
+    - ScgRouteRegistrationTest: route boats-api shape (predicate, filter,
+      uri) parsed from application-routes.yml.
+    - TokenRelayIntegrationTest: SCG TokenRelay attaches the user's Bearer
+      token via OAuth2AuthorizedClientManager (Mockito @MockitoBean),
+      anonymous request → 401 RFC 9457 + zero upstream calls.
+    - TokenRelayRefreshIntegrationTest: per-request token rotation
+      (manager returns A then B → upstream observes both Bearers).
+    - BffStaticContentRegressionTest: BFF must NOT serve /, /index.html,
+      /assets/**; /jwks.json + /actuator/health + /api/me reachable.
+    - ScgErrorEnvelopePassThroughTest: 4xx and 5xx-with-RFC9457 forwarded
+      byte-identical; 5xx without RFC 9457 → 502 upstream-failure.
+    - CsrfIntegrationTest: SPA cookie-based CSRF protection (urlPathEqualTo).
+    - SecurityBffIntegrationTest: 401 envelope on /api/**, 200 on
+      /actuator/health, 302 on /oauth2/authorization/keycloak.
+    - KeycloakOAuthFlowIntegrationTest: real Testcontainers Keycloak — issuer
+      / realm import / JWT signing end-to-end."
     ```
   </commit>
 </task>

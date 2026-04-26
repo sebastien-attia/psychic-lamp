@@ -372,3 +372,39 @@ jobs:
             echo "- Commit: \`${GITHUB_SHA}\`"
             echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-spa:
+    # Publish the Vue SPA bundle to the Static Web App provisioned by
+    # `apply`. The SWA front-ends the BFF Container App via its
+    # linked-backend, so cookies stay first-party against the SWA hostname.
+    name: Deploy SPA to Static Web Apps (staging)
+    needs: [apply]
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      # Reuse the dist/ that ci.yml's `build-frontend` job produced — no
+      # rebuild here so the deployed bundle is byte-identical to the one
+      # the CI gates already ran against.
+      - name: Download frontend dist from CI
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: frontend-dist
+          path: frontend/dist/
+
+      # The SWA deploy token is provisioned by Terraform (output `api_key`
+      # of the static-web-app module) and surfaced as the
+      # AZURE_SWA_DEPLOY_TOKEN environment secret in the staging environment.
+      - name: Deploy to Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_SWA_DEPLOY_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: frontend
+          output_location: dist
+          skip_app_build: true
+          skip_api_build: true

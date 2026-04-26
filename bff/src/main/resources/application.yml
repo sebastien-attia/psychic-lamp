@@ -16,6 +16,12 @@ spring:
   liquibase:
     change-log: classpath:db/changelog/db.changelog-master.yaml
 
+# NOTE: the Spring Cloud Gateway route table (`application-routes.yml`) is
+# imported from each non-dev profile YAML — `application-local-intg.yml`,
+# `application-staging.yml`, `application-prod.yml`. The dev profile does
+# not load it because `BffConfig` is `@Profile("!dev")` and the TokenRelay
+# filter would have no `OAuth2AuthorizedClientManager` bean to resolve.
+
 server:
   port: 8080
   servlet:

@@ -44,7 +44,7 @@ import static com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMoc
  * material lives under {@code src/test/resources/} — so
  * {@code BffConfig.bffSigningJwk} can be created on context refresh.
  */
-@SpringBootTest
+@SpringBootTest(properties = "spring.config.import=classpath:application-routes.yml")
 @AutoConfigureMockMvc
 @Import(TestcontainersConfiguration.class)
 public abstract class BffIntegrationTestBase {

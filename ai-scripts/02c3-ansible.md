@@ -67,7 +67,8 @@
         on the Flexible Server — idempotent, safe to re-run; see step 3b).
       - Role: app-config → inject environment variables into Container Apps
       - Task: build and push Docker images to ACR (via `az acr login`, no admin creds):
-        - bff image (3-stage build: Node frontend → JDK BFF → JRE runtime)
+        - bff image (2-stage build: JDK → JRE runtime — the Vue SPA is NOT
+          baked in; it lives on Azure Static Web Apps after the SCG migration)
         - business-service image (2-stage build: JDK → JRE runtime)
       - Task: update Container App revisions with new image tags (bff + business-service)
       - Task: invoke the Liquibase ACA Jobs (import run-migrations.yml — starts
@@ -140,9 +141,15 @@
           (business-service has internal ingress only; no public domain)
       - templates/:
         - env.j2 → environment variable template (one block per service).
-          NOTE: No VITE_* variables — the Vue SPA is baked into the BFF image
-          at bff/src/main/resources/static/ and served by Spring, so there is
-          no runtime frontend container to configure.
+          NOTE: No VITE_* variables. Since the SCG migration the Vue SPA
+          is hosted by Azure Static Web Apps (Bring-Your-Own-Backend →
+          BFF Container App), so there is no Vite-built runtime config to
+          inject. The SPA's compile-time config lives in
+          `frontend/staticwebapp.config.json` (committed in 02b5) and is
+          uploaded with the dist/ bundle by the SWA deploy step in CI
+          (see 04-cicd.md). Ansible does NOT push the SPA bundle —
+          deploying static assets via Ansible would duplicate the SWA
+          deploy action and risk drift.
       - defaults/main.yml → default values
     </step>
     <step order="3b">

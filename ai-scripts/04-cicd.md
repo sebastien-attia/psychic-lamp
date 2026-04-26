@@ -91,12 +91,15 @@
         build-frontend:
           # Node 22, npm ci, cache node_modules
           # npm run build, npm run type-check, npm run test
-          # Upload build artifacts (dist/ — consumed by the bff Docker build)
+          # Upload build artifacts (dist/ — consumed by deploy-spa in
+          # staging/prod, NOT by the bff Docker build any more; since the
+          # SCG migration the SPA is hosted by Azure Static Web Apps).
 
         docker-build:
-          needs: [build-bff, build-business-service, build-frontend, sca-scan]
-          # Build Docker images (verify they build):
-          #   - bff image (3-stage: Node frontend → JDK BFF → JRE)
+          needs: [build-bff, build-business-service, sca-scan]
+          # Note: build-frontend is NOT in `needs` — the BFF image no longer
+          # bakes in the SPA. Build Docker images (verify they build):
+          #   - bff image (2-stage: JDK → JRE — Spring Cloud Gateway, no SPA)
           #   - business-service image (2-stage: JDK → JRE)
           # Do NOT push — that happens in deploy workflows
 
@@ -155,6 +158,35 @@
               (and same for business-service). Runs after deploy so the uploaded
               BOM reflects the image that is actually live in staging.
             - On failure: post summary to GitHub Actions
+
+        deploy-spa:
+          # Publish the Vue SPA bundle to the Static Web App provisioned by
+          # Terraform. SWA front-ends the BFF Container App via its
+          # linked-backend, so cookies stay first-party against the SWA
+          # hostname. Runs AFTER `apply` (or `deploy`) so the SWA exists.
+          needs: [apply]   # or [deploy] depending on the staging-deploy split
+          runs-on: ubuntu-latest
+          environment: staging
+          permissions:
+            contents: read
+          steps:
+            - Checkout code
+            # Reuse the dist/ that ci.yml's build-frontend produced — no
+            # rebuild here so the deployed bundle is byte-identical to the
+            # one CI gates already ran against.
+            - actions/download-artifact@v4 with name: frontend-dist, path: frontend/dist/
+            # Token comes from Terraform module.static-web-app output `api_key`
+            # (sensitive), surfaced as the staging environment secret
+            # AZURE_SWA_DEPLOY_TOKEN.
+            - uses: Azure/static-web-apps-deploy@v1
+                with:
+                  azure_static_web_apps_api_token: ${{ secrets.AZURE_SWA_DEPLOY_TOKEN }}
+                  repo_token: ${{ secrets.GITHUB_TOKEN }}
+                  action: upload
+                  app_location: frontend
+                  output_location: dist
+                  skip_app_build: true
+                  skip_api_build: true
       ```
     </step>
     <step order="3">
@@ -253,6 +285,12 @@
           container-registry module via `var.ci_push_principal_id` (see 02c2
           step 5); document how to obtain the object ID after creating the
           Entra ID app + federated credential.
+      - Per-environment SWA deploy token: surface the
+        `module.static_web_app.api_key` Terraform output as the
+        `AZURE_SWA_DEPLOY_TOKEN` secret in the matching GitHub environment
+        (staging / prod). It is sensitive — never log. The deploy-spa job
+        in deploy-staging.yml / deploy-production.yml consumes it via
+        `Azure/static-web-apps-deploy@v1`.
       - Non-goals (explicitly NOT required as secrets):
         * ACR_ADMIN_USERNAME / ACR_ADMIN_PASSWORD — ACR admin is disabled.
         * AZURE_CLIENT_SECRET — OIDC federation replaces it.
@@ -291,8 +329,10 @@
     git commit -m "ci: GitHub Actions CI/CD pipeline for Azure
 
     - CI: lint, build (bff + business-service + frontend), test, docker build, E2E
-    - Staging: auto-deploy on push to staging branch (bff + business-service images)
-    - Production: deploy on GitHub Release (manual trigger, requires approval)
+    - Staging: auto-deploy on push to staging branch (bff + business-service
+      images + SPA bundle to Azure Static Web Apps via deploy-spa job)
+    - Production: deploy on GitHub Release (manual trigger, requires approval;
+      same job set including deploy-spa)
     - Terraform plan: auto-comment on infra PRs
     - OIDC federation for Azure (no long-lived secrets)
     - Reusable composite actions for Java, Node, Docker

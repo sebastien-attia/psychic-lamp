@@ -1,15 +1,18 @@
 # The Boat App
 
-Two Spring Boot services with strict hexagonal architecture.
+A Vue 3 SPA + Spring Cloud Gateway BFF + Spring Boot Business Service with strict hexagonal architecture.
 
 ## Architecture
 
 ```
 Browser
-  │ (session cookie)
+  │
+  │   dev / local-intg: Vite (:5173)        staging / prod: Azure Static Web Apps
+  │   (serves SPA, proxies API)             (serves SPA, linked-backend → BFF)
   ▼
-BFF (port 8080) — OAuth2 client, session, CSRF, token forwarding
-  │ Bearer <access_token>
+BFF — Spring Cloud Gateway Server Web MVC (port 8080)
+  │   OAuth2 client, server-side session, CSRF, TokenRelay filter
+  │   Bearer <access_token>
   ▼
 Business Service (port 8081) — JWT resource server, domain logic, persistence
   │
@@ -18,11 +21,13 @@ PostgreSQL (1 instance, 3 isolated DBs: bff_session, boatapp, keycloak — one r
 ```
 
 ### BFF (bff/)
-Thin proxy with session-based OAuth2. No domain logic, no JPA.
-- `adapter.in.web` — Spring @RestController (HTTP adapter). Depends on infrastructure.service.
-- `adapter.out.client` — BusinessServiceClient (Spring HTTP Interface). Calls Business Service REST API.
-- `infrastructure.service` — BoatBffService (thin orchestrator). No @Transactional. Injects Bearer token.
-- `infrastructure.security` — SecurityConfig (OAuth2 session, CSRF), BffSecurityHelper.
+Spring Cloud Gateway Server Web MVC (servlet flavor, SCG 5.0.1, Spring Cloud 2025.1.1). No domain logic, no JPA, no outbound HTTP-Interface client. Routes are declarative.
+- `infrastructure.security.SecurityConfig` — OAuth2 session login (Keycloak `private_key_jwt`), CSRF cookie, Keycloak server-side logout. Profile `!dev`.
+- `infrastructure.config.BffConfig` — wires `bffSigningJwk`, the `private_key_jwt` token-response clients, and `OAuth2AuthorizedClientManager`. SCG's `TokenRelayFilterFunctions` resolves the manager per request via `getBean` to forward the user's access token on every upstream call.
+- `infrastructure.web.ScgUpstreamFailureFilter` — rewrites upstream 5xx without an RFC 9457 body to a 502 `upstream-failure` envelope. Upstream 4xx (and 5xx with RFC 9457 body) are passed through byte-identical.
+- `infrastructure.web.Http11RestClientCustomizer` — pins the JDK HttpClient backing every outbound `RestClient` to HTTP/1.1, avoiding the h2c-stream-cancelled hazard.
+- `adapter.in.web` — BFF-LOCAL endpoints only: `AuthController` (`/api/me`), `JwksController` (`/.well-known/jwks.json`), `RestAuthenticationEntryPoint`, `GlobalExceptionHandler`. NO controller for boats — proxying lives in `application-routes.yml`.
+- `application-routes.yml` — single SCG route table: `Path=/api/v1/boats/{*subpath}` → `${business-service.url}` with `TokenRelay=keycloak`. Imported by each non-dev profile YAML.
 
 ### Business Service (business-service/)
 Pure hexagonal service. Validates JWT Bearer tokens.
@@ -57,15 +62,19 @@ cd frontend && npm run dev                     # Vite proxy → localhost:8081
 ## Local-intg (full stack)
 
 ```bash
-docker compose up                              # all 4 services
-cd frontend && npm run dev:intg                # Vite proxy → BFF :8080
+docker compose up                              # postgres + keycloak + business-service + bff (SCG) + frontend (Vite)
+# browser → http://localhost:5173
 ```
+
+The `frontend` service runs Vite in `local-intg` mode and proxies `/api`, `/oauth2`, `/login`, `/logout` to the BFF over the compose network. The host-run path (`cd frontend && npm run dev:intg`) still works for IDE / debugger integration — it falls back to `http://localhost:8080` when `VITE_BFF_TARGET` is unset.
+
+The SPA is NOT baked into the BFF image. In dev / local-intg it is served by Vite; in staging / prod it is hosted on Azure Static Web Apps (Bring-Your-Own-Backend → BFF Container App).
 
 ## Build & verify
 
 ```bash
 cd frontend && npm run build
-cd bff && ./mvnw verify
+cd bff && ./mvnw verify             # JaCoCo gate skipped by default; CI sets -Djacoco.check.skip=false
 cd business-service && ./mvnw verify
 docker compose up
 ```
@@ -78,7 +87,7 @@ docker compose up
 - Liquibase for DB migrations (YAML changelogs) — split per service: BFF owns bff_session (SPRING_SESSION), business-service owns boatapp (APP_USER/BOATS/BOAT_AUDIT); Keycloak manages its own schema
 - Boat: id (UUID), name (max 64), description (max 256), createdAt (OffsetDateTime UTC), version
 - BoatAudit: INSERT-ONLY, FK to APP_USER. APP_USER synced from JWT claims on each request.
-- BFF auth: session-based (HttpOnly cookie), confidential Keycloak client, token forwarding
+- BFF auth: session-based (HttpOnly cookie), confidential Keycloak client, token forwarding via SCG `TokenRelay` filter (declared in `application-routes.yml`)
 - Business Service auth: stateless JWT Bearer token validation (spring-oauth2-resource-server)
 - dev profile: no auth at all, dummy user auto-created — for fast iteration without Keycloak
 

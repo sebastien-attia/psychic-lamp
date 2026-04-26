@@ -96,57 +96,40 @@ fi
 [ -f bff/Dockerfile ]              && pass "bff/Dockerfile present"              || fail "bff/Dockerfile missing"
 [ -f business-service/Dockerfile ] && pass "business-service/Dockerfile present" || fail "business-service/Dockerfile missing"
 
-# BFF Dockerfile: 4-stage (TS codegen + Node + JDK + JRE)
+# BFF Dockerfile: 2-stage (JDK build + JRE runtime).
+# After the SCG migration the Vue SPA is no longer baked into the BFF jar,
+# so the historical Node + ts-codegen stages are gone — the SPA is hosted
+# by Vite (dev/local-intg) or Azure Static Web Apps (staging/prod).
 if [ -f bff/Dockerfile ]; then
   stages="$(grep -cE '^FROM ' bff/Dockerfile)"
-  if [ "${stages}" -ge 4 ]; then
-    pass "bff/Dockerfile is multi-stage (${stages} FROM)"
+  if [ "${stages}" -eq 2 ]; then
+    pass "bff/Dockerfile is 2-stage (${stages} FROM — JDK build → JRE runtime, no SPA splice)"
   else
-    fail "bff/Dockerfile has only ${stages} FROM stages (expected 4: ts-codegen + Node frontend + JDK BFF + JRE runtime — see 02c1-docker.md step 1)"
+    fail "bff/Dockerfile has ${stages} FROM stages (expected 2 after SCG migration; SPA leaves the jar)"
   fi
 
-  # Toolchain consistency guard. The OpenAPI Generator CLI is a Node wrapper
-  # that shells out to `java -jar`, so a `node:*-alpine` stage running
-  # `npm run build` (which chains `generate:api`) will fail with
-  # "/bin/sh: java: not found" at build time — the regression that added
-  # this gate. The fix is a dedicated codegen stage
-  # (openapitools/openapi-generator-cli) that produces the TS client, COPYed
-  # into the Node stage, which then runs `npm run build:no-codegen`.
-  #
-  # Flat repo-wide grep (instead of a FROM-RUN pairing awk): the codegen
-  # image never invokes `npm`, so any `npm run build` token in the file
-  # belongs to a Node stage. This matches both shell-form
-  # (`RUN npm run build`) and JSON exec-form (`RUN ["npm","run","build"]`),
-  # and is robust to `FROM --platform=…` flags and digest pins on the FROM
-  # line (which the prior awk-based pairing missed).
-  if grep -nE '(^|[^:[:alnum:]])npm["[:space:],]+run["[:space:],]+build([^:[:alnum:]]|$)' bff/Dockerfile \
-       | grep -v 'build:no-codegen' >/dev/null; then
-    fail "bff/Dockerfile: 'npm run build' invoked (chains generate:api → java in the Node stage) — switch to 'npm run build:no-codegen' and add a ts-codegen stage (see 02c1-docker.md step 1)"
+  if grep -qE '^FROM ([[:space:]]*--[^[:space:]]+[[:space:]]+)*node[:[]' bff/Dockerfile; then
+    fail "bff/Dockerfile still has a Node stage — SCG migration removed the SPA bundling step; SPA is hosted by Vite/SWA"
   else
-    pass "bff/Dockerfile: no 'npm run build' token (Java-free Node stage)"
+    pass "bff/Dockerfile has no Node stage (SPA hosted externally)"
   fi
-
-  # `--platform=…` flags and digest pins are tolerated on the codegen FROM.
   if grep -qE '^FROM ([[:space:]]*--[^[:space:]]+[[:space:]]+)*([[:alnum:].]+/)?openapitools/openapi-generator-cli' bff/Dockerfile; then
-    pass "bff/Dockerfile: dedicated ts-codegen stage present (openapitools/openapi-generator-cli)"
+    fail "bff/Dockerfile still has an openapitools codegen stage — SCG migration removed the BFF outbound HTTP-Interface client"
   else
-    fail "bff/Dockerfile: no openapitools/openapi-generator-cli stage — TS client must be generated outside the Node stage"
+    pass "bff/Dockerfile has no openapitools codegen stage (BFF codegen narrowed to a few User-tag DTOs, runs in Maven)"
+  fi
+  if grep -qE '(^| )COPY +.*frontend.*(static|dist)' bff/Dockerfile; then
+    fail "bff/Dockerfile still copies frontend/dist into resources/static — SPA must NOT be baked into the BFF image"
+  else
+    pass "bff/Dockerfile does not splice the SPA into resources/static"
   fi
 fi
 
-# ── Codegen single-source-of-truth ─────────────────────────────────────────
-# Without a shared config file the typescript-axios flag list lives in two
-# places (frontend/package.json AND bff/Dockerfile) and silently drifts.
-if [ -f contracts/codegen-typescript-axios.json ]; then
-  pass "contracts/codegen-typescript-axios.json present (shared codegen config)"
-  if grep -q 'codegen-typescript-axios.json' frontend/package.json 2>/dev/null \
-     && grep -q 'codegen-typescript-axios.json' bff/Dockerfile 2>/dev/null; then
-    pass "codegen config referenced by both frontend/package.json and bff/Dockerfile"
-  else
-    fail "contracts/codegen-typescript-axios.json exists but is not referenced by both frontend/package.json AND bff/Dockerfile — flags will drift"
-  fi
+# Defense-in-depth: the BFF image must not ship a static SPA bundle at all.
+if [ -d bff/src/main/resources/static ] && [ -n "$(ls -A bff/src/main/resources/static 2>/dev/null)" ]; then
+  fail "bff/src/main/resources/static is non-empty — SPA must be hosted by Vite/SWA, not the BFF jar"
 else
-  fail "contracts/codegen-typescript-axios.json missing — flags duplicated between npm and Docker (see 02b1-frontend-scaffold.md step 4)"
+  pass "bff/src/main/resources/static is absent or empty (SPA leaves the jar)"
 fi
 
 # ── End-to-end build gate (the missing check) ──────────────────────────────
