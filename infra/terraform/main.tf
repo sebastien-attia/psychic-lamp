@@ -10,7 +10,7 @@
 #
 # Cross-module reference shape
 # ────────────────────────────
-#   container_apps      references keyvault.secret_ids and container_registry.login_server
+#   container_apps      references keyvault secret IDs and container_registry.login_server
 #   keyvault            references container_apps.consumer_principal_ids (for Secrets User RBAC)
 #   container_registry  references container_apps.consumer_principal_ids (for AcrPull RBAC)
 #
@@ -112,9 +112,11 @@ module "container_apps" {
   postgres_fqdn           = module.database.fqdn
   postgres_admin_username = module.database.admin_username
 
-  # Key Vault wiring (secret IDs are bound into the ACA `secret { }` blocks)
-  keyvault_secret_ids       = module.keyvault.secret_ids
-  bff_signing_key_secret_id = module.keyvault.bff_signing_key_secret_id
+  # Key Vault wiring. Azure Container Apps consume versionless secret IDs;
+  # versioned IDs are retained only as Terraform triggers for rotations.
+  keyvault_secret_ids         = module.keyvault.secret_versionless_ids
+  keyvault_secret_version_ids = module.keyvault.secret_ids
+  bff_signing_key_secret_id   = module.keyvault.bff_signing_key_versionless_secret_id
 
   # Image tags
   bff_image_tag              = var.bff_image_tag

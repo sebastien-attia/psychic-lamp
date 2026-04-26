@@ -180,10 +180,10 @@ resource "azurerm_container_app_job" "bootstrap_db_roles" {
 # windows by retrying with longer waits between attempts.
 resource "terraform_data" "bootstrap_db_roles_run" {
   triggers_replace = [
-    var.keyvault_secret_ids["postgres-admin-password"],
-    var.keyvault_secret_ids["bff-db-password"],
-    var.keyvault_secret_ids["business-db-password"],
-    var.keyvault_secret_ids["keycloak-db-password"],
+    var.keyvault_secret_version_ids["postgres-admin-password"],
+    var.keyvault_secret_version_ids["bff-db-password"],
+    var.keyvault_secret_version_ids["business-db-password"],
+    var.keyvault_secret_version_ids["keycloak-db-password"],
     azurerm_container_app_job.bootstrap_db_roles.id,
   ]
 

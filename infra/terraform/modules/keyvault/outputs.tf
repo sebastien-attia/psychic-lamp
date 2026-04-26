@@ -16,7 +16,7 @@ output "vault_uri" {
 }
 
 output "secret_ids" {
-  description = "Map of secret name → versioned secret ID. Container Apps consume these via the `secret { key_vault_secret_id = … }` block; Ansible references them by name."
+  description = "Map of secret name → versioned secret ID. Used by Terraform triggers that must react to secret rotation."
   sensitive   = true
   value = merge(
     { for k, s in azurerm_key_vault_secret.passwords : k => s.id },
@@ -24,8 +24,23 @@ output "secret_ids" {
   )
 }
 
+output "secret_versionless_ids" {
+  description = "Map of secret name → versionless secret ID. Azure services consume these via `key_vault_secret_id` so provider plans do not churn on learned secret versions."
+  sensitive   = true
+  value = merge(
+    { for k, s in azurerm_key_vault_secret.passwords : k => s.versionless_id },
+    { (azurerm_key_vault_secret.bff_signing_key.name) = azurerm_key_vault_secret.bff_signing_key.versionless_id },
+  )
+}
+
 output "bff_signing_key_secret_id" {
-  description = "Versioned ID of the bff-signing-key secret. The BFF Container App mounts it as a secret-volume PEM file at /mnt/secrets/."
+  description = "Versioned ID of the bff-signing-key secret. Kept for rotation-sensitive Terraform triggers."
   sensitive   = true
   value       = azurerm_key_vault_secret.bff_signing_key.id
+}
+
+output "bff_signing_key_versionless_secret_id" {
+  description = "Versionless ID of the bff-signing-key secret. The BFF Container App mounts it as a secret-volume PEM file at /mnt/secrets/."
+  sensitive   = true
+  value       = azurerm_key_vault_secret.bff_signing_key.versionless_id
 }

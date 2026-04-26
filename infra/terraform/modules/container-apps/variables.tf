@@ -45,9 +45,9 @@ variable "postgres_admin_username" {
   type        = string
 }
 
-# postgres-admin-password is read from var.keyvault_secret_ids
-# under the "postgres-admin-password" key — same pattern as every other
-# password secret in this module. No separate variable.
+# postgres-admin-password is read from var.keyvault_secret_ids under the
+# "postgres-admin-password" key — same pattern as every other password
+# secret in this module. No separate variable.
 
 variable "bootstrap_db_roles_image" {
   description = "Image used by the bootstrap-db-roles Job. Must contain a working `psql` client. Default is the upstream postgres:17-alpine on Docker Hub — a public, unauthenticated pull."
@@ -56,12 +56,17 @@ variable "bootstrap_db_roles_image" {
 }
 
 variable "keyvault_secret_ids" {
-  description = "Map of Key Vault secret name → versioned secret ID. Container Apps and Jobs reference these via the `secret { key_vault_secret_id = … }` block."
+  description = "Map of Key Vault secret name → versionless secret ID. Container Apps and Jobs reference these via the `secret { key_vault_secret_id = … }` block."
+  type        = map(string)
+}
+
+variable "keyvault_secret_version_ids" {
+  description = "Map of Key Vault secret name → versioned secret ID. Used only as Terraform triggers so bootstrap jobs rerun when password secrets rotate."
   type        = map(string)
 }
 
 variable "bff_signing_key_secret_id" {
-  description = "Versioned ID of the bff-signing-key Key Vault secret (PEM). Mounted as a file at /mnt/secrets/bff-signing-key on the BFF Container App."
+  description = "Versionless ID of the bff-signing-key Key Vault secret (PEM). Mounted as a file at /mnt/secrets/bff-signing-key on the BFF Container App."
   type        = string
 }
 
