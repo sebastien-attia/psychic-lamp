@@ -76,9 +76,6 @@ jobs:
   ci:
     name: CI (reuse ci.yml)
     uses: ./.github/workflows/ci.yml
-    with:
-      dtrack-project-uuid: ${{ vars.DTRACK_PROJECT_UUID_PRODUCTION }}
-      require-dtrack-project-uuid: false
     # Reusable workflows do NOT inherit caller secrets by default. Without
     # this, ci.yml's DT gate, gitleaks license, and any other `secrets.*`
     # reference would resolve to empty strings on release-triggered runs.
