@@ -1,0 +1,10 @@
+# Temporary Keycloak 26.6.1 upstream allowlist.
+# Added 2026-04-26 after deploy-staging run 24966578625 was blocked by
+# fixable HIGH findings in the upstream Keycloak base image. Remove these
+# entries when quay.io/keycloak/keycloak is bumped past 26.6.1 or Keycloak
+# ships images with fixed Netty, OpenJDK, and mssql-jdbc dependencies.
+CVE-2026-33871
+CVE-2026-33870
+CVE-2025-59250
+CVE-2026-34282
+CVE-2026-22016

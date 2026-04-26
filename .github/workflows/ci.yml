@@ -308,6 +308,7 @@ jobs:
           # still surface in the Security tab via SARIF — same bar as
           # OSV-Scanner's source-side `--fail-on-vuln=HIGH`.
           ignore-unfixed: true
+          trivyignores: '.trivyignore'
       # Upload SARIF even when Trivy failed the job, otherwise the
       # findings would only live in the run log — `if: always()` makes
       # them queryable from the Security tab and Dependabot.
