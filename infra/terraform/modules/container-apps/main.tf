@@ -228,10 +228,10 @@ resource "terraform_data" "bootstrap_db_roles_run" {
         # the "still queuing" prefix before the replica even starts.
         STATUS=Unknown
         for i in $(seq 1 36); do
-          # Surface poll-API errors instead of swallowing them as
-          # "Unknown" — `set -e` will fail this attempt and the outer
-          # loop retries. This avoids the trap where a 404/auth
-          # failure looks identical to "still running".
+          # Azure can intermittently return 409/412 while the execution
+          # record is being reconciled. Treat one bad poll as Unknown
+          # rather than killing the provisioner under `set -e`; terminal
+          # Failed/Canceled/Degraded statuses still break the attempt.
           # `--name` is the JOB name; `--job-execution-name` is the
           # execution name returned by `az containerapp job start`.
           # Per `az containerapp job execution show --help` (CLI 2.85)
@@ -239,9 +239,13 @@ resource "terraform_data" "bootstrap_db_roles_run" {
           # there is no `--job-name` alias. Mirrors the working
           # invocation in infra/ansible/playbooks/run-migrations.yml
           # ("Poll job execution until terminal state").
-          STATUS=$(az containerapp job execution show \
+          if ! STATUS=$(az containerapp job execution show \
             --name "$JOB_NAME" --resource-group "$RG_NAME" \
-            --job-execution-name "$EXEC" --query properties.status -o tsv)
+            --job-execution-name "$EXEC" --query properties.status -o tsv 2>poll.err); then
+            echo "  [$i/36] $EXEC: poll failed; treating as Unknown"
+            sed 's/^/    /' poll.err >&2 || true
+            STATUS=Unknown
+          fi
           echo "  [$i/36] $EXEC: $STATUS"
           case "$STATUS" in
             Succeeded)                 echo ">> bootstrap-db-roles: succeeded"; exit 0 ;;
