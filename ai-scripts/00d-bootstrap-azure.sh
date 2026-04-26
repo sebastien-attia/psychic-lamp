@@ -5,25 +5,32 @@
 # `terraform apply` or GitHub Actions deploy. It creates everything that
 # Terraform cannot create for itself (chicken-and-egg bootstrap):
 #
-#   1. Entra ID application + service principal (the identity GitHub
+#   1. Resource provider registration on the target subscription:
+#        Microsoft.Storage, Microsoft.ContainerRegistry, Microsoft.App,
+#        Microsoft.OperationalInsights, Microsoft.DBforPostgreSQL,
+#        Microsoft.KeyVault, Microsoft.Network, Microsoft.ManagedIdentity.
+#      A brand-new subscription has every RP in NotRegistered; calling
+#      a data-plane endpoint against an unregistered RP returns the
+#      misleading error `SubscriptionNotFound`.
+#   2. Entra ID application + service principal (the identity GitHub
 #      Actions federates into via OIDC).
-#   2. Federated Identity Credentials binding that app to the GitHub
+#   3. Federated Identity Credentials binding that app to the GitHub
 #      repo — one per environment subject claim:
 #        repo:<owner>/<repo>:ref:refs/heads/main
 #        repo:<owner>/<repo>:ref:refs/heads/staging
 #        repo:<owner>/<repo>:pull_request
 #        repo:<owner>/<repo>:environment:staging
 #        repo:<owner>/<repo>:environment:production
-#   3. Subscription-scope role assignments:
+#   4. Subscription-scope role assignments:
 #        Contributor                                  (infra creation)
 #        User Access Administrator                    (to manage RBAC at apply-time)
-#   4. Terraform-state storage account + blob containers
+#   5. Terraform-state storage account + blob containers
 #      (one container per environment: staging, production).
-#   5. GitHub repo/environment secrets + variables via gh CLI:
+#   6. GitHub repo/environment secrets + variables via gh CLI:
 #        secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
 #                 TF_STATE_STORAGE_ACCOUNT, TF_STATE_RESOURCE_GROUP
 #        vars:    ACR_NAME, TF_STATE_CONTAINER
-#   6. Branch protection on `main` and `staging` from
+#   7. Branch protection on `main` and `staging` from
 #      `.github/settings.yml` (committed by phase 4b). Skipped silently
 #      if `settings.yml` is absent — first-run bootstrap before phase 4b
 #      is therefore still possible. Re-run 00d after phase 4b lands to
@@ -51,6 +58,9 @@
 #
 # Idempotency: every `az` / `gh` call is guarded — re-running the script
 # against an already-bootstrapped tenant is a no-op.
+#
+# Operator-facing runbook: ../DEPLOYMENT.md (§A.3 reproduces the flag
+# list above — keep both in sync when this script changes).
 
 set -euo pipefail
 
@@ -123,8 +133,41 @@ echo "▸ state RG/SA  : ${STATE_RG} / ${STATE_SA}"
 echo "▸ ACR name     : ${ACR_NAME}  (created later by Terraform, name pinned here so CI can reference it)"
 echo
 
+# ─── 0. Resource provider registration ─────────────────────────────────
+# A brand-new Azure subscription has every resource provider in
+# `NotRegistered`. Calling the storage / ACR / Container Apps / Postgres
+# data-plane against an unregistered RP returns the misleading error
+# `SubscriptionNotFound` (not "RP not registered"). Register every RP
+# this bootstrap + the downstream Terraform stack will touch, up front.
+# `az provider register` is idempotent and `--wait` blocks until the RP
+# reaches `Registered` (typically <30s for fresh subs, instant for
+# already-registered ones).
+echo "▸ [1/7] Resource provider registration"
+
+REQUIRED_PROVIDERS=(
+  Microsoft.Storage              # tfstate storage account (this script)
+  Microsoft.ContainerRegistry    # ACR (Terraform)
+  Microsoft.App                  # Azure Container Apps (Terraform)
+  Microsoft.OperationalInsights  # Log Analytics workspace for ACA (Terraform)
+  Microsoft.DBforPostgreSQL      # Flexible Server (Terraform)
+  Microsoft.KeyVault             # Key Vault (Terraform)
+  Microsoft.Network              # VNet + private DNS (Terraform)
+  Microsoft.ManagedIdentity      # User-assigned identities (Terraform)
+)
+
+for rp in "${REQUIRED_PROVIDERS[@]}"; do
+  state=$(az provider show -n "${rp}" --query registrationState -o tsv 2>/dev/null || echo "Unknown")
+  if [[ "${state}" == "Registered" ]]; then
+    echo "    registered: ${rp}"
+  else
+    echo "    registering: ${rp}  (current state: ${state})"
+    az provider register -n "${rp}" --wait >/dev/null
+    echo "    registered: ${rp}"
+  fi
+done
+
 # ─── 1. Entra ID application + service principal ───────────────────────
-echo "▸ [1/5] Entra ID application + service principal"
+echo "▸ [2/7] Entra ID application + service principal"
 
 APP_ID=$(az ad app list --display-name "${APP_NAME}" --query '[0].appId' -o tsv)
 if [[ -z "${APP_ID}" ]]; then
@@ -143,7 +186,7 @@ else
 fi
 
 # ─── 2. Federated Identity Credentials ─────────────────────────────────
-echo "▸ [2/5] Federated Identity Credentials (OIDC) on ${APP_NAME}"
+echo "▸ [3/7] Federated Identity Credentials (OIDC) on ${APP_NAME}"
 
 add_fic() {
   local name="$1" subject="$2"
@@ -173,7 +216,7 @@ add_fic "gh-env-staging" "repo:${REPO}:environment:staging"
 add_fic "gh-env-prod"    "repo:${REPO}:environment:production"
 
 # ─── 3. Subscription role assignments ──────────────────────────────────
-echo "▸ [3/5] Subscription-scope role assignments for ${APP_NAME}"
+echo "▸ [4/7] Subscription-scope role assignments for ${APP_NAME}"
 
 assign_role() {
   local role="$1"
@@ -205,7 +248,7 @@ assign_role "Contributor"
 assign_role "User Access Administrator"
 
 # ─── 4. Terraform state storage ────────────────────────────────────────
-echo "▸ [4/5] Terraform remote state (Azure Blob)"
+echo "▸ [5/7] Terraform remote state (Azure Blob)"
 
 if ! az group show -n "${STATE_RG}" >/dev/null 2>&1; then
   az group create -n "${STATE_RG}" -l "${LOCATION}" \
@@ -262,7 +305,7 @@ for container in staging production; do
 done
 
 # ─── 5. GitHub secrets + variables ─────────────────────────────────────
-echo "▸ [5/5] GitHub repo secrets + variables (${REPO})"
+echo "▸ [6/7] GitHub repo secrets + variables (${REPO})"
 
 set_repo_secret() {
   local name="$1" value="$2"
@@ -307,7 +350,7 @@ done
 # follows the Probot-Settings YAML shape — we only consume the
 # `branches[].protection` subtree per branch and PUT it via gh api.
 # Idempotent: rerunning overwrites with the same payload.
-echo "▸ [6/6] Branch protection on ${REPO} (from .github/settings.yml)"
+echo "▸ [7/7] Branch protection on ${REPO} (from .github/settings.yml)"
 
 apply_branch_protection() {
   local settings=".github/settings.yml"
