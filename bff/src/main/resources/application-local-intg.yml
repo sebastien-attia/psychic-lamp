@@ -5,6 +5,11 @@
 # The public half is published at /.well-known/jwks.json by JwksController so
 # Keycloak can verify the assertion.
 spring:
+  # Spring Cloud Gateway route table is imported per non-dev profile so the
+  # dev profile (which does not wire the BFF's OAuth2AuthorizedClientManager)
+  # never registers TokenRelay-bearing routes.
+  config:
+    import: classpath:application-routes.yml
   datasource:
     # In Docker compose, DATABASE_URL/USERNAME/PASSWORD are passed by the
     # bff service env (postgres host == 'postgres'). When running in an
@@ -21,7 +26,15 @@ spring:
             client-id: ${KEYCLOAK_CLIENT_ID}
             client-authentication-method: private_key_jwt
             authorization-grant-type: authorization_code
-            redirect-uri: "{baseUrl}/login/oauth2/code/keycloak"
+            # Hard-pinned to Vite (:5173) instead of "{baseUrl}/..." because
+            # the SPA lives on Vite after the SCG migration. {baseUrl} would
+            # resolve from the incoming request's Host header — which the
+            # Vite proxy spoofs to localhost:8080 — and that would send the
+            # browser back to the BFF on :8080, which no longer serves the
+            # SPA. Vite already proxies /login/** to the BFF, so the
+            # callback flows through Vite and the browser stays on :5173.
+            # Keycloak's registered redirectUris (BFF_BASE_URL=:5173) match.
+            redirect-uri: "http://localhost:5173/login/oauth2/code/keycloak"
             scope:
               - openid
               - profile

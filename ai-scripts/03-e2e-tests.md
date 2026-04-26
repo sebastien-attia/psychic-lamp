@@ -23,11 +23,12 @@
     <project>The Boat App — E2E tests</project>
     <stack-under-test>
       Full local-intg stack (docker compose up), browser-facing surface:
-      - BFF at http://localhost:8080 — serves the Vue SPA, handles OAuth2 login, proxies /api/* to the Business Service
+      - Vite (frontend) at http://localhost:5173 — serves the Vue SPA and proxies /api,/oauth2,/login,/logout to the BFF on :8080. THIS is the URL E2E tests open in the browser.
+      - BFF at http://localhost:8080 — Spring Cloud Gateway: handles OAuth2 login (callback also lands on :5173 and is proxied through), proxies /api/* to the Business Service with TokenRelay. Does NOT serve the SPA.
       - Business Service at http://localhost:8081 — internal JWT resource server (not exercised directly by E2E)
       - Keycloak at http://localhost:8180 (realm: boat-app, test user: demo/demo123)
       - PostgreSQL at localhost:5432
-      Authentication (from the browser): session-based (HttpOnly cookie set by the BFF after Keycloak login)
+      Authentication (from the browser): session-based (HttpOnly cookie set by the BFF after Keycloak login; cookie is on the BFF origin and reaches the BFF same-origin via the Vite proxy)
     </stack-under-test>
     <test-runner>Playwright (TypeScript), running against docker compose up</test-runner>
     <auth-model>

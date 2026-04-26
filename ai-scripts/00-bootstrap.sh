@@ -320,14 +320,14 @@ paths: ["infra/**", "docker-compose*.yml", "Dockerfile*", ".github/**"]
 ---
 # Infrastructure Rules
 - Docker: multi-stage builds, non-root, pinned versions, health checks
-- 4 containers (local-intg): bff (serves Vue SPA + OAuth), business-service, postgres, keycloak
+- 5 long-running containers (local-intg): frontend (Vite dev server :5173), bff (Spring Cloud Gateway :8080 — OAuth2 session, CSRF, TokenRelay, API + auth only), business-service, postgres, keycloak — plus three one-shot sidecars: bff-keygen (RSA key), keycloak-config (realm import), frontend-codegen (SPA TypeScript API client codegen).
 - 2 containers (dev): postgres-dev, business-service-dev (auth bypass)
-- docker-compose.yml: local-intg (full stack)
+- docker-compose.yml: local-intg (full stack). Browser opens the SPA at http://localhost:5173, served by the `frontend` service; the BFF on :8080 is API + auth only. Keycloak's redirect_uri also points at :5173 — Vite proxies /login,/oauth2,/logout,/api to the BFF.
 - docker-compose.dev.yml: dev mode (business-service+postgres, no Keycloak, no BFF)
-- BFF Dockerfile: 3-stage (Node→frontend dist, JDK→BFF jar with static/, JRE runtime)
+- BFF Dockerfile: 2-stage (JDK→BFF jar, JRE runtime). The Vue SPA is NOT baked in — it is served by Vite in dev / local-intg and by Azure Static Web Apps (Bring-Your-Own-Backend) in staging / prod.
 - Business Service Dockerfile: 2-stage (JDK→jar, JRE runtime)
-- Terraform: modular, Azure remote state, pinned providers
-- GitHub Actions: OIDC federation, staging auto-deploy, prod on release
+- Terraform: modular, Azure remote state, pinned providers. Staging / prod adds an `azurerm_static_site` + `azurerm_static_site_linked_backend` pair pointing at the BFF Container App.
+- GitHub Actions: OIDC federation, staging auto-deploy, prod on release. SPA deploy via `Azure/static-web-apps-deploy@v1` runs alongside the BFF + BS image deploys.
 RULE
 
 cat > .claude/rules/openapi-contract.md << 'RULE'

@@ -25,9 +25,12 @@
     <architecture>
       Two Spring Boot services: the API shape defined here is implemented by the
       Business Service (JWT resource server, :8081) and transparently proxied by
-      the BFF (:8080), which also serves the Vue SPA. From the browser's
-      perspective the API is same-origin behind the BFF's HttpOnly session
-      cookie (no CORS, no Bearer token in the browser).
+      the BFF (Spring Cloud Gateway, :8080). The SPA is hosted separately —
+      by Vite at :5173 in dev/local-intg and by Azure Static Web Apps in
+      staging/prod — and reaches the BFF same-origin (Vite proxy or SWA
+      linked-backend). From the browser's perspective the API is same-origin
+      behind the BFF's HttpOnly session cookie (no CORS, no Bearer token in
+      the browser).
 
       The OpenAPI spec documents the API shape for code generation (both the
       Business Service controllers and the frontend TypeScript client are

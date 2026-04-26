@@ -278,7 +278,7 @@
             }
         There is no `password_secret_name`, no ACR admin secret in Key Vault,
         and no docker-login-style credential anywhere.
-      - Container App: bff (user-facing edge, serves the Vue SPA + proxies /api/*)
+      - Container App: bff (Spring Cloud Gateway — user-facing edge for /api,/oauth2,/login,/logout. Does NOT serve the SPA: the SPA is hosted on Azure Static Web Apps with Bring-Your-Own-Backend pointing at this Container App.)
         - Image from ACR
         - Min replicas: 1, Max: 3
         - CPU: 0.5, Memory: 1Gi
@@ -337,8 +337,15 @@
             bootstrap — after first start they can be rotated; keycloak-config-cli uses
             them to apply infra/keycloak/realm.yaml via the Ansible post-deploy task)
         - Health probes: liveness = /health/live, readiness = /health/ready
-      - Note: no separate "frontend" Container App — the Vue SPA is baked into
-        the BFF image at bff/src/main/resources/static/ and served by Spring.
+      - Note: no separate "frontend" Container App. Since the SCG migration
+        the Vue SPA is NO LONGER baked into the BFF image. In staging / prod
+        it lives on Azure Static Web Apps (provisioned by the
+        `static-web-app/` module — see step 7c) and reaches the BFF
+        Container App via SWA's Bring-Your-Own-Backend (linked-backend).
+      - Cutover: the BFF Container App's `ingress.external_enabled` can be
+        `true` while you smoke-test the BFF directly; flip to `false` once
+        SWA is wired so all browser traffic must traverse SWA. The change
+        is a single Terraform diff and is reversible.
       - Note: Realm / client configuration is NOT managed by Terraform. Terraform
         provisions the Keycloak Container App (image + DB + admin creds); the
         Ansible `configure-keycloak.yml` playbook runs keycloak-config-cli
@@ -467,6 +474,72 @@
         grows. A timed-out job is a `Failed` execution, surfaced in step 5
         of 02c3.
     </step>
+    <step order="7c">
+      Create modules/static-web-app/ to host the Vue SPA in staging /
+      production. Since the SCG migration the SPA is no longer baked into
+      the BFF image — it lives on Azure Static Web Apps, which front-ends
+      the BFF Container App via its Bring-Your-Own-Backend (linked-backend)
+      mechanism. Cookies stay first-party because SWA serves both the SPA
+      and the API surface from a single hostname.
+
+      Resources:
+      ```hcl
+      resource "azurerm_static_web_app" "this" {
+        name                = "${var.project_name}-${var.environment}-spa"
+        resource_group_name = var.resource_group_name
+        location            = var.location
+
+        # Standard SKU is REQUIRED for the linked-backend feature consumed
+        # below. Free SKU would force every browser API call through a
+        # public BFF endpoint instead.
+        sku_tier = "Standard"
+        sku_size = "Standard"
+
+        app_settings = var.app_settings
+        tags         = var.tags
+      }
+
+      # Bring-Your-Own-Backend wiring — the SWA forwards requests matching
+      # the routes[] in `frontend/staticwebapp.config.json` (/api/*,
+      # /oauth2/*, /login/*, /logout, /.well-known/*, /actuator/*) to this
+      # Container App.
+      resource "azurerm_static_web_app_linked_backend" "bff" {
+        static_web_app_id   = azurerm_static_web_app.this.id
+        backend_resource_id = var.bff_container_app_id
+        region              = var.location
+      }
+      ```
+
+      Inputs (variables.tf):
+      - project_name, environment, resource_group_name (standard set).
+      - location: SWA-supported Azure region (defaults to `westeurope`).
+        The linked-backend region MUST match.
+      - bff_container_app_id: resource ID of the BFF Container App from
+        module.container_apps (output `bff_container_app_id` — add it if
+        not already exposed).
+      - app_settings (optional map): SWA app settings. Empty by default —
+        we have no SWA-managed Functions.
+      - tags (optional map).
+
+      Outputs (outputs.tf):
+      - `static_web_app_id` — for downstream wiring.
+      - `default_host_name` — the canonical browser entrypoint
+        (`https://<this>/`).
+      - `api_key` — deployment token consumed by `Azure/static-web-apps-deploy@v1`
+        in CI. Sensitive (= true) — surface via GitHub environment secret
+        `AZURE_SWA_DEPLOY_TOKEN`, never log.
+
+      Companion file: `frontend/staticwebapp.config.json` (committed in
+      02b5) declares the SPA fallback (`navigationFallback.rewrite =
+      /index.html`) and the API + auth route exclusions. Vite's
+      `npm run build` copies it into `dist/` automatically.
+
+      Cutover note: until the SWA linked-backend is active, leave the BFF
+      Container App's ingress `external_enabled = true` so smoke tests can
+      hit the BFF directly. After SWA serves the SPA successfully, flip
+      ingress to `external_enabled = false` so all browser traffic must
+      traverse SWA.
+    </step>
     <step order="8">
       Create root main.tf that wires all modules together:
       - Calls each module with appropriate variables
@@ -547,7 +620,7 @@
     git commit -m "infra: Terraform modules for Azure deployment
 
     - Modules: networking, database, container-registry, container-apps, keyvault
-    - Azure Container Apps: bff (external ingress, serves SPA + proxy),
+    - Azure Container Apps: bff (external ingress, Spring Cloud Gateway — API + auth only; SPA is on Azure Static Web Apps with linked-backend → BFF),
       business-service (internal ingress only, JWT resource server),
       keycloak (external ingress)
     - PostgreSQL Flexible Server (1 instance, 3 isolated databases: bff_session,

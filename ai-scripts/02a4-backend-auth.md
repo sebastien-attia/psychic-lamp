@@ -176,8 +176,13 @@
       - Access rules:
         - /api/** → authenticated, return 401 JSON on unauthenticated AJAX (not 302)
         - /actuator/health, /swagger-ui/**, /v3/api-docs/** → permitAll
-        - /, /index.html, /assets/** → permitAll (Vue SPA static files served by BFF)
-        - SPA forward controller: /boats/**, etc. → forward to index.html
+        - /, /index.html, /assets/** are NOT in the permit list — the SPA is
+          served by Vite (dev/local-intg) or Azure Static Web Apps
+          (staging/prod), never by the BFF. `BffStaticContentRegressionTest`
+          enforces that hits on those paths return 404.
+        - No SPA forward controller — the BFF doesn't host the SPA. Browser
+          deep links land on Vite/SWA, which serves index.html and lets the
+          Vue router resolve the route client-side.
       - NO user sync in BFF login success handler — sync happens in Business Service from JWT claims.
         (BFF just establishes the session and stores the OAuth2AuthorizedClient.)
     </step>
@@ -263,58 +268,55 @@
               return manager;
           }
 
-          @Bean
-          RestClient businessServiceRestClient(
-                  @Value("${business-service.url}") String businessServiceUrl,
-                  OAuth2AuthorizedClientManager authorizedClientManager) {
-              return RestClient.builder()
-                  .baseUrl(businessServiceUrl)
-                  .requestInterceptor((request, body, execution) -> {
-                      // Inject Bearer token on every request to Business Service
-                      var authentication = SecurityContextHolder.getContext().getAuthentication();
-                      if (authentication != null) {
-                          var authorizedClient = authorizedClientManager.authorize(
-                              OAuth2AuthorizeRequest
-                                  .withClientRegistrationId("keycloak")
-                                  .principal(authentication)
-                                  .build()
-                          );
-                          if (authorizedClient != null) {
-                              request.getHeaders()
-                                  .setBearerAuth(authorizedClient.getAccessToken().getTokenValue());
-                          }
-                      }
-                      return execution.execute(request, body);
-                  })
-                  .build();
-          }
-
-          @Bean
-          HttpServiceProxyFactory businessServiceProxyFactory(RestClient businessServiceRestClient) {
-              return HttpServiceProxyFactory
-                  .builderFor(RestClientAdapter.create(businessServiceRestClient))
-                  .build();
-          }
-
-          @Bean
-          BusinessServiceClient businessServiceClient(HttpServiceProxyFactory factory) {
-              // BusinessServiceClient is GENERATED from contracts/openapi.yaml by the
-              // openapi-generator-maven-plugin (see 02a1 step 2). Import it from
-              // ch.owt.boatapp.bff.adapter.out.client.generated.BusinessServiceClient.
-              return factory.createClient(BusinessServiceClient.class);
-          }
+          // No outbound RestClient bean here. After the SCG migration the
+          // BFF proxies via Spring Cloud Gateway Server Web MVC: routes are
+          // declared in `application-routes.yml` (see 02a3 step 8) and the
+          // TokenRelay filter resolves `OAuth2AuthorizedClientManager` per
+          // request via `getApplicationContext(request).getBean(...)`. The
+          // manager bean above is the single integration point — TokenRelay
+          // calls `manager.authorize(...)`, attaches the resulting access
+          // token as a `Bearer` header on the outbound call, and triggers
+          // refresh transparently when the cached token has expired.
       }
       ```
 
+      How token forwarding works under SCG:
+      - The browser POSTs `/api/v1/boats` (or any path matching the route's
+        Path predicate) with the BFF's session cookie.
+      - Spring Security's filter chain authenticates the session.
+      - SCG matches the route, applies its filter chain (TokenRelay first).
+      - `TokenRelayFilterFunctions` resolves the
+        `OAuth2AuthorizedClientManager` bean defined above, calls
+        `manager.authorize(...)` with the current `Authentication`, and
+        adds `Authorization: Bearer <access_token>` to the outbound request.
+      - SCG's `RestClientProxyExchange` makes the upstream call; the
+        Business Service validates the JWT.
+
       How token refresh works:
-      - Access token has short TTL (5 min, configured in Keycloak)
-      - DefaultOAuth2AuthorizedClientManager detects expiry and automatically uses the stored
-        refresh_token to obtain a new access_token from Keycloak
-      - The refresh_token is stored in OAuth2AuthorizedClientRepository (backed by Spring Session JDBC)
-      - This is transparent to the frontend — the session cookie stays valid
-      - The offline_access scope in registration ensures a long-lived refresh_token is issued
-      - Every refresh call (and the initial code exchange) carries a freshly signed
-        client_assertion JWT — no client_secret is ever sent over the wire
+      - Access token has short TTL (5 min, configured in Keycloak).
+      - `DefaultOAuth2AuthorizedClientManager` detects expiry and
+        automatically uses the stored refresh_token to obtain a new
+        access_token from Keycloak.
+      - The refresh_token is stored in `OAuth2AuthorizedClientRepository`
+        (backed by Spring Session JDBC).
+      - This is transparent to the frontend — the session cookie stays valid.
+      - The `offline_access` scope in registration ensures a long-lived
+        refresh_token is issued.
+      - Every refresh call (and the initial code exchange) carries a
+        freshly signed `client_assertion` JWT — no `client_secret` is ever
+        sent over the wire.
+
+      Outbound HTTP transport: provide a separate
+      `Http11RestClientCustomizer` (`@Configuration` with a single
+      `ClientHttpRequestFactory` bean using
+      `JdkClientHttpRequestFactory(HttpClient.newBuilder().version(HTTP_1_1).build())`).
+      SCG's `gatewayRestClientCustomizer` consumes it via its
+      `ObjectProvider&lt;ClientHttpRequestFactory&gt;` parameter and applies
+      it to the RestClient that backs `RestClientProxyExchange`. Without
+      this, the JDK 25 HttpClient negotiates h2c against plaintext
+      upstreams and surfaces `Received RST_STREAM: Stream cancelled` —
+      this trips integration tests AND can trip the production Container
+      Apps mesh. See 02a3 step 9.
     </step>
 
     <step order="8">
@@ -441,7 +443,10 @@
         - All endpoints accessible without any token
       - Local-intg (BFF + Business Service):
         - BFF: user logs in via oauth2Login → session cookie set → access_token stored in session
-        - BFF calls Business Service: attaches Bearer access_token header via RestClient interceptor
+        - SCG forwards `/api/v1/boats/**` to Business Service: TokenRelay
+          filter resolves `OAuth2AuthorizedClientManager` per request and
+          attaches `Authorization: Bearer <access_token>` (transparent
+          refresh on expiry)
         - Business Service: validates JWT → extracts sub claim → syncs AppUser → processes request
       Both flows go through the same domain.port.in interfaces in Business Service.
     </step>
@@ -489,7 +494,10 @@
         the auth-code and refresh-token RestClient*TokenResponseClient beans —
         every token-endpoint call carries a signed client_assertion (no shared secret)
       - JwksController publishes the public half at /.well-known/jwks.json (Keycloak fetches it)
-      - RestClient interceptor: attaches Bearer access_token on every Business Service call
+      - Token forwarding: Spring Cloud Gateway TokenRelay filter (declared in
+        application-routes.yml, resolves OAuth2AuthorizedClientManager per
+        request) attaches Bearer access_token on every Business Service call;
+        Http11RestClientCustomizer pins SCG's outbound RestClient to HTTP/1.1
       - Automatic token refresh: offline_access scope + DefaultOAuth2AuthorizedClientManager
     - Keycloak realm: access_token TTL 5min, refresh_token 30min, test user demo/demo123
     - Dev mode: Business Service only (no BFF, no Keycloak needed)"

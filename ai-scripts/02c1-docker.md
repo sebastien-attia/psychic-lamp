@@ -22,7 +22,7 @@
   <context>
     <architecture>
       Two Spring Boot services:
-      - BFF (bff/, port 8080): OAuth2 session, CSRF, token forwarding, serves Vue SPA static files
+      - BFF (bff/, port 8080): Spring Cloud Gateway — OAuth2 session, CSRF, token forwarding (TokenRelay). API + auth only. The SPA is NOT baked in — Vite serves it in dev/local-intg, Azure Static Web Apps in staging/prod.
       - Business Service (business-service/, port 8081): JWT resource server, domain logic, JPA
       Both share the same PostgreSQL instance (not the same database). Three isolated
       databases live on that instance — bff_session (BFF), boatapp (business-service),
@@ -30,7 +30,7 @@
 
       Environment profiles:
       - dev: business-service + postgres only (no BFF, no Keycloak, auth bypass)
-      - local-intg: all 4 services (BFF + business-service + postgres + keycloak)
+      - local-intg: full stack — frontend (Vite) + BFF + business-service + postgres + keycloak (plus the bff-keygen / keycloak-config / frontend-codegen one-shot sidecars)
       - staging/prod: Azure (Terraform/Ansible)
     </architecture>
   </context>
@@ -85,7 +85,11 @@
       these files hold only URLs + placeholders):
       - `infra/keycloak/env/local-intg.env`
         ```env
-        BFF_BASE_URL=http://localhost:8080
+        # BFF_BASE_URL is the URL the BROWSER uses, not the URL the BFF binds to.
+        # After the SCG migration the SPA is served by Vite at :5173 and the
+        # OAuth2 callback / post-logout URI must come back to Vite (which
+        # proxies /login,/oauth2,/logout to the BFF). DO NOT "fix" this to :8080.
+        BFF_BASE_URL=http://localhost:5173
         BFF_JWKS_URL=http://bff:8080/.well-known/jwks.json
         # DEMO_PASSWORD taken from the shell env / .env (default demo123 in local-intg)
         ```
@@ -138,12 +142,14 @@
       - Stage 2 (runtime): eclipse-temurin:25-jre → non-root user, HEALTHCHECK on /actuator/health, JVM container flags
     </step>
     <step order="3">
-      Create docker-compose.yml (default = local-intg, full stack — all 4 services):
+      Create docker-compose.yml (default = local-intg, full stack — frontend + bff + business-service + postgres + keycloak, plus one-shot sidecars):
       ```yaml
       # Usage: docker compose up
-      # Starts: postgres + keycloak + business-service + bff
-      # Browser: http://localhost:8080 (BFF serves Vue SPA + handles OAuth)
-      # Business Service API (internal): http://localhost:8081 (not for browser use)
+      # Starts: postgres + keycloak + business-service + bff + frontend (Vite)
+      # Browser: http://localhost:5173 (Vite serves the SPA and proxies
+      #          /api,/oauth2,/login,/logout to the BFF on :8080)
+      # BFF API + OAuth (internal):       http://localhost:8080  (not for browser use)
+      # Business Service API (internal):  http://localhost:8081  (not for browser use)
       services:
         postgres:
           image: postgres:17-alpine
@@ -207,7 +213,11 @@
             IMPORT_FILES_LOCATIONS: /config/realm.yaml
             IMPORT_VAR_SUBSTITUTION_ENABLED: "true"
             # Variables referenced by realm.yaml (resolved at import time).
-            BFF_BASE_URL: http://localhost:8080
+            # BFF_BASE_URL is the BROWSER-facing origin used for Keycloak's
+            # redirectUris / webOrigins / post-logout-redirect-uris. Post-SCG
+            # the SPA is on Vite (:5173) so the OAuth2 callback must land
+            # there (Vite proxies /login/** to the BFF). DO NOT change to :8080.
+            BFF_BASE_URL: http://localhost:5173
             BFF_JWKS_URL: http://bff:8080/.well-known/jwks.json
             DEMO_PASSWORD: ${DEMO_PASSWORD:-demo123}
 
@@ -392,7 +402,7 @@
 
   <verification>
     Run the phase's verification script — it validates both compose files,
-    checks 4 services declared (bff, business-service, postgres, keycloak),
+    checks the four core services declared (bff, business-service, postgres, keycloak — `frontend` and the codegen sidecar are not in the gate, so they may evolve without churning the verification script),
     no :latest tags, USER directive in Dockerfiles, healthchecks present,
     and no secret literals:
     ```bash
@@ -407,12 +417,12 @@
     git add -A
     git commit -m "infra: Docker Compose for dev (business-service only) and local-intg (full stack)
 
-    - docker-compose.yml: local-intg with bff + business-service + postgres + keycloak (4 services)
+    - docker-compose.yml: local-intg with frontend (Vite) + bff + business-service + postgres + keycloak, plus one-shot sidecars (bff-keygen, keycloak-config, frontend-codegen)
     - docker-compose.dev.yml: business-service-dev + postgres-dev (no BFF, no Keycloak, auth bypass)
     - infra/postgres/init/01-init-dbs.sh: creates 3 DBs + 3 roles on first boot, one role per DB
     - bff/Dockerfile: 4-stage (TS codegen + Node frontend build + JDK BFF build + JRE runtime)
     - business-service/Dockerfile: 2-stage (JDK build + JRE runtime)
-    - BFF serves Vue SPA from resources/static/ (built in Docker)
+    - SPA served by Vite at :5173 in local-intg (not baked into the BFF jar); BFF is Spring Cloud Gateway, API + auth only
     - Keycloak issuer URI mismatch documented (internal Docker DNS vs browser localhost)
     - Makefile for dev/up/down/test/e2e convenience commands"
     ```

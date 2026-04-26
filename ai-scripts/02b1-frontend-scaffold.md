@@ -34,9 +34,12 @@
       NO oidc-client-ts, NO PKCE, NO token storage, NO refresh logic in frontend.
     </auth-model>
     <build>
-      Frontend builds to frontend/dist/, which is copied to bff/src/main/resources/static/
-      so the BFF serves the SPA. In dev mode, Vite dev server proxies /api directly to Business Service.
-      In local-intg mode, Vite dev server proxies /api to the BFF.
+      Frontend builds to frontend/dist/. The SPA is NOT baked into the BFF jar
+      (the BFF is Spring Cloud Gateway, API + auth only): in dev/local-intg
+      Vite serves the SPA at :5173, in staging/prod Azure Static Web Apps
+      hosts it (linked-backend → BFF Container App). In dev mode, Vite proxies
+      /api directly to Business Service. In local-intg mode, Vite proxies
+      /api,/oauth2,/login,/logout to the BFF on :8080.
     </build>
     <toolchain-warning>
       `@openapitools/openapi-generator-cli` is a Node wrapper that shells out to

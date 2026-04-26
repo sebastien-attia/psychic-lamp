@@ -40,7 +40,7 @@ Phase 5    ./ai-scripts/run-phase.sh 5            docs → 🎉
 | Decision | Choice |
 |----------|--------|
 | Architecture | **Strict hexagonal** in business-service; BFF is a thin proxy. ArchUnit enforced. DTOs + BFF client + BS controller interface are **generated** from `contracts/openapi.yaml` (openapi-generator-maven-plugin). |
-| Service count | **2** Spring Boot services: BFF (:8080, OAuth2 session + SPA) + Business Service (:8081, JWT resource server + JPA) |
+| Service count | **2** Spring Boot services: BFF (Spring Cloud Gateway, :8080 — OAuth2 session, CSRF, TokenRelay, API + auth only) + Business Service (:8081, JWT resource server + JPA). The Vue SPA is hosted separately (Vite :5173 in dev/local-intg, Azure Static Web Apps in staging/prod) — NOT served by the BFF. |
 | Auth — BFF | **Session cookie** (HttpOnly/Secure/SameSite), Keycloak **confidential** client, CSRF enabled |
 | Auth — BFF ↔ Keycloak | **`private_key_jwt`** (signed JWT client_assertion, RFC 7523). NO shared client_secret. BFF publishes public JWKS at `/.well-known/jwks.json`; Keycloak fetches it (`use.jwks.url=true`). |
 | Auth — Business Service | **Stateless JWT Bearer** (spring-oauth2-resource-server), no session, no CSRF |
@@ -71,17 +71,24 @@ Phase 5    ./ai-scripts/run-phase.sh 5            docs → 🎉
 
 ```
 bff/
-├── adapter/
-│   ├── in/web/                    ← Spring @RestController (HTTP adapter)
-│   │   ├── BoatController         (proxies to BoatBffService)
-│   │   ├── AuthController         (/api/me, session info)
-│   │   └── dto/generated/         (openapi-generator output — do not edit)
-│   └── out/client/generated/      ← BusinessServiceClient (@HttpExchange, generated)
-└── infrastructure/
-    ├── service/                   BoatBffService (thin orchestrator, NO @Transactional)
-    ├── security/                  SecurityConfig (OAuth2 session + CSRF), BffSecurityHelper
-    └── config/                    BeanConfig (RestClient with Bearer interceptor)
+├── adapter/in/web/                ← Spring @RestController — BFF-LOCAL endpoints only
+│   ├── AuthController             (/api/me — projects OidcUser → UserInfoResponse)
+│   ├── JwksController             (/.well-known/jwks.json)
+│   ├── GlobalExceptionHandler     (RFC 9457 envelope for local handlers)
+│   ├── ProblemTypes               (URI registry)
+│   ├── JakartaCodeTranslator      (constraint name → app code)
+│   └── dto/generated/             (openapi-generator output — UserInfoResponse, Severity, ValidationMessageResponse only)
+├── infrastructure/
+│   ├── config/BffConfig           (bffSigningJwk, private_key_jwt token clients, OAuth2AuthorizedClientManager)
+│   ├── security/                  (SecurityConfig, DevSecurityConfig, RestAuthenticationEntryPoint, SpaCsrfTokenRequestHandler, KeycloakServerSideLogoutHandler)
+│   └── web/                       (ScgUpstreamFailureFilter, Http11RestClientCustomizer)
+└── src/main/resources/
+    ├── application.yml + application-{dev,local-intg,staging,prod}.yml
+    ├── application-routes.yml     ← SCG route table (Path=/api/v1/boats/{*subpath} + TokenRelay=keycloak)
+    └── db/changelog/              ← Liquibase: SPRING_SESSION schema in bff_session DB
 ```
+
+NB: there is NO BoatController, NO BoatBffService, NO BusinessServiceClient — proxying lives in `application-routes.yml`. SCG's `TokenRelayFilterFunctions` resolves the manager bean per request via `getBean`.
 
 ### Business Service (`business-service/src/main/java/ch/owt/boatapp/`)
 
