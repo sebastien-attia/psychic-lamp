@@ -150,6 +150,7 @@ jobs:
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: '1.9.8'
+          terraform_wrapper: false
 
       - name: Terraform init + targeted plan/apply (ACR only)
         working-directory: infra/terraform/environments/staging
@@ -326,6 +327,7 @@ jobs:
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: '1.9.8'
+          terraform_wrapper: false
 
       - name: Terraform init + plan (staging)
         working-directory: infra/terraform/environments/staging
@@ -401,6 +403,7 @@ jobs:
         uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
         with:
           terraform_version: '1.9.8'
+          terraform_wrapper: false
 
       - name: Download tfplan artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
