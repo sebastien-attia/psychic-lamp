@@ -360,8 +360,24 @@ repo the gitleaks job runs without a license — no action needed.
 |-------------------------------------|-------------------------------------------|---------------------------------------------------------------------------------------|
 | Open PR to `main` or `staging`      | `ci.yml`, `codeql.yml`, `terraform-plan.yml` | Lint, build, SAST, SBOM, SCA, container scan, e2e; terraform plan posted as PR comment |
 | Push to `main`                      | `ci.yml`                                  | Same as above (no deploy)                                                             |
-| Push to `staging`                   | `deploy-staging.yml`                      | Build + push images to ACR, terraform apply, Ansible deploy, smoke tests              |
+| Push to `staging`                   | `deploy-staging.yml`                      | Bootstrap ACR (targeted apply) → build + push images → full `terraform apply` → Ansible deploy → smoke tests |
 | Publish a GitHub Release on `main`  | `deploy-production.yml`                   | Production version of the staging flow, gated by the Required-Reviewer rule (§A.5)    |
+
+> Both deploy workflows use a **two-phase apply**. A short
+> `infra-bootstrap` job runs a `terraform apply -target=` scoped to just
+> the ACR (and its AcrPush role binding) BEFORE `build-push` so the very
+> first deploy doesn't fail on `az acr login`. The full apply is the
+> second phase (after `build-push`) so it can pin container apps to the
+> freshly built image SHA tag. Bootstrap is idempotent — a no-op once
+> the ACR is in state. On production, reviewers see one extra "0 to add"
+> approval prompt per release (the bootstrap plan); on the very first
+> production deploy that prompt is the one creating the ACR.
+>
+> **Do not delete `infra-bootstrap` once an environment is up.** It is a
+> no-op on every subsequent run, but removing it breaks the next
+> greenfield apply (new subscription, restored-from-backup environment,
+> rotated tenant) — the chicken-and-egg comes back the moment there is
+> no ACR in state.
 
 ### B.6 First-build smoke test
 

@@ -3,20 +3,27 @@
 # Auto-deploy to the staging environment on every push to the `staging`
 # branch. No manual approval — staging is the safety net for production.
 #
-# Pipeline order (phase-4b shape — split into 3 jobs):
+# Pipeline order:
 #   1. Reuse ci.yml end-to-end (lint, secret-scan, container-scan, SCA,
 #      build, test, docker sanity, E2E).
-#   2. `build-push` — Authenticate to Azure via OIDC federation, run
+#   2. `infra-bootstrap` — targeted `terraform apply` that creates JUST the
+#      ACR (and its AcrPush role binding for the CI federated identity).
+#      Required because step 3 docker-pushes to that ACR, while the full
+#      apply (step 5) runs AFTER step 3 to pin container apps to the new
+#      image SHA tag. Without splitting, the very first deploy fails on
+#      `az acr login` with "registry not found". Idempotent: a no-op once
+#      the ACR exists in state.
+#   3. `build-push` — Authenticate to Azure via OIDC federation, run
 #      `az acr login`, build/push bff + business-service via the
 #      docker-build-push composite action (which now emits image digests),
 #      then SIGN each image (cosign keyless, digest-targeted) and produce
 #      a SLSA Build L3 provenance attestation pushed back to ACR alongside
 #      the image. Tags pushed: `staging` (rolling) and
 #      `staging-<short-sha>` (immutable for rollback / debugging).
-#   3. `plan` — `terraform init` + `terraform plan -out=tfplan.binary`,
+#   4. `plan` — `terraform init` + `terraform plan -out=tfplan.binary`,
 #      render a markdown summary, upload `tfplan-<run_id>` as an artifact
 #      so the apply job can consume the *exact* plan that was reviewed.
-#   4. `apply` — Carries `environment: staging` so any deployment-protection
+#   5. `apply` — Carries `environment: staging` so any deployment-protection
 #      rule fires AFTER the plan exists. Downloads the artifact, applies it
 #      verbatim (no re-plan), runs Ansible post-deploy, smoke-tests the
 #      stack, then uploads the BOM to Dependency-Track as the post-deploy
@@ -66,11 +73,99 @@ jobs:
       security-events: write
       actions: read
 
+  infra-bootstrap:
+    # FIRST PASS of `terraform apply`, scoped to JUST the container registry
+    # resource and its AcrPush role binding for the CI federated identity.
+    # The full apply (job `apply`) is the SECOND pass — it runs after
+    # build-push so it can pin container_apps to the freshly built image
+    # SHA tag. Without this split the very first deploy fails on
+    # `az acr login` because the ACR has not been provisioned yet.
+    #
+    # The two -target flags are scoped narrowly:
+    #   - azurerm_container_registry.this        — the registry resource.
+    #   - azurerm_role_assignment.acr_push       — AcrPush for CI's SP.
+    # NOT included: azurerm_role_assignment.acr_pull. Those have for_each
+    # over container_apps's consumer MIs, which don't exist yet — they
+    # land naturally in the second-pass apply. Targeted-apply pulls in
+    # transitive deps (RG from module.networking) automatically.
+    #
+    # Idempotent: subsequent runs see "no changes" and exit fast. No
+    # `environment: staging` claim is needed: the push-to-staging trigger
+    # already matches the `gh-staging` FIC (subject
+    # `repo:<owner>/<repo>:ref:refs/heads/staging`, see
+    # ai-scripts/00d-bootstrap-azure.sh). The deployment-protection gate
+    # for staging stays on `apply`, where the diff is reviewable —
+    # bootstrap is intentionally outside that gate so it can run on every
+    # push without operator clicks.
+    name: Bootstrap ACR (targeted terraform apply)
+    needs: [ci]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      # All root-level TF_VAR_* must be set even though the targeted
+      # resources don't consume them — Terraform validates the variable
+      # surface of the entire root module before honoring -target.
+      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
+      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
+      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
+      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
+      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Azure login (OIDC, no client secret)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve federated SP object ID
+        env:
+          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRINCIPAL_ID=$(az ad sp show --id "${AZ_CLIENT_ID}" --query id -o tsv)
+          echo "TF_VAR_ci_push_principal_id=${PRINCIPAL_ID}"  >> "$GITHUB_ENV"
+          echo "TF_VAR_tf_apply_principal_id=${PRINCIPAL_ID}" >> "$GITHUB_ENV"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: '1.9.8'
+
+      - name: Terraform init + targeted plan/apply (ACR only)
+        working-directory: infra/terraform/environments/staging
+        # `-lock-timeout=5m` absorbs sub-minute blob-lease overlap with the
+        # later `apply` job (concurrency `cancel-in-progress: false` queues
+        # same-key runs, and back-to-back deploys can race the state lock).
+        # We plan-then-apply (rather than `apply -auto-approve`) so the
+        # bootstrap diff is rendered into the run summary — same audit
+        # surface as the main `apply` job, scaled down. `apply tfplan`
+        # consumes the exact plan that was just rendered.
+        run: |
+          set -euo pipefail
+          terraform init -lock-timeout=5m \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
+          terraform plan -input=false -lock-timeout=5m -out=tfplan-bootstrap.binary \
+            -target='module.boatapp.module.container_registry.azurerm_container_registry.this' \
+            -target='module.boatapp.module.container_registry.azurerm_role_assignment.acr_push'
+          {
+            echo "## ACR bootstrap plan (staging)"
+            echo '```'
+            terraform show -no-color tfplan-bootstrap.binary | head -80
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          terraform apply -input=false -lock-timeout=5m tfplan-bootstrap.binary
+
   build-push:
     # Build + push images, then sign with cosign (keyless OIDC) and emit
     # a SLSA Build L3 provenance attestation.
     name: Build, push, sign
-    needs: [ci]
+    needs: [ci, infra-bootstrap]
     runs-on: ubuntu-latest
     permissions:
       id-token: write       # OIDC for `azure/login@v2` + cosign keyless + attestations

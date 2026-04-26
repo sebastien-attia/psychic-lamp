@@ -19,6 +19,22 @@
 #     releases instead of commits in production.
 #   - Final job appends a "Deployed: <timestamp>" line to the release body.
 #
+# Like staging, this workflow has a two-phase apply: `infra-bootstrap`
+# creates JUST the ACR (targeted apply) before `build-push` so the very
+# first deploy doesn't fail on `az acr login`. `apply` is the second pass
+# and pins container apps to the new image tag.
+#
+# `infra-bootstrap` carries `environment: production` because the OIDC
+# federated identity credential for release-triggered runs is bound to
+# the `environment:production` subject claim (set up by 00d-bootstrap-
+# azure.sh). That means reviewers see TWO approval prompts on the very
+# first production deploy — one for bootstrap (creates ACR), one for
+# apply (creates everything else). On every subsequent release the
+# bootstrap plan is a no-op, but the gate still fires; reviewers see
+# "Plan: 0 to add, 0 to change" and click through. We accept that 1
+# extra click per release as the price of full automation; the
+# alternative is a one-shot manual `terraform apply -target` per env.
+#
 # Required environment-scoped secrets (GitHub → Settings → Environments →
 # production) — see .github/ENVIRONMENTS.md:
 #   TF_VAR_postgres_admin_password
@@ -66,11 +82,89 @@ jobs:
       security-events: write
       actions: read
 
+  infra-bootstrap:
+    # FIRST PASS of `terraform apply`, scoped to JUST the container registry
+    # resource and its AcrPush role binding. See workflow header for the
+    # rationale (chicken-and-egg: build-push needs ACR; full apply needs
+    # the new image tag, so it has to come AFTER build-push).
+    #
+    # Carries `environment: production` because the OIDC federated identity
+    # for release-triggered runs is `environment:production`-scoped.
+    name: Bootstrap ACR (targeted terraform apply)
+    needs: [ci]
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      # All root-level TF_VAR_* must be set even though the targeted
+      # resources don't consume them — Terraform validates the variable
+      # surface of the entire root module before honoring -target.
+      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
+      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
+      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
+      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
+      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+      RELEASE_TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Azure login (OIDC, no client secret)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Resolve federated SP object ID
+        env:
+          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          PRINCIPAL_ID=$(az ad sp show --id "${AZ_CLIENT_ID}" --query id -o tsv)
+          echo "TF_VAR_ci_push_principal_id=${PRINCIPAL_ID}"  >> "$GITHUB_ENV"
+          echo "TF_VAR_tf_apply_principal_id=${PRINCIPAL_ID}" >> "$GITHUB_ENV"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: '1.9.8'
+
+      - name: Terraform init + targeted plan/apply (ACR only)
+        working-directory: infra/terraform/environments/production
+        # `-lock-timeout=5m` absorbs sub-minute blob-lease overlap with the
+        # later `apply` job. Plan-then-apply (not `apply -auto-approve`)
+        # gives the production approver something concrete to inspect at
+        # the `environment: production` gate — the diff is rendered into
+        # the run summary BEFORE apply runs. After the first deploy this
+        # diff is "0 to add, 0 to change, 0 to destroy" and the approver
+        # clicks through; on first deploy it shows the ACR + AcrPush
+        # binding being created.
+        run: |
+          set -euo pipefail
+          terraform init -lock-timeout=5m \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
+          terraform plan -input=false -lock-timeout=5m -out=tfplan-bootstrap.binary \
+            -target='module.boatapp.module.container_registry.azurerm_container_registry.this' \
+            -target='module.boatapp.module.container_registry.azurerm_role_assignment.acr_push'
+          {
+            echo "## ACR bootstrap plan (production)"
+            echo '```'
+            terraform show -no-color tfplan-bootstrap.binary | head -80
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          terraform apply -input=false -lock-timeout=5m tfplan-bootstrap.binary
+
   build-push:
     # Build + push images, then sign with cosign (keyless OIDC) and emit a
     # SLSA Build L3 provenance attestation.
     name: Build, push, sign
-    needs: [ci]
+    needs: [ci, infra-bootstrap]
     runs-on: ubuntu-latest
     permissions:
       id-token: write       # OIDC for `azure/login@v2` + cosign keyless + attestations
