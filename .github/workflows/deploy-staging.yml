@@ -191,6 +191,7 @@ jobs:
       image_tag_sha: ${{ steps.compute.outputs.image_tag_sha }}
       bff_digest: ${{ steps.bff_push.outputs.digest }}
       business_digest: ${{ steps.business_push.outputs.digest }}
+      keycloak_digest: ${{ steps.keycloak_push.outputs.digest }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
@@ -221,6 +222,7 @@ jobs:
             echo "ACR_LOGIN=${ACR_LOGIN}"
             echo "BFF_IMAGE=${ACR_LOGIN}/bff"
             echo "BUSINESS_IMAGE=${ACR_LOGIN}/business-service"
+            echo "KEYCLOAK_IMAGE=${ACR_LOGIN}/keycloak"
             echo "IMAGE_TAG_SHA=${SHA_TAG}"
           } >> "$GITHUB_ENV"
           echo "image_tag_sha=${SHA_TAG}" >> "$GITHUB_OUTPUT"
@@ -283,6 +285,35 @@ jobs:
         with:
           subject-name: ${{ env.BUSINESS_IMAGE }}
           subject-digest: ${{ steps.business_push.outputs.digest }}
+          push-to-registry: true
+
+      # Keycloak is built from keycloak/Dockerfile (NOT pulled from
+      # quay.io). The Dockerfile bakes `kc.sh build --db=postgres` into
+      # the image so the Container App can launch with `start
+      # --optimized` — without the bake the optimized launcher crashes
+      # with "Unable to find the database vendor".
+      - name: Build & push keycloak image
+        id: keycloak_push
+        uses: ./.github/actions/docker-build-push
+        with:
+          context: keycloak
+          dockerfile: Dockerfile
+          image: ${{ env.KEYCLOAK_IMAGE }}
+          tags: |
+            staging
+            ${{ env.IMAGE_TAG_SHA }}
+
+      - name: Cosign sign keycloak image
+        env:
+          IMAGE: ${{ env.KEYCLOAK_IMAGE }}
+          DIGEST: ${{ steps.keycloak_push.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Attest SLSA provenance for keycloak
+        uses: actions/attest-build-provenance@7668571508540a607bdfd90a87a560489fe372eb # v2.1.0
+        with:
+          subject-name: ${{ env.KEYCLOAK_IMAGE }}
+          subject-digest: ${{ steps.keycloak_push.outputs.digest }}
           push-to-registry: true
 
   plan:
@@ -356,7 +387,8 @@ jobs:
           set +e
           terraform plan -out=tfplan.binary -input=false -lock-timeout=5m \
             -var "bff_image_tag=${IMAGE_TAG_SHA}" \
-            -var "business_service_image_tag=${IMAGE_TAG_SHA}"
+            -var "business_service_image_tag=${IMAGE_TAG_SHA}" \
+            -var "keycloak_image_tag=${IMAGE_TAG_SHA}"
           rc=$?
           set -e
           echo "TERRAFORM_PLAN_EXIT_CODE=${rc}"

@@ -1,6 +1,20 @@
 ---
 # Bootstrap per-database roles on the Azure PostgreSQL Flexible Server.
 #
+# SUPERSEDED — Terraform now owns this bootstrap. The
+# `azurerm_container_app_job.bootstrap_db_roles` resource in
+# infra/terraform/modules/container-apps/main.tf creates the same three
+# roles (bff, business_service, keycloak) using the same SQL, runs from
+# inside the VNet (so it doesn't need the public-allowlist hack the
+# header below warns about), and is gated as a depends_on of the four
+# workload Container Apps so they can't even start before roles exist.
+#
+# This playbook is parked here for break-glass recovery only — e.g.
+# rotating an app password without re-running terraform_data triggers,
+# or rebuilding roles after a Postgres restore from backup. The normal
+# deploy path no longer invokes it.
+#
+# ─── Original notes ──────────────────────────────────────────────────
 # Run ONCE per environment (idempotent — safe to re-run). Creates three
 # application roles (bff, business_service, keycloak), transfers ownership
 # of each application database to its role, and revokes PUBLIC CONNECT so

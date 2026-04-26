@@ -88,9 +88,9 @@ variable "business_service_image_tag" {
 }
 
 variable "keycloak_image_tag" {
-  description = "Keycloak upstream image tag."
+  description = "Keycloak image tag (built by CI from keycloak/Dockerfile and pushed to the project's ACR — NOT pulled from quay.io). CI passes the same staging-<sha8> tag it computes for bff/business-service."
   type        = string
-  default     = "26.6.1"
+  default     = "latest"
 }
 
 variable "bff_custom_domain" {

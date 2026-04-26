@@ -61,7 +61,7 @@ module "container_registry" {
   location            = var.location
   resource_group_name = module.networking.resource_group_name
 
-  # Workload + Liquibase MIs (5 entries) come back from container_apps.
+  # Workload + Liquibase + bootstrap MIs come back from container_apps.
   consumer_principal_ids = module.container_apps.consumer_principal_ids
   ci_push_principal_id   = var.ci_push_principal_id
 
@@ -108,7 +108,9 @@ module "container_apps" {
   acr_login_server = module.container_registry.login_server
 
   # Database wiring
-  jdbc_urls = module.database.jdbc_urls
+  jdbc_urls               = module.database.jdbc_urls
+  postgres_fqdn           = module.database.fqdn
+  postgres_admin_username = module.database.admin_username
 
   # Key Vault wiring (secret IDs are bound into the ACA `secret { }` blocks)
   keyvault_secret_ids       = module.keyvault.secret_ids

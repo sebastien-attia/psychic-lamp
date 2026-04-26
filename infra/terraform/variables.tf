@@ -122,9 +122,9 @@ variable "business_service_image_tag" {
 }
 
 variable "keycloak_image_tag" {
-  description = "Tag of the upstream quay.io/keycloak/keycloak image. Pinned to 26.6.1 to match the local-intg Docker Compose stack."
+  description = "Tag of the project's keycloak image (pulled from the project's ACR). The image is built by CI from keycloak/Dockerfile, which bakes `kc.sh build --db=postgres` into the upstream quay.io/keycloak/keycloak base. CI passes the same tag it computes for bff/business-service."
   type        = string
-  default     = "26.6.1"
+  default     = "latest"
 }
 
 variable "bff_custom_domain" {

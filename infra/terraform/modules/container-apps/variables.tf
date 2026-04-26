@@ -35,6 +35,26 @@ variable "jdbc_urls" {
   type        = map(string)
 }
 
+variable "postgres_fqdn" {
+  description = "Private FQDN of the PostgreSQL Flexible Server. Resolved inside the VNet via the privatelink.postgres.database.azure.com zone. Consumed by the bootstrap-db-roles Job."
+  type        = string
+}
+
+variable "postgres_admin_username" {
+  description = "Server-level administrator login on the PostgreSQL Flexible Server. Used ONLY by the bootstrap-db-roles Job to create per-DB application roles; the running apps never bind with this account."
+  type        = string
+}
+
+# postgres-admin-password is read from var.keyvault_secret_ids
+# under the "postgres-admin-password" key — same pattern as every other
+# password secret in this module. No separate variable.
+
+variable "bootstrap_db_roles_image" {
+  description = "Image used by the bootstrap-db-roles Job. Must contain a working `psql` client. Default is the upstream postgres:17-alpine on Docker Hub — a public, unauthenticated pull."
+  type        = string
+  default     = "docker.io/library/postgres:17-alpine"
+}
+
 variable "keyvault_secret_ids" {
   description = "Map of Key Vault secret name → versioned secret ID. Container Apps and Jobs reference these via the `secret { key_vault_secret_id = … }` block."
   type        = map(string)
@@ -56,7 +76,7 @@ variable "business_service_image_tag" {
 }
 
 variable "keycloak_image_tag" {
-  description = "Tag of the upstream quay.io/keycloak/keycloak image to deploy."
+  description = "Tag of the keycloak image to deploy. The image is built by CI from keycloak/Dockerfile (which bakes `kc.sh build --db=postgres` so `start --optimized` works) and pushed to acr_login_server."
   type        = string
 }
 

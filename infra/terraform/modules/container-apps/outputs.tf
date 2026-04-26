@@ -48,9 +48,10 @@ output "consumer_principal_ids" {
   description = "Map keyed by logical service name → system-assigned managed-identity principal ID. Consumed by the container-registry module (AcrPull) and the keyvault module (Key Vault Secrets User)."
   value = merge(
     {
-      bff              = azurerm_container_app.bff.identity[0].principal_id
-      business_service = azurerm_container_app.business_service.identity[0].principal_id
-      keycloak         = azurerm_container_app.keycloak.identity[0].principal_id
+      bff                = azurerm_container_app.bff.identity[0].principal_id
+      business_service   = azurerm_container_app.business_service.identity[0].principal_id
+      keycloak           = azurerm_container_app.keycloak.identity[0].principal_id
+      bootstrap_db_roles = azurerm_container_app_job.bootstrap_db_roles.identity[0].principal_id
     },
     {
       for k, v in azurerm_container_app_job.liquibase :

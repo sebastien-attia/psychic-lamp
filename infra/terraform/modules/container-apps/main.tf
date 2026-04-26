@@ -70,6 +70,192 @@ resource "azurerm_container_app_environment" "this" {
   tags = var.tags
 }
 
+# ── bootstrap-db-roles Job (one-shot, runs before any workload starts) ───
+# Solves the chicken-and-egg where the BFF / business-service / keycloak /
+# Liquibase containers all try to log in as per-app PostgreSQL roles that
+# the Flexible Server doesn't yet have. Without this Job the first
+# `terraform apply` aborts after ~20 min with `Operation expired` because
+# every workload's readiness probe stays DOWN waiting on a role that
+# doesn't exist.
+#
+# Mirrors the SQL of the legacy Ansible bootstrap-db-roles.yml playbook
+# (kept in infra/ansible/playbooks/ for break-glass) — same role names,
+# same ownership transfer, same PUBLIC revoke. Idempotent: each statement
+# is guarded so re-runs after the first apply produce no diffs.
+resource "azurerm_container_app_job" "bootstrap_db_roles" {
+  name                         = "bootstrap-db-roles"
+  resource_group_name          = var.resource_group_name
+  location                     = var.location
+  container_app_environment_id = azurerm_container_app_environment.this.id
+
+  workload_profile_name = "Consumption"
+
+  identity {
+    type = "SystemAssigned"
+  }
+
+  replica_timeout_in_seconds = 300
+  replica_retry_limit        = 0
+
+  manual_trigger_config {
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  secret {
+    name                = "postgres-admin-password"
+    key_vault_secret_id = var.keyvault_secret_ids["postgres-admin-password"]
+    identity            = "System"
+  }
+
+  secret {
+    name                = "bff-db-password"
+    key_vault_secret_id = var.keyvault_secret_ids["bff-db-password"]
+    identity            = "System"
+  }
+
+  secret {
+    name                = "business-db-password"
+    key_vault_secret_id = var.keyvault_secret_ids["business-db-password"]
+    identity            = "System"
+  }
+
+  secret {
+    name                = "keycloak-db-password"
+    key_vault_secret_id = var.keyvault_secret_ids["keycloak-db-password"]
+    identity            = "System"
+  }
+
+  template {
+    container {
+      name   = "bootstrap-db-roles"
+      image  = var.bootstrap_db_roles_image
+      cpu    = 0.25
+      memory = "0.5Gi"
+
+      command = ["/bin/sh"]
+      args    = ["-c", file("${path.module}/files/bootstrap-db-roles.sh")]
+
+      env {
+        name  = "PGHOST"
+        value = var.postgres_fqdn
+      }
+      env {
+        name  = "PGUSER"
+        value = var.postgres_admin_username
+      }
+      env {
+        name        = "PGPASSWORD"
+        secret_name = "postgres-admin-password"
+      }
+      env {
+        name        = "BFF_DB_PASSWORD"
+        secret_name = "bff-db-password"
+      }
+      env {
+        name        = "BUSINESS_DB_PASSWORD"
+        secret_name = "business-db-password"
+      }
+      env {
+        name        = "KEYCLOAK_DB_PASSWORD"
+        secret_name = "keycloak-db-password"
+      }
+    }
+  }
+
+  tags = var.tags
+}
+
+# Trigger an execution of the bootstrap Job whenever any of the password
+# secrets (which the Job consumes) change — including the first apply.
+# `triggers_replace` causes terraform_data to be recreated, which re-runs
+# the local-exec provisioner. The Job script itself is idempotent, so a
+# spurious re-trigger is harmless.
+#
+# RBAC propagation: the Job's system-assigned MI gets `Key Vault Secrets
+# User` granted by the keyvault module AFTER the Job is created. The
+# grant is a sibling to this terraform_data in the resource graph, so
+# Terraform may schedule it concurrently — the loop below absorbs both
+# the role-assignment-still-being-issued and Entra-RBAC-still-propagating
+# windows by retrying with longer waits between attempts.
+resource "terraform_data" "bootstrap_db_roles_run" {
+  triggers_replace = [
+    var.keyvault_secret_ids["postgres-admin-password"],
+    var.keyvault_secret_ids["bff-db-password"],
+    var.keyvault_secret_ids["business-db-password"],
+    var.keyvault_secret_ids["keycloak-db-password"],
+    azurerm_container_app_job.bootstrap_db_roles.id,
+  ]
+
+  # Auth contract: this provisioner shells out to `az containerapp job
+  # ...` and inherits the calling shell's Azure login. In CI that's the
+  # OIDC-federated identity established by `azure/login@v2`; locally
+  # the operator must run `az login` first. Terraform's azurerm
+  # provider auth is NOT used here.
+  provisioner "local-exec" {
+    interpreter = ["/bin/bash", "-c"]
+    environment = {
+      JOB_NAME = azurerm_container_app_job.bootstrap_db_roles.name
+      RG_NAME  = var.resource_group_name
+    }
+    command = <<-EOT
+      set -euo pipefail
+
+      # Up to 3 attempts. The first attempt may race the keyvault
+      # module's role-assignment apply (RBAC not yet issued); attempts
+      # 2 and 3 absorb Entra propagation tail (typical: 30–90 s, max:
+      # ~3 min). Total wall-clock budget: ~6 min worst case, well under
+      # the 20-min ACA "Operation expired" cap.
+      for attempt in 1 2 3; do
+        echo ">> bootstrap-db-roles: starting execution (attempt $attempt/3)"
+        EXEC=$(az containerapp job start \
+          --name "$JOB_NAME" --resource-group "$RG_NAME" \
+          --query name -o tsv)
+
+        # `az containerapp job start` MUST return the execution name
+        # (`<job>-<6-hex>`), not the job name. Older az CLI versions
+        # returned the job — guard explicitly so we don't poll a 404
+        # forever and treat the silence as "still running".
+        if [ "$EXEC" = "$JOB_NAME" ] || [ -z "$EXEC" ]; then
+          echo "ERROR: az returned job name (or empty) where execution name expected: '$EXEC'" >&2
+          echo "Upgrade az CLI to >= 2.53 (the runner must produce execution names)." >&2
+          exit 2
+        fi
+        echo ">> bootstrap-db-roles: execution=$EXEC"
+
+        # Poll for terminal status. replica_timeout_in_seconds caps
+        # one execution at 300 s; 36 × 10 s = 360 s gives slack for
+        # the "still queuing" prefix before the replica even starts.
+        STATUS=Unknown
+        for i in $(seq 1 36); do
+          # Surface poll-API errors instead of swallowing them as
+          # "Unknown" — `set -e` will fail this attempt and the outer
+          # loop retries. This avoids the trap where a 404/auth
+          # failure looks identical to "still running".
+          STATUS=$(az containerapp job execution show \
+            --job-name "$JOB_NAME" --resource-group "$RG_NAME" \
+            --name "$EXEC" --query properties.status -o tsv)
+          echo "  [$i/36] $EXEC: $STATUS"
+          case "$STATUS" in
+            Succeeded)        echo ">> bootstrap-db-roles: succeeded"; exit 0 ;;
+            Failed|Canceled)  break ;;
+          esac
+          sleep 10
+        done
+
+        echo ">> bootstrap-db-roles: attempt $attempt ended with $STATUS"
+        if [ "$attempt" -lt 3 ]; then
+          echo ">> bootstrap-db-roles: waiting 60 s for RBAC propagation"
+          sleep 60
+        fi
+      done
+
+      echo ">> bootstrap-db-roles: all attempts exhausted" >&2
+      exit 1
+    EOT
+  }
+}
+
 # ── BFF (external ingress, serves Vue SPA + /api/* proxy) ─────────────────
 resource "azurerm_container_app" "bff" {
   name                         = "bff"
@@ -78,6 +264,11 @@ resource "azurerm_container_app" "bff" {
   revision_mode                = "Single"
 
   workload_profile_name = "Consumption"
+
+  # Block creation until per-app PostgreSQL roles exist. Without this,
+  # Spring Boot's readiness probe fails on FATAL: role "bff" does not
+  # exist and the revision provisioning expires after 20 minutes.
+  depends_on = [terraform_data.bootstrap_db_roles_run]
 
   identity {
     type = "SystemAssigned"
@@ -202,6 +393,8 @@ resource "azurerm_container_app" "business_service" {
 
   workload_profile_name = "Consumption"
 
+  depends_on = [terraform_data.bootstrap_db_roles_run]
+
   identity {
     type = "SystemAssigned"
   }
@@ -293,6 +486,8 @@ resource "azurerm_container_app" "keycloak" {
 
   workload_profile_name = "Consumption"
 
+  depends_on = [terraform_data.bootstrap_db_roles_run]
+
   identity {
     type = "SystemAssigned"
   }
@@ -331,23 +526,16 @@ resource "azurerm_container_app" "keycloak" {
 
     container {
       name = "keycloak"
-      # Default tag pin: quay.io/keycloak/keycloak:26.6.1 (overridable via
-      # var.keycloak_image_tag). The literal pin is repeated here so the
-      # supply-chain audit script can verify the floor without parsing
-      # variable defaults.
-      image  = "quay.io/keycloak/keycloak:${var.keycloak_image_tag}"
+      # Pulled from the project's ACR. The image is built by the CI
+      # `build-push` job from keycloak/Dockerfile, which layers
+      # `kc.sh build --db=postgres` on top of the upstream
+      # quay.io/keycloak/keycloak base — `start --optimized` below
+      # requires that bake or it crashes with "Unable to find the
+      # database vendor".
+      image  = "${var.acr_login_server}/keycloak:${var.keycloak_image_tag}"
       cpu    = 0.5
       memory = "1Gi"
 
-      # Production launch — NOT start-dev. The --optimized flag REQUIRES
-      # the image to have been pre-built with `kc.sh build --db=postgres`;
-      # the stock quay.io image is built for `dev-file` and will fail with
-      # "Unable to find the database vendor" if pulled directly. The image
-      # tag below is therefore expected to be a custom image (built and
-      # pushed by CI) layered on top of quay.io/keycloak/keycloak:26.6.1
-      # with the DB vendor baked in. The default of upstream 26.6.1 is a
-      # placeholder that the deploy phase replaces with the project's own
-      # build (see ai-scripts/03/keycloak-image.sh — phase 03).
       command = ["start", "--optimized"]
 
       env {
@@ -434,6 +622,8 @@ resource "azurerm_container_app_job" "liquibase" {
   container_app_environment_id = azurerm_container_app_environment.this.id
 
   workload_profile_name = "Consumption"
+
+  depends_on = [terraform_data.bootstrap_db_roles_run]
 
   identity {
     type = "SystemAssigned"

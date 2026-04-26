@@ -88,9 +88,8 @@ variable "business_service_image_tag" {
 }
 
 variable "keycloak_image_tag" {
-  description = "Keycloak upstream image tag."
+  description = "Keycloak image tag (built by CI from keycloak/Dockerfile and pushed to the project's ACR). Production should pin to an immutable tag (release tag), never `latest`."
   type        = string
-  default     = "26.6.1"
 }
 
 variable "bff_custom_domain" {
