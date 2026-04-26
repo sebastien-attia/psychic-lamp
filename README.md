@@ -119,6 +119,11 @@ frontend's typed Axios client are generated from it.
 
 ## Deploy
 
+For an end-to-end runbook (fresh Microsoft account → green CI →
+auto-staging → manual production), see [`DEPLOYMENT.md`](DEPLOYMENT.md).
+Plain-English definitions of every Azure and GitHub concept used live
+in [`CONCEPTS.md`](CONCEPTS.md).
+
 | Tool             | Role |
 |------------------|------|
 | Terraform        | Provisions Azure infra in **Switzerland North**: VNet + private DNS, Flexible PostgreSQL v17, ACR, Container Apps (BFF external, BS internal, Keycloak external), Key Vault. |
