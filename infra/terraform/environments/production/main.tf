@@ -144,9 +144,11 @@ output "liquibase_job_names" {
 output "bff_custom_domain_verification_id" {
   description = "Token to publish as the value of `asuid.<bff_custom_domain>` TXT record before turning on bff_custom_domain."
   value       = module.boatapp.bff_custom_domain_verification_id
+  sensitive   = true
 }
 
 output "keycloak_custom_domain_verification_id" {
   description = "Token to publish as the value of `asuid.<keycloak_custom_domain>` TXT record before turning on keycloak_custom_domain."
   value       = module.boatapp.keycloak_custom_domain_verification_id
+  sensitive   = true
 }
