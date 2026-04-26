@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Generate fresh random secrets for the staging, production, and
-# production-bootstrap GitHub environments. Run ONCE per repo, then
+# Generate fresh random secrets for the staging, staging-bootstrap,
+# production, and production-bootstrap GitHub environments. Run ONCE per
+# repo, then
 # re-run only when rotating.
 #
 # Each invocation overwrites the existing values — the script is
@@ -8,21 +9,22 @@
 # recovered. Re-run on a rotation cadence; the next `terraform apply`
 # in each environment will pick up the new values.
 #
-# Secrets created (per environment, in `staging`, `production`, and
-# `production-bootstrap`):
+# Secrets created (per environment, in `staging`, `staging-bootstrap`,
+# `production`, and `production-bootstrap`):
 #   TF_VAR_postgres_admin_password
 #   TF_VAR_bff_db_password
 #   TF_VAR_business_db_password
 #   TF_VAR_keycloak_db_password
 #   TF_VAR_keycloak_admin_password
 #
-# `production-bootstrap` mirrors `production`'s VALUES (same secret in
-# both envs) — it's the unprotected sibling environment that the
-# infra-bootstrap and plan jobs in deploy-production.yml claim, so the
-# Required-Reviewer rule on `production` fires only on the `apply` job.
-# Mirroring is necessary because env-scoped secrets cannot be shared
-# across envs and Terraform validates the variable surface even on a
-# targeted apply, so all `TF_VAR_*` must resolve in every job.
+# `staging-bootstrap` mirrors `staging`'s VALUES and `production-bootstrap`
+# mirrors `production`'s VALUES (same secret in each pair). The bootstrap
+# environments are the unprotected sibling envs that targeted Terraform
+# jobs claim, so env-scoped secrets resolve there without widening the
+# secret scope to the whole repository. Mirroring is necessary because
+# env-scoped secrets cannot be shared across envs and Terraform validates
+# the variable surface even on a targeted apply, so all `TF_VAR_*` must
+# resolve in every job.
 #
 # Usage:
 #   ./ai-scripts/00f-generate-db-secrets.sh --repo <owner>/<repo> [--dry-run]
@@ -42,12 +44,12 @@ DRY_RUN=0
 # Each entry is `<primary>:<mirror1>[ <mirror2>...]`. The primary env
 # gets a freshly generated value; every mirror in the same group gets
 # the SAME value written to it, so the bootstrap and apply jobs see
-# identical secrets. Keep `production` and `production-bootstrap` in
-# the same group — diverging the values would break the bootstrap job
-# the moment Terraform tries to plan against the full root module
+# identical secrets. Keep each apply/bootstrap environment pair in the
+# same group — diverging the values would break the bootstrap job the
+# moment Terraform tries to plan against the full root module
 # (validation reads vars before honoring -target).
 ENV_GROUPS=(
-  "staging:"
+  "staging:staging-bootstrap"
   "production:production-bootstrap"
 )
 
@@ -83,7 +85,8 @@ gh api "repos/${REPO}" >/dev/null 2>&1 \
 
 # Flatten ENV_GROUPS into the full list of envs that must exist
 # before any `gh secret set` runs. `00d-bootstrap-azure.sh` creates
-# `staging`, `production`, and `production-bootstrap` — running 00f
+# `staging`, `staging-bootstrap`, `production`, and
+# `production-bootstrap` — running 00f
 # against a fresh repo without 00d would otherwise 404 mid-loop and
 # leave the secret store half-populated.
 ALL_ENVS=()
@@ -134,7 +137,7 @@ for group in "${ENV_GROUPS[@]}"; do
     # Generate the value ONCE per secret per group, then write the
     # same value to every env in the group. Splitting envs to a
     # mid-loop call (rather than rerunning `openssl rand` per env)
-    # is what keeps `production` and `production-bootstrap` in lockstep.
+    # is what keeps the apply/bootstrap environment pairs in lockstep.
     #
     # `openssl rand -hex 32` gives 256 bits of entropy in a URL-safe
     # alphabet (no `+`, `/`, `=`). These secrets land in JDBC URLs

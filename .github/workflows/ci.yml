@@ -40,7 +40,18 @@ on:
     branches: [main, staging, 'feature/**']
   pull_request:
     branches: [main, staging]
-  workflow_call: {}
+  workflow_call:
+    inputs:
+      dtrack-project-uuid:
+        description: 'Dependency-Track project UUID for pre-deploy gating in reusable-workflow callers.'
+        required: false
+        type: string
+        default: ''
+      require-dtrack-project-uuid:
+        description: 'Fail early when a caller expects the DT gate to run but no project UUID was supplied.'
+        required: false
+        type: boolean
+        default: false
 
 # Least-privilege defaults. Individual jobs can widen with their own
 # `permissions:` block if needed (none currently do).
@@ -110,19 +121,27 @@ jobs:
       - name: Maven package (CycloneDX SBOM)
         working-directory: bff
         run: ./mvnw -B -ntp -DskipTests package
+      - name: Verify Dependency-Track gate configuration (bff)
+        if: ${{ inputs.require-dtrack-project-uuid }}
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.dtrack-project-uuid }}" ]; then
+            echo "::error::Reusable CI was asked to require a Dependency-Track project UUID, but none was supplied." >&2
+            exit 1
+          fi
       # Pre-deploy Dependency-Track gate: upload the BOM, wait for analysis,
       # fail the run on any unsuppressed FAIL-severity policy violation. The
       # post-deploy DT receipt step in deploy-*.yml is preserved separately
       # so DT records both "what we tried to ship" and "what we actually ran".
-      # Skipped silently when DTRACK_PROJECT_UUID_STAGING is unset (e.g. in a
-      # fresh fork before the operator wires the project).
+      # Push/PR runs default to vars.DTRACK_PROJECT_UUID_STAGING; reusable
+      # callers can override with `workflow_call.inputs.dtrack-project-uuid`.
       - name: Dependency-Track gate (bff)
-        if: ${{ vars.DTRACK_PROJECT_UUID_STAGING != '' }}
+        if: ${{ (inputs.dtrack-project-uuid != '' && inputs.dtrack-project-uuid != null) || vars.DTRACK_PROJECT_UUID_STAGING != '' }}
         uses: ./.github/actions/dtrack-gate
         with:
           dtrack-url:     ${{ secrets.DTRACK_URL }}
           dtrack-api-key: ${{ secrets.DTRACK_API_KEY }}
-          project-uuid:   ${{ vars.DTRACK_PROJECT_UUID_STAGING }}
+          project-uuid:   ${{ inputs.dtrack-project-uuid != '' && inputs.dtrack-project-uuid || vars.DTRACK_PROJECT_UUID_STAGING }}
           bom-path:       bff/target/bom.json
           fail-on:        FAIL
       - name: Upload bff test reports
@@ -158,14 +177,22 @@ jobs:
       - name: Maven package (CycloneDX SBOM)
         working-directory: business-service
         run: ./mvnw -B -ntp -DskipTests package
+      - name: Verify Dependency-Track gate configuration (business-service)
+        if: ${{ inputs.require-dtrack-project-uuid }}
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.dtrack-project-uuid }}" ]; then
+            echo "::error::Reusable CI was asked to require a Dependency-Track project UUID, but none was supplied." >&2
+            exit 1
+          fi
       # Pre-deploy DT gate — see build-bff above for rationale.
       - name: Dependency-Track gate (business-service)
-        if: ${{ vars.DTRACK_PROJECT_UUID_STAGING != '' }}
+        if: ${{ (inputs.dtrack-project-uuid != '' && inputs.dtrack-project-uuid != null) || vars.DTRACK_PROJECT_UUID_STAGING != '' }}
         uses: ./.github/actions/dtrack-gate
         with:
           dtrack-url:     ${{ secrets.DTRACK_URL }}
           dtrack-api-key: ${{ secrets.DTRACK_API_KEY }}
-          project-uuid:   ${{ vars.DTRACK_PROJECT_UUID_STAGING }}
+          project-uuid:   ${{ inputs.dtrack-project-uuid != '' && inputs.dtrack-project-uuid || vars.DTRACK_PROJECT_UUID_STAGING }}
           bom-path:       business-service/target/bom.json
           fail-on:        FAIL
       - name: Upload business-service test reports
@@ -212,20 +239,21 @@ jobs:
           if-no-files-found: error
 
   docker-build:
-    # Sanity-build both Dockerfiles end-to-end. No push — deploy workflows are the only push path.
+    # Sanity-build all deployable Dockerfiles end-to-end. No push — deploy
+    # workflows are the only push path.
     runs-on: ubuntu-latest
     needs: [build-bff, build-business-service, build-frontend, sca-scan]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-      # Both Dockerfiles take the repo root as build context (the bff
-      # 4-stage build references frontend/ and contracts/, the
-      # business-service 2-stage build references contracts/). Tag with
-      # the commit SHA only — this job validates that the image builds;
-      # the deploy workflows are the only path that pushes.
+      # All deployable images take the repo root as build context. Tag with
+      # the commit SHA only — this job validates that the images build; the
+      # deploy workflows are the only path that pushes.
       - name: Build bff image
         run: docker build -f bff/Dockerfile -t boatapp/bff:ci-${{ github.sha }} .
       - name: Build business-service image
         run: docker build -f business-service/Dockerfile -t boatapp/business-service:ci-${{ github.sha }} .
+      - name: Build keycloak image
+        run: docker build -f keycloak/Dockerfile -t boatapp/keycloak:ci-${{ github.sha }} .
 
   secret-scan:
     # gitleaks: scan full history on every push/PR for non-format-known secrets.
@@ -258,7 +286,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [bff, business-service]
+        image: [bff, business-service, keycloak]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       # Rebuild on this runner: jobs do not share the docker-build job's

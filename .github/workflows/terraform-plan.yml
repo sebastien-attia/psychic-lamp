@@ -27,6 +27,10 @@ permissions:
   contents: read
   pull-requests: write  # post the plan as a PR comment
 
+concurrency:
+  group: terraform-staging-state
+  cancel-in-progress: false
+
 jobs:
   plan:
     # PR-time terraform plan against staging; posts a markdown summary
@@ -37,11 +41,11 @@ jobs:
       # `terraform plan` doesn't strictly need passwords (no apply), but
       # validate phase resolves them. Wire the same TF_VAR_* env vars as
       # the deploy workflows so the plan succeeds without --target juggling.
-      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
-      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
-      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
-      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
-      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_POSTGRES_ADMIN_PASSWORD }}
+      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_BFF_DB_PASSWORD }}
+      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_BUSINESS_DB_PASSWORD }}
+      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_KEYCLOAK_DB_PASSWORD }}
+      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_KEYCLOAK_ADMIN_PASSWORD }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
@@ -89,7 +93,7 @@ jobs:
         # are introduced when they edit module surface.
         run: |
           set +e
-          terraform plan -no-color -input=false -out=tfplan.binary
+          terraform plan -no-color -input=false -lock-timeout=5m -out=tfplan.binary
           ec=$?
           set -e
           terraform show -no-color tfplan.binary > plan.txt

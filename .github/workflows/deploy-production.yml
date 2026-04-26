@@ -24,16 +24,11 @@
 # first deploy doesn't fail on `az acr login`. `apply` is the second pass
 # and pins container apps to the new image tag.
 #
-# `infra-bootstrap` carries `environment: production` because the OIDC
-# federated identity credential for release-triggered runs is bound to
-# the `environment:production` subject claim (set up by 00d-bootstrap-
-# azure.sh). That means reviewers see TWO approval prompts on the very
-# first production deploy — one for bootstrap (creates ACR), one for
-# apply (creates everything else). On every subsequent release the
-# bootstrap plan is a no-op, but the gate still fires; reviewers see
-# "Plan: 0 to add, 0 to change" and click through. We accept that 1
-# extra click per release as the price of full automation; the
-# alternative is a one-shot manual `terraform apply -target` per env.
+# `infra-bootstrap` and `plan` carry `environment: production-bootstrap`,
+# an unprotected sibling GitHub Environment with its own OIDC subject and a
+# mirrored Terraform secret set. The Required-Reviewer rule on
+# `environment: production` therefore fires only once per release — on the
+# final `apply` job that mutates the live stack.
 #
 # Required environment-scoped secrets (GitHub → Settings → Environments →
 # production) — see .github/ENVIRONMENTS.md:
@@ -81,6 +76,9 @@ jobs:
   ci:
     name: CI (reuse ci.yml)
     uses: ./.github/workflows/ci.yml
+    with:
+      dtrack-project-uuid: ${{ vars.DTRACK_PROJECT_UUID_PRODUCTION }}
+      require-dtrack-project-uuid: false
     # Reusable workflows do NOT inherit caller secrets by default. Without
     # this, ci.yml's DT gate, gitleaks license, and any other `secrets.*`
     # reference would resolve to empty strings on release-triggered runs.
@@ -146,6 +144,9 @@ jobs:
     needs: [ci, preflight-envs]
     runs-on: ubuntu-latest
     environment: production-bootstrap
+    concurrency:
+      group: terraform-production-state
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
@@ -153,11 +154,11 @@ jobs:
       # All root-level TF_VAR_* must be set even though the targeted
       # resources don't consume them — Terraform validates the variable
       # surface of the entire root module before honoring -target.
-      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
-      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
-      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
-      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
-      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_POSTGRES_ADMIN_PASSWORD }}
+      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_BFF_DB_PASSWORD }}
+      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_BUSINESS_DB_PASSWORD }}
+      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_KEYCLOAK_DB_PASSWORD }}
+      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_KEYCLOAK_ADMIN_PASSWORD }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
     steps:
       - name: Checkout release tag
@@ -371,15 +372,18 @@ jobs:
     needs: [build-push]
     runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
     environment: production-bootstrap
+    concurrency:
+      group: terraform-production-state
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
     env:
-      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
-      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
-      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
-      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
-      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_POSTGRES_ADMIN_PASSWORD }}
+      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_BFF_DB_PASSWORD }}
+      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_BUSINESS_DB_PASSWORD }}
+      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_KEYCLOAK_DB_PASSWORD }}
+      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_KEYCLOAK_ADMIN_PASSWORD }}
       RELEASE_TAG: ${{ github.event.release.tag_name }}
     steps:
       - name: Checkout release tag
@@ -460,6 +464,9 @@ jobs:
     needs: [build-push, plan]
     runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
     environment: production
+    concurrency:
+      group: terraform-production-state
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
@@ -504,10 +511,10 @@ jobs:
         # landed during the approval window).
         run: |
           set -euo pipefail
-          terraform init -lockfile=readonly \
+          terraform init -lockfile=readonly -lock-timeout=5m \
             -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
-          terraform apply -input=false -auto-approve tfplan.binary
+          terraform apply -input=false -auto-approve -lock-timeout=5m tfplan.binary
 
       - name: Setup Ansible
         run: |
@@ -537,17 +544,21 @@ jobs:
           exit 1
 
       - uses: ./.github/actions/setup-java
+        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
       - name: Download bff SBOM from CI
+        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: bff-sbom
           path: bff/target/
       - name: Download business-service SBOM from CI
+        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: business-service-sbom
           path: business-service/target/
       - name: Upload bff SBOM to Dependency-Track
+        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
         working-directory: bff
         env:
           DTRACK_URL:     ${{ secrets.DTRACK_URL }}
@@ -560,6 +571,7 @@ jobs:
             -Ddependency-track.projectName=boatapp-bff \
             -Ddependency-track.projectVersion="${RELEASE_TAG}"
       - name: Upload business-service SBOM to Dependency-Track
+        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
         working-directory: business-service
         env:
           DTRACK_URL:     ${{ secrets.DTRACK_URL }}

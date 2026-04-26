@@ -30,7 +30,8 @@
 #      receipt (the pre-deploy DT *gate* runs in ci.yml).
 #
 # Required environment-scoped secrets (GitHub → Settings → Environments →
-# staging) — see .github/ENVIRONMENTS.md for full list:
+# `staging` and `staging-bootstrap`) — see .github/ENVIRONMENTS.md for the
+# mirroring contract and full list:
 #   TF_VAR_postgres_admin_password
 #   TF_VAR_bff_db_password
 #   TF_VAR_business_db_password
@@ -64,8 +65,8 @@ env:
   ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-# Serialize staging deploys but DO NOT cancel in-flight ones — cancelling
-# a `terraform apply` mid-flight risks leaving state mid-mutation.
+# Serialize staging deploy workflow runs but DO NOT cancel in-flight ones —
+# cancelling a `terraform apply` mid-flight risks leaving state mid-mutation.
 concurrency:
   group: deploy-staging
   cancel-in-progress: false
@@ -74,6 +75,9 @@ jobs:
   ci:
     name: CI (reuse ci.yml)
     uses: ./.github/workflows/ci.yml
+    with:
+      dtrack-project-uuid: ${{ vars.DTRACK_PROJECT_UUID_STAGING }}
+      require-dtrack-project-uuid: false
     # Reusable workflows do NOT inherit caller secrets by default. Without
     # this, ci.yml's DT gate, gitleaks license, and any other `secrets.*`
     # reference would resolve to empty strings on deploy-triggered runs.
@@ -87,6 +91,30 @@ jobs:
       contents: read
       security-events: write
       actions: read
+
+  preflight-envs:
+    # Fail fast and loud if the staging bootstrap environment is missing.
+    # Bootstrap now claims `staging-bootstrap` so it can resolve env-scoped
+    # Terraform secrets without moving them to repository scope.
+    name: Preflight — required GitHub Environments
+    needs: [ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Verify staging + staging-bootstrap envs exist
+        run: |
+          set -euo pipefail
+          for env in staging staging-bootstrap; do
+            if ! gh api "repos/${GITHUB_REPOSITORY}/environments/${env}" >/dev/null 2>&1; then
+              echo "::error::GitHub Environment '${env}' does not exist on ${GITHUB_REPOSITORY}." >&2
+              echo "::error::Re-run ai-scripts/00d-bootstrap-azure.sh AND ai-scripts/00f-generate-db-secrets.sh before deploying." >&2
+              exit 1
+            fi
+            echo "✓ env present: ${env}"
+          done
 
   infra-bootstrap:
     # FIRST PASS of `terraform apply`, scoped to JUST the container registry
@@ -104,17 +132,17 @@ jobs:
     # land naturally in the second-pass apply. Targeted-apply pulls in
     # transitive deps (RG from module.networking) automatically.
     #
-    # Idempotent: subsequent runs see "no changes" and exit fast. No
-    # `environment: staging` claim is needed: the push-to-staging trigger
-    # already matches the `gh-staging` FIC (subject
-    # `repo:<owner>/<repo>:ref:refs/heads/staging`, see
-    # ai-scripts/00d-bootstrap-azure.sh). The deployment-protection gate
-    # for staging stays on `apply`, where the diff is reviewable —
-    # bootstrap is intentionally outside that gate so it can run on every
-    # push without operator clicks.
+    # Idempotent: subsequent runs see "no changes" and exit fast.
+    # `staging-bootstrap` is an unprotected sibling environment carrying the
+    # same Terraform secret set as `staging`; bootstrap claims it so
+    # env-scoped secrets resolve here without adding a review gate.
     name: Bootstrap ACR (targeted terraform apply)
-    needs: [ci]
+    needs: [ci, preflight-envs]
     runs-on: ubuntu-latest
+    environment: staging-bootstrap
+    concurrency:
+      group: terraform-staging-state
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
@@ -122,11 +150,11 @@ jobs:
       # All root-level TF_VAR_* must be set even though the targeted
       # resources don't consume them — Terraform validates the variable
       # surface of the entire root module before honoring -target.
-      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
-      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
-      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
-      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
-      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_POSTGRES_ADMIN_PASSWORD }}
+      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_BFF_DB_PASSWORD }}
+      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_BUSINESS_DB_PASSWORD }}
+      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_KEYCLOAK_DB_PASSWORD }}
+      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_KEYCLOAK_ADMIN_PASSWORD }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
@@ -155,8 +183,9 @@ jobs:
       - name: Terraform init + targeted plan/apply (ACR only)
         working-directory: infra/terraform/environments/staging
         # `-lock-timeout=5m` absorbs sub-minute blob-lease overlap with the
-        # later `apply` job (concurrency `cancel-in-progress: false` queues
-        # same-key runs, and back-to-back deploys can race the state lock).
+        # later `apply` job and other staging-state readers/writers. We still
+        # serialize via a shared concurrency group to keep unrelated workflow
+        # runs from fighting over the same backend blob.
         # We plan-then-apply (rather than `apply -auto-approve`) so the
         # bootstrap diff is rendered into the run summary — same audit
         # surface as the main `apply` job, scaled down. `apply tfplan`
@@ -332,17 +361,20 @@ jobs:
     needs: [build-push]
     runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
     environment: staging
+    concurrency:
+      group: terraform-staging-state
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
     env:
       # `terraform plan` resolves variables, so even read-only plans need
       # the same TF_VAR_* env vars the apply step uses.
-      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
-      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
-      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
-      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
-      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
+      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_POSTGRES_ADMIN_PASSWORD }}
+      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_BFF_DB_PASSWORD }}
+      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_BUSINESS_DB_PASSWORD }}
+      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_KEYCLOAK_DB_PASSWORD }}
+      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_KEYCLOAK_ADMIN_PASSWORD }}
       IMAGE_TAG_SHA: ${{ needs.build-push.outputs.image_tag_sha }}
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
@@ -435,6 +467,9 @@ jobs:
     needs: [build-push, plan]
     runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
     environment: staging
+    concurrency:
+      group: terraform-staging-state
+      cancel-in-progress: false
     permissions:
       id-token: write
       contents: read
@@ -475,10 +510,10 @@ jobs:
         # surface inside `apply`).
         run: |
           set -euo pipefail
-          terraform init -lockfile=readonly \
+          terraform init -lockfile=readonly -lock-timeout=5m \
             -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
-          terraform apply -input=false -auto-approve tfplan.binary
+          terraform apply -input=false -auto-approve -lock-timeout=5m tfplan.binary
 
       # Ansible runs migrate (Liquibase ACA Jobs) → configure (Keycloak
       # realm reconciliation via keycloak-config-cli) → health.
@@ -513,18 +548,23 @@ jobs:
       # Post-deploy DT receipt — tags the deployed version. The pre-deploy
       # DT *gate* already ran in ci.yml; this step gives DT a record of
       # what's currently running, separate from "what we tried to ship".
+      # Optional: skipped when this repo has no Dependency-Track wiring.
       - uses: ./.github/actions/setup-java
+        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
       - name: Download bff SBOM from CI
+        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: bff-sbom
           path: bff/target/
       - name: Download business-service SBOM from CI
+        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: business-service-sbom
           path: business-service/target/
       - name: Upload bff SBOM to Dependency-Track
+        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
         working-directory: bff
         env:
           DTRACK_URL:     ${{ secrets.DTRACK_URL }}
@@ -537,6 +577,7 @@ jobs:
             -Ddependency-track.projectName=boatapp-bff \
             -Ddependency-track.projectVersion="${GITHUB_SHA}"
       - name: Upload business-service SBOM to Dependency-Track
+        if: ${{ secrets.DTRACK_URL != '' && secrets.DTRACK_API_KEY != '' }}
         working-directory: business-service
         env:
           DTRACK_URL:     ${{ secrets.DTRACK_URL }}

@@ -215,6 +215,7 @@ add_fic "gh-main"             "repo:${REPO}:ref:refs/heads/main"
 add_fic "gh-staging"          "repo:${REPO}:ref:refs/heads/staging"
 add_fic "gh-pr"               "repo:${REPO}:pull_request"
 add_fic "gh-env-staging"      "repo:${REPO}:environment:staging"
+add_fic "gh-env-staging-bootstrap" "repo:${REPO}:environment:staging-bootstrap"
 add_fic "gh-env-prod"         "repo:${REPO}:environment:production"
 # `production-bootstrap` is a sibling GitHub Environment to `production`
 # carrying the same secret set but NO protection rules. The infra-bootstrap
@@ -343,11 +344,11 @@ set_repo_secret "TF_STATE_RESOURCE_GROUP"  "${STATE_RG}"
 set_repo_var    "PROJECT"                  "${PROJECT}"
 set_repo_var    "LOCATION"                 "${LOCATION}"
 
-# Ensure the two GitHub Environments exist. Reviewer rules on `production`
+# Ensure the GitHub Environments exist. Reviewer rules on `production`
 # are the one thing this script cannot do (no REST API for required_reviewers
 # except on GitHub Enterprise with advanced protection rules) — flagged at
 # the end.
-for env in staging production production-bootstrap; do
+for env in staging staging-bootstrap production production-bootstrap; do
   if gh api "repos/${REPO}/environments/${env}" >/dev/null 2>&1; then
     echo "    environment exists: ${env}"
   else
@@ -355,10 +356,9 @@ for env in staging production production-bootstrap; do
     echo "    environment created: ${env}"
   fi
 done
-# `production-bootstrap` MUST stay free of protection rules — it exists
-# precisely to host the unreviewed bootstrap/plan jobs. If you ever add
-# Required-Reviewer to it through the UI, you re-introduce the
-# triple-approval pain that motivated the dual-env design.
+# `staging-bootstrap` and `production-bootstrap` MUST stay free of
+# protection rules — they exist precisely to host bootstrap/plan jobs
+# that still need env-scoped secrets and environment-based OIDC subjects.
 
 # ─── 6. Branch protection (codified in .github/settings.yml) ───────────
 # Source of truth: .github/settings.yml (committed by phase 4b). The file
