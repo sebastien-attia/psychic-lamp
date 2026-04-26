@@ -75,3 +75,25 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "bff_custom_domain" {
+  description = "Optional custom FQDN for the BFF (e.g. app.example.com). Empty string means use only the Azure-assigned default FQDN. Setting this creates an azurerm_container_app_custom_domain + an Azure-managed TLS certificate. DNS records (CNAME + asuid TXT) MUST exist BEFORE terraform apply or the managed-cert issuance will fail."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.bff_custom_domain == "" || can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$", var.bff_custom_domain))
+    error_message = "bff_custom_domain must be a lowercase, dot-separated DNS name (e.g. app.example.com) or an empty string to disable."
+  }
+}
+
+variable "keycloak_custom_domain" {
+  description = "Optional custom FQDN for Keycloak (e.g. auth.example.com). Empty string means use only the Azure-assigned default FQDN. When set, KC_HOSTNAME and the JWT issuer URI both switch to this domain — the Ansible keycloak-client config MUST then be re-run so the BFF's redirect URI is registered under the new domain."
+  type        = string
+  default     = ""
+
+  validation {
+    condition     = var.keycloak_custom_domain == "" || can(regex("^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)+$", var.keycloak_custom_domain))
+    error_message = "keycloak_custom_domain must be a lowercase, dot-separated DNS name (e.g. auth.example.com) or an empty string to disable."
+  }
+}

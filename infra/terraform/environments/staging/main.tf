@@ -28,6 +28,10 @@ module "boatapp" {
   bff_image_tag              = var.bff_image_tag
   business_service_image_tag = var.business_service_image_tag
   keycloak_image_tag         = var.keycloak_image_tag
+
+  # ── Custom domains (opt-in; default "" keeps the Azure FQDN-only setup)
+  bff_custom_domain      = var.bff_custom_domain
+  keycloak_custom_domain = var.keycloak_custom_domain
 }
 
 # ── Variable pass-through (kept here so each env declares its own surface)
@@ -89,6 +93,18 @@ variable "keycloak_image_tag" {
   default     = "26.6.1"
 }
 
+variable "bff_custom_domain" {
+  description = "Optional custom FQDN for the staging BFF (e.g. app-staging.example.com). Empty = keep the Azure FQDN only."
+  type        = string
+  default     = ""
+}
+
+variable "keycloak_custom_domain" {
+  description = "Optional custom FQDN for the staging Keycloak (e.g. auth-staging.example.com). Empty = keep the Azure FQDN only."
+  type        = string
+  default     = ""
+}
+
 # ── Re-export root outputs ────────────────────────────────────────────────
 output "bff_fqdn" {
   description = "External FQDN of the BFF Container App."
@@ -123,4 +139,14 @@ output "keyvault_uri" {
 output "liquibase_job_names" {
   description = "Map of Liquibase ACA Job names."
   value       = module.boatapp.liquibase_job_names
+}
+
+output "bff_custom_domain_verification_id" {
+  description = "Token to publish as the value of `asuid.<bff_custom_domain>` TXT record before turning on bff_custom_domain."
+  value       = module.boatapp.bff_custom_domain_verification_id
+}
+
+output "keycloak_custom_domain_verification_id" {
+  description = "Token to publish as the value of `asuid.<keycloak_custom_domain>` TXT record before turning on keycloak_custom_domain."
+  value       = module.boatapp.keycloak_custom_domain_verification_id
 }

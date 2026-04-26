@@ -1,8 +1,10 @@
 # Provider and backend configuration for the Boat App Azure deployment.
 #
-# - Pinned to azurerm ~> 4.0 to ensure feature parity across the modules
+# - Pinned to azurerm >= 4.69 to ensure feature parity across the modules
 #   (Container Apps Jobs, Key Vault RBAC mode, PostgreSQL Flexible Server
-#   private DNS integration).
+#   private DNS integration). 4.69 is the floor because that release added
+#   azurerm_container_app_environment_managed_certificate, which the
+#   container-apps module uses for custom domain TLS.
 # - The azurerm backend block is intentionally empty; concrete state
 #   storage settings are supplied per-environment via partial config in
 #   environments/{staging,production}/backend.tf.
@@ -16,7 +18,7 @@ terraform {
   required_providers {
     azurerm = {
       source  = "hashicorp/azurerm"
-      version = "~> 4.0"
+      version = ">= 4.69, < 5.0"
     }
     random = {
       source  = "hashicorp/random"

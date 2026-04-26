@@ -262,8 +262,10 @@ SECRETS=(
 
 for env in staging production; do
   for name in "${SECRETS[@]}"; do
+    # `gh secret set` reads from stdin when --body is omitted.
+    # Do NOT use `--body -` — that stores the literal string "-".
     openssl rand -base64 32 \
-      | gh secret set "$name" --env "$env" --repo "$REPO" --body -
+      | gh secret set "$name" --env "$env" --repo "$REPO"
   done
 done
 ```
@@ -380,6 +382,118 @@ gh run watch                              # deploy-staging.yml
 You should see Terraform create the `boat-app-staging-rg` resource
 group and three Container Apps. The BFF's external hostname is
 printed in the deploy summary.
+
+### B.7 Bind a custom domain (your own DNS) to the BFF and/or Keycloak
+
+Out of the box each environment is reachable only at the random Azure
+FQDN `<app>.<rand>.<region>.azurecontainerapps.io`. To publish under
+your own domain (e.g. `app.example.com`) with a free Azure-managed
+TLS cert, follow this **strict order** — the cert issuance fails if
+DNS is not in place first.
+
+#### Step 1 — Deploy once with no custom domain
+
+This is what `B.6` already does. After it succeeds, the BFF and
+Keycloak each have a stable Azure FQDN that does not change for the
+life of the Container App.
+
+#### Step 2 — Read the DNS values from terraform
+
+```bash
+cd infra/terraform/environments/staging         # or .../production
+terraform output bff_fqdn                       # e.g. bff.nicemoss-1234.switzerlandnorth.azurecontainerapps.io
+terraform output bff_custom_domain_verification_id   # e.g. ABCDE1234567890...
+# repeat for keycloak_* if you want a custom auth subdomain too
+```
+
+The verification ID is **per-Container-App** and stable; it never
+changes unless the Container App itself is destroyed and recreated.
+
+#### Step 3 — Create two records at your DNS provider
+
+Pick a subdomain you control (e.g. `app.example.com` for the BFF —
+**not the apex** unless your provider supports CNAME-flattening /
+ALIAS / ANAME, since Azure requires a CNAME). Add **both** records:
+
+| Type  | Name (host)                | Value                                              | TTL   |
+|-------|----------------------------|----------------------------------------------------|-------|
+| CNAME | `app.example.com`          | `<bff_fqdn from step 2>`                           | 300 s |
+| TXT   | `asuid.app.example.com`    | `<bff_custom_domain_verification_id from step 2>`  | 300 s |
+
+The `asuid.` prefix proves to Azure that you own the domain. Repeat
+for `auth.example.com` (CNAME → `<keycloak_fqdn>`,
+TXT `asuid.auth.example.com` → `<keycloak_custom_domain_verification_id>`)
+if you want a custom Keycloak hostname too.
+
+Wait for DNS to propagate. Verify with:
+
+```bash
+dig +short CNAME app.example.com
+dig +short TXT   asuid.app.example.com
+```
+
+Both must return the values you set — Azure only checks them once
+during cert issuance, and a stale answer fails the apply.
+
+#### Step 4 — Set the variable and re-apply
+
+For staging, append to whatever you pass to terraform (in CI, this
+goes in the `TF_VAR_*` env vars on the `staging` GitHub Environment):
+
+```bash
+export TF_VAR_bff_custom_domain="app-staging.example.com"
+# Optional — only set if you ALSO created the auth.* DNS records
+export TF_VAR_keycloak_custom_domain="auth-staging.example.com"
+
+terraform -chdir=infra/terraform/environments/staging apply
+```
+
+Terraform creates the custom-domain binding and triggers Azure-managed
+cert issuance in one apply. Cert provisioning is async and usually
+completes within 1–3 minutes; check status with:
+
+```bash
+az containerapp hostname list --name bff --resource-group boat-app-staging-rg \
+  --query "[?name=='app-staging.example.com'].{state:bindingType, cert:certificateId}" -o table
+```
+
+`bindingType` flips from `Disabled` to `SniEnabled` once the cert is
+bound. Visit `https://app-staging.example.com` — you should see the
+Vue SPA served over HTTPS with a valid Microsoft-issued cert.
+
+#### Step 5 (only if you set keycloak_custom_domain) — re-run Ansible
+
+Setting `keycloak_custom_domain` flips `KC_HOSTNAME` and the JWT
+issuer URI to the new domain. The BFF's redirect URI registered on
+the `boat-app-confidential` Keycloak client must therefore be
+re-published from the new BFF URL. Re-run the Ansible
+`configure-keycloak` playbook (or the equivalent CI step) so the
+client config is refreshed.
+
+#### Production — same flow, separate DNS records
+
+Use a different subdomain per environment (e.g.
+`app-staging.example.com` vs `app.example.com`). Each environment
+has its own Container App with its own verification ID, so the TXT
+records cannot be shared.
+
+#### What "no fixed IP" means in practice
+
+Azure Container Apps Consumption profile has no static public IP —
+inbound traffic hits Azure's anycast frontend, which can resolve to
+different IPs over time. The CNAME stays valid because the FQDN
+itself is stable; only the IPs behind it move. If you need a literal
+A record (apex domain on a registrar without ALIAS, or an
+allowlist that takes IPs), you have to put **Azure Front Door** or
+**Application Gateway** in front of the Container Apps — out of
+scope for this runbook.
+
+#### Renewal
+
+Azure-managed certs auto-renew ~45 days before expiry as long as the
+CNAME record stays in place. No operator action and no terraform
+re-apply needed. If the CNAME is removed, the next renewal fails and
+the cert lapses.
 
 ## 5. Part C — Lock-down
 

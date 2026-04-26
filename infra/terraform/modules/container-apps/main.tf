@@ -24,10 +24,15 @@ locals {
   # Predicting FQDNs from the environment's default_domain avoids self-
   # references on Keycloak (it needs to know its own FQDN for KC_HOSTNAME
   # and the JWT issuer URI).
-  keycloak_fqdn                  = "keycloak.${azurerm_container_app_environment.this.default_domain}"
+  keycloak_default_fqdn          = "keycloak.${azurerm_container_app_environment.this.default_domain}"
   business_service_internal_fqdn = "business-service.internal.${azurerm_container_app_environment.this.default_domain}"
 
-  keycloak_issuer_uri = "https://${local.keycloak_fqdn}/realms/boat-app"
+  # When the operator binds a custom FQDN for Keycloak, KC_HOSTNAME and the
+  # JWT issuer URI both flip to that domain — otherwise tokens would carry
+  # the Azure default hostname and the BFF (also reading this issuer URI)
+  # would refuse them after the redirect URI was rewritten browser-side.
+  keycloak_external_fqdn = var.keycloak_custom_domain != "" ? var.keycloak_custom_domain : local.keycloak_default_fqdn
+  keycloak_issuer_uri    = "https://${local.keycloak_external_fqdn}/realms/boat-app"
 
   # Liquibase Jobs share most config; declared as a map so for_each keeps
   # them DRY. Keys must match the verification script's expectations
@@ -363,7 +368,7 @@ resource "azurerm_container_app" "keycloak" {
       }
       env {
         name  = "KC_HOSTNAME"
-        value = "https://${local.keycloak_fqdn}"
+        value = "https://${local.keycloak_external_fqdn}"
       }
       env {
         name  = "KC_PROXY_HEADERS"
@@ -481,4 +486,77 @@ resource "azurerm_container_app_job" "liquibase" {
   }
 
   tags = var.tags
+}
+
+# ── Custom domain bindings (opt-in) ───────────────────────────────────────
+# Each pair below (one custom_domain + one managed_certificate per app) is
+# gated by `count = var.<x>_custom_domain == "" ? 0 : 1`, so the default
+# zero-config behaviour is unchanged. When opted in:
+#
+#   1. The custom_domain resource creates first; it requires that the
+#      operator has already placed two DNS records at the registrar:
+#        <fqdn>            CNAME   <app's Azure FQDN>
+#        asuid.<fqdn>      TXT     <custom_domain_verification_id output>
+#      Both records MUST exist BEFORE `terraform apply` or the create call
+#      returns "domain ownership not verified".
+#
+#   2. The managed_certificate resource creates next (via depends_on);
+#      Azure issues a free DigiCert-managed cert valid for the FQDN, then
+#      asynchronously binds it to the custom-domain entry above.
+#
+#   3. After the async bind, Azure mutates the custom_domain resource's
+#      certificate_binding_type and container_app_environment_certificate_id
+#      fields. We `ignore_changes` those so terraform doesn't try to revert
+#      Azure's edit on the next plan and recreate the resource (which
+#      would briefly drop traffic).
+#
+# Renewal: managed certs auto-renew ~45 days before expiry — no operator
+# action required as long as the CNAME record stays in place.
+
+resource "azurerm_container_app_custom_domain" "bff" {
+  count            = var.bff_custom_domain == "" ? 0 : 1
+  name             = var.bff_custom_domain
+  container_app_id = azurerm_container_app.bff.id
+
+  lifecycle {
+    ignore_changes = [
+      certificate_binding_type,
+      container_app_environment_certificate_id,
+    ]
+  }
+}
+
+resource "azurerm_container_app_environment_managed_certificate" "bff" {
+  count                        = var.bff_custom_domain == "" ? 0 : 1
+  name                         = "bff-${replace(var.bff_custom_domain, ".", "-")}"
+  container_app_environment_id = azurerm_container_app_environment.this.id
+  subject_name                 = var.bff_custom_domain
+  domain_control_validation    = "CNAME"
+
+  # Cert issuance must happen AFTER the custom-domain entry exists,
+  # otherwise Azure has nothing to validate against.
+  depends_on = [azurerm_container_app_custom_domain.bff]
+}
+
+resource "azurerm_container_app_custom_domain" "keycloak" {
+  count            = var.keycloak_custom_domain == "" ? 0 : 1
+  name             = var.keycloak_custom_domain
+  container_app_id = azurerm_container_app.keycloak.id
+
+  lifecycle {
+    ignore_changes = [
+      certificate_binding_type,
+      container_app_environment_certificate_id,
+    ]
+  }
+}
+
+resource "azurerm_container_app_environment_managed_certificate" "keycloak" {
+  count                        = var.keycloak_custom_domain == "" ? 0 : 1
+  name                         = "keycloak-${replace(var.keycloak_custom_domain, ".", "-")}"
+  container_app_environment_id = azurerm_container_app_environment.this.id
+  subject_name                 = var.keycloak_custom_domain
+  domain_control_validation    = "CNAME"
+
+  depends_on = [azurerm_container_app_custom_domain.keycloak]
 }

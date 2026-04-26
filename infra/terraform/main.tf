@@ -123,5 +123,9 @@ module "container_apps" {
   bff_signing_key_id      = var.bff_signing_key_id
   keycloak_admin_username = var.keycloak_admin_username
 
+  # Custom domains (opt-in — empty string disables)
+  bff_custom_domain      = var.bff_custom_domain
+  keycloak_custom_domain = var.keycloak_custom_domain
+
   tags = local.common_tags
 }

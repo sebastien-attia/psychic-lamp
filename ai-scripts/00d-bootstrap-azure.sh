@@ -309,7 +309,11 @@ echo "▸ [6/7] GitHub repo secrets + variables (${REPO})"
 
 set_repo_secret() {
   local name="$1" value="$2"
-  printf '%s' "${value}" | gh secret set "${name}" --repo "${REPO}" --body -
+  # `--body -` is NOT a stdin sentinel for `gh secret set` — it stores the
+  # literal string "-". Stdin is the default when --body is omitted, so
+  # pipe the value in without the flag (printf avoids the trailing newline
+  # that `echo` would attach).
+  printf '%s' "${value}" | gh secret set "${name}" --repo "${REPO}"
   echo "    secret set: ${name}"
 }
 set_repo_var() {
