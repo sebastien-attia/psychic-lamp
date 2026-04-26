@@ -21,6 +21,11 @@
 realm: boat-app
 enabled: true
 sslRequired: external
+# Custom login theme shipped at keycloak/themes/boatapp-fun.
+# In local-intg the theme is volume-mounted into the stock Keycloak
+# image (see docker-compose.yml); in staging/prod it is COPY-ed into
+# the optimized image via keycloak/Dockerfile.
+loginTheme: boatapp-fun
 clients:
   - clientId: boat-app-confidential
     enabled: true

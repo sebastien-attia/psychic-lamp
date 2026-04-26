@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <title>The Boat App</title>
+  <path d="M4 34 L44 34 L36 42 L12 42 Z" fill="#0038B8"/>
+  <rect x="23" y="6" width="2" height="28" fill="#0038B8"/>
+  <path d="M25 10 L40 32 L25 32 Z" fill="#94B800"/>
+  <path d="M23 6 L32 9 L23 12 Z" fill="#B82200"/>
+</svg>

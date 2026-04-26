@@ -64,7 +64,20 @@ services:
     image: quay.io/keycloak/keycloak:26.6.1
     # No --import-realm. Realm config is applied declaratively by the
     # keycloak-config sidecar below (reads infra/keycloak/realm.yaml).
-    command: start-dev
+    entrypoint: ["/bin/bash", "-ec"]
+    command:
+      - |
+        until getent hosts postgres >/dev/null; do
+          echo "Waiting for Docker DNS to resolve postgres..."
+          sleep 1
+        done
+        exec /opt/keycloak/bin/kc.sh start-dev
+    # Mount the custom `boatapp-fun` login theme directly so dev
+    # iteration is a Keycloak restart away (no image rebuild). The
+    # production image bakes the same `themes/` directory in via
+    # `keycloak/Dockerfile`, so behaviour matches across environments.
+    volumes:
+      - ./keycloak/themes:/opt/keycloak/themes:ro
     # Two narrow bindings:
     # - 127.0.0.1 lets the host browser reach Keycloak via
     #   http://localhost:8180 (and via keycloak.localtest.me:8180,

@@ -35,6 +35,12 @@ ENV KC_DB=postgres
 
 COPY --from=builder /opt/keycloak/ /opt/keycloak/
 
+# Bake the custom `boatapp-fun` login theme into the optimized image so
+# `start --optimized` does not need a runtime mount. The same directory
+# is volume-mounted in local-intg via docker-compose.yml; this COPY is
+# the production-equivalent baked path.
+COPY ./themes /opt/keycloak/themes
+
 # Same entrypoint as upstream — the Container App template overrides
 # `command` to `["start", "--optimized"]`, which now succeeds because
 # the PostgreSQL JDBC vendor was baked in by the builder stage above.
