@@ -1,3 +1,9 @@
+<!--
+  SUPERSEDED 2026-04-27 (in part): the `demo`/`${DEMO_PASSWORD}` test user
+  IS now imported in staging/production too (not "omit or rely on
+  vault-provided password" as the prose below suggests). See
+  infra/keycloak/realm.users.demo.yaml SECURITY NOTE for the rationale.
+-->
 <task>
   <project_conventions>
     Before declaring this phase done, you MUST:

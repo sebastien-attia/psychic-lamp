@@ -170,6 +170,34 @@ class ValidationAndErrorsIntegrationTest extends IntegrationTestBase {
         assertNoAboutBlank(res);
     }
 
+    /**
+     * POST with name "FORBIDDEN" AND no description → 422. Even though the
+     * missing description on its own would only be an INFO advisory, the
+     * presence of any ERROR-severity finding forces the whole envelope to
+     * fail. The 422 body carries BOTH messages so the caller sees the full
+     * picture; the gate predicate (any-ERROR) is the contract under test.
+     */
+    @Test
+    void semanticDomainFailure_withMixedSeverity_returns422_andCarriesBothMessages() throws Exception {
+        MvcResult res = mockMvc.perform(post("/api/v1/boats")
+                        .with(mockJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"FORBIDDEN-X\"}"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.type").value(VALIDATION_TYPE))
+                .andExpect(jsonPath("$.status").value(422))
+                .andExpect(jsonPath("$.messages.length()").value(2))
+                .andReturn();
+        String body = res.getResponse().getContentAsString();
+        // Order is not part of the contract, but both severities must be present.
+        assertThat(body)
+                .contains("\"severity\":\"ERROR\"")
+                .contains("\"severity\":\"INFO\"")
+                .contains("field.format.invalid")
+                .contains("boat.description.missing");
+        assertNoAboutBlank(res);
+    }
+
     /** GET /boats/{random-uuid} → 404 with type {@code .../not-found}, no messages. */
     @Test
     void getMissingBoat_returns404_withNotFoundType() throws Exception {

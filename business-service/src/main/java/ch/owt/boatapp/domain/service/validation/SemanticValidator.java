@@ -40,7 +40,12 @@ public class SemanticValidator {
      *       (case-insensitive) → one {@link Severity#ERROR} message of
      *       type {@link MessageType#INVALID_FORMAT} on field
      *       {@code "Boat.name"}.</li>
-     *   <li>All other inputs (including {@code null}) → no messages.</li>
+     *   <li>{@code description} that is {@code null} or whitespace-only →
+     *       one {@link Severity#INFO} message of type
+     *       {@link MessageType#DESCRIPTION_MISSING} on field
+     *       {@code "Boat.description"}. Advisory: the boat is still
+     *       persisted.</li>
+     *   <li>All other inputs → no messages.</li>
      * </ul>
      *
      * @param name        the proposed name (may be {@code null})
@@ -53,6 +58,10 @@ public class SemanticValidator {
         if (name != null && name.toUpperCase(Locale.ROOT).contains(FORBIDDEN_TOKEN)) {
             messages.add(new ValidationMessage(
                     Severity.ERROR, MessageType.INVALID_FORMAT, "Boat.name"));
+        }
+        if (description == null || description.isBlank()) {
+            messages.add(new ValidationMessage(
+                    Severity.INFO, MessageType.DESCRIPTION_MISSING, "Boat.description"));
         }
         return Collections.unmodifiableList(messages);
     }

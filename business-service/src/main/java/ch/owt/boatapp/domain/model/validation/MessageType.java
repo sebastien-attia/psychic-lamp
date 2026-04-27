@@ -18,6 +18,8 @@ package ch.owt.boatapp.domain.model.validation;
  * <tr><th>{@link #CANNOT_BE_EMPTY}</th><td>{@code field.required}</td></tr>
  * <tr><th>{@link #SIZE_EXCEEDED}</th><td>{@code field.size.invalid}</td></tr>
  * <tr><th>{@link #INVALID_FORMAT}</th><td>{@code field.format.invalid}</td></tr>
+ * <tr><th>{@link #NAME_TOO_SHORT}</th><td>{@code boat.name.short}</td></tr>
+ * <tr><th>{@link #DESCRIPTION_MISSING}</th><td>{@code boat.description.missing}</td></tr>
  * </table>
  */
 public enum MessageType {
@@ -32,7 +34,19 @@ public enum MessageType {
     SIZE_EXCEEDED("field.size.invalid"),
 
     /** A field does not match its required format (regex, parse, …). */
-    INVALID_FORMAT("field.format.invalid");
+    INVALID_FORMAT("field.format.invalid"),
+
+    /**
+     * The boat name is shorter than the recommended minimum (advisory).
+     * Emitted with {@code Severity.WARNING}; does not block persistence.
+     */
+    NAME_TOO_SHORT("boat.name.short"),
+
+    /**
+     * The boat description was omitted (advisory). Emitted with
+     * {@code Severity.INFO}; does not block persistence.
+     */
+    DESCRIPTION_MISSING("boat.description.missing");
 
     private final String applicationCode;
 

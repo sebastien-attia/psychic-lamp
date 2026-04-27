@@ -33,6 +33,10 @@ business-service:
   url: ${BUSINESS_SERVICE_URL}
 
 server:
+  # Honour X-Forwarded-* from the Azure App Service front door. Without
+  # this, Spring builds redirect URIs from the internal Host header
+  # (`localhost:8080`) — see application-staging.yml for the full story.
+  forward-headers-strategy: framework
   servlet:
     session:
       cookie:

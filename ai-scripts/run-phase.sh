@@ -224,7 +224,7 @@ print_phase_intro() {
       source="ai-scripts/02c3-ansible.md"
       artefacts=(
         "deploy.yml: bootstrap-db-roles → app-config → build/push → update Apps → migrations → keycloak → health"
-        "configure-keycloak.yml: adorsys/keycloak-config-cli:latest-26.6.1 applies infra/keycloak/realm.yaml"
+        "configure-keycloak.yml: adorsys/keycloak-config-cli:latest-26.5.4 applies infra/keycloak/realm.yaml"
         "run-migrations.yml: az containerapp job start (Liquibase Jobs from 02c2), polls terminal status"
         "Inventories: staging.yml, production.yml"
       )
@@ -460,8 +460,8 @@ case "${1:-help}" in
   │    • Subscription Contributor + User Access Admin roles  │
   │    • Storage account + blob containers for Terraform     │
   │      remote state (staging, production)                  │
-  │    • gh secret/variable set for AZURE_* / TF_STATE_*     │
-  │      and PROJECT / LOCATION                              │
+  │    • gh secret/variable set for AZURE_* / TF_STATE_* /   │
+  │      ACR_NAME / PROJECT / LOCATION                       │
   │  Invariant: NO admin secrets land in the repo — Azure    │
   │             auth is OIDC-federated only.                 │
   │  Verify:   manual — enable "Required reviewers" on the   │

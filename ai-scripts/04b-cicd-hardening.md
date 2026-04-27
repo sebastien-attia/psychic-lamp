@@ -130,38 +130,16 @@
                docker push ${REGISTRY}/${IMAGE}:${TAG}
                digest=$(docker inspect --format='{{index .RepoDigests 0}}' ${REGISTRY}/${IMAGE}:${TAG} | cut -d@ -f2)
                echo "digest=${digest}" >> "$GITHUB_OUTPUT"
-      4. Keyless sign EACH image (bff + business-service + keycloak)
-         using the workflow OIDC identity — signature is recorded in the
-         public Sigstore Rekor transparency log:
+      4. Keyless sign each image (BFF + business-service) using the
+         workflow OIDC identity — signature is recorded in the public
+         Sigstore Rekor transparency log:
            - run: cosign sign --yes ${REGISTRY}/${IMAGE}@${{ steps.push.outputs.digest }}
-      5. Generate SLSA Build L3 provenance attestation per image, push
-         to ACR:
+      5. Generate SLSA Build L3 provenance attestation, push to ACR:
            - uses: actions/attest-build-provenance@<sha> # v2.1.0
              with:
                subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE }}
                subject-digest: ${{ steps.push.outputs.digest }}
                push-to-registry: true
-
-      Three images, not two. If phase 4's `deploy-*.yml` already build a
-      `keycloak` image alongside `bff` and `business-service` (per
-      `ai-scripts/04-cicd.md` step 1b — an "optimized" derivative of
-      `quay.io/keycloak/keycloak:26.6.1` built from `keycloak/Dockerfile`,
-      baking `KC_DB=postgres` into `kc.sh build` so the Container App
-      can launch with `start --optimized`), wire the same
-      build-push → cosign sign → attest-build-provenance trio for it.
-
-      `docker-build-push` input pitfall — the action runs
-      `docker build --file "${dockerfile}" "${context}"` and docker
-      resolves `--file` against the workflow cwd (repo root after
-      `actions/checkout`), NOT against `context`. So the keycloak
-      invocation MUST pass `dockerfile: keycloak/Dockerfile` (a
-      repo-rooted path) and MUST NOT set `context: keycloak` —
-      `context:` should be left at its default (`.`). Passing
-      `context: keycloak` + `dockerfile: Dockerfile` makes docker look
-      for `./Dockerfile` in the repo root and fail with "open Dockerfile:
-      no such file or directory" before any context tarball is even
-      produced. The bff and business-service callers already follow this
-      idiom — replicate it for keycloak.
 
       Document in `.github/ENVIRONMENTS.md` how to verify locally:
 
@@ -305,13 +283,7 @@
             - run: |
                 terraform plan -out=tfplan.binary -input=false \
                   -var bff_image_tag=$BFF_TAG \
-                  -var business_service_image_tag=$BS_TAG \
-                  -var keycloak_image_tag=$KC_TAG
-                # All three *_TAG values resolve to the same
-                # staging-<sha8> / release-tag literal that phase 4's
-                # `Compute image references and tags` step writes to
-                # GITHUB_ENV — keycloak rolls forward and rolls back
-                # in lockstep with bff and business-service.
+                  -var business_service_image_tag=$BS_TAG
                 terraform show -json tfplan.binary > tfplan.json
             - uses: actions/upload-artifact@<sha> # v4
               with:
@@ -323,16 +295,8 @@
 
         apply:
           needs: plan
-          environment: staging   # production = `production` (see dual-env note below)
+          environment: staging   # or production (gates approval here)
           runs-on: <vnet-runner>
-          # NO `env:` block. `terraform apply tfplan.binary` runs the
-          # already-resolved plan and does NOT re-evaluate variables, so
-          # any TF_VAR_*_password / TF_VAR_*_principal_id declared here
-          # is dead code and an unnecessary expansion of the secret
-          # blast radius for the post-deploy steps. Likewise, do NOT
-          # add a "Resolve federated SP object ID" step (`az ad sp show`)
-          # to the apply job — the principal-ID values it would emit
-          # are TF_VAR_* the apply step doesn't read either.
           steps:
             - uses: actions/download-artifact@<sha> # v4
               with: { name: tfplan-${{ github.run_id }} }
@@ -340,42 +304,8 @@
             - run: terraform apply -input=false -auto-approve tfplan.binary
 
       The apply runs the EXACT plan that was reviewed — no re-plan inside
-      the apply job.
-
-      **Dual-environment design for production (one approval per release).**
-      GitHub fires deployment-protection rules per *job-claim*, not per
-      workflow run. If `infra-bootstrap`, `plan`, AND `apply` all claim
-      `environment: production`, a release blocks on three Required-Reviewer
-      prompts back-to-back. To collapse that to one prompt, host the
-      unprotected jobs on a sibling environment:
-
-        infra-bootstrap → environment: production-bootstrap   (no protection)
-        plan            → environment: production-bootstrap   (no protection)
-        apply           → environment: production             (Required-Reviewer)
-
-      `production-bootstrap` is created by `00d-bootstrap-azure.sh` with a
-      matching FIC `gh-env-prod-bootstrap` (subject
-      `repo:<owner>/<repo>:environment:production-bootstrap`). Its TF_VAR_*
-      secret VALUES are mirrored from `production` by
-      `00f-generate-db-secrets.sh`'s env-group logic so
-      `secrets.TF_VAR_*` resolves identically across both envs and
-      Terraform's variable-surface validation passes on the targeted
-      bootstrap apply. The dual-env design MUST be documented in
-      `.github/ENVIRONMENTS.md` with a "do NOT add Required-Reviewer to
-      production-bootstrap" warning — without it a future operator will
-      "fix" the asymmetry through the UI and re-introduce the
-      triple-prompt pain.
-
-      **Preflight env-existence check (production only).** Add a
-      `preflight-envs` job (depends on `ci`, no environment claim) that
-      runs `gh api repos/${GITHUB_REPOSITORY}/environments/{production,production-bootstrap}`
-      and fails fast with an `::error::` pointing at `00d-bootstrap-azure.sh`
-      and `00f-generate-db-secrets.sh` if either env is missing. Without
-      this guard, a clone of the repo where the bootstrap scripts have
-      not been re-run trips an opaque
-      `Value 'production-bootstrap' is not valid` error mid-run, AND the
-      OIDC token lacks the matching environment claim — operators burn
-      time guessing. Wire `infra-bootstrap` to `needs: [ci, preflight-envs]`.
+      the apply job. Production-environment approval gate sits BETWEEN
+      plan and apply (it currently sits before everything).
 
       Update `terraform-plan.yml` (PR workflow) to upload the same
       artifact and post a summary table. Share a composite action
@@ -566,12 +496,11 @@
     git commit -m "ci(hardening): SLSA L3 provenance + cosign + Trivy + CodeQL + SHA-pinning
 
     - All actions pinned to commit SHA (Dependabot tag-comment retained)
-    - cosign keyless OIDC signing + actions/attest-build-provenance for all three images (bff, business-service, keycloak)
+    - cosign keyless OIDC signing + actions/attest-build-provenance for both images
     - aquasecurity/trivy-action gates HIGH+CRITICAL on built images
     - github/codeql-action: weekly + on push/PR for Java + TS
     - gitleaks secret scanning on every push/PR
     - terraform plan persisted as artifact, applied verbatim across env gate
-    - production approval collapsed to one prompt per release via sibling `production-bootstrap` env (mirrored secrets, preflight existence check); apply jobs strip dead TF_VAR_* / SP-resolve since `apply tfplan.binary` does not re-evaluate variables
     - Dependency-Track upgraded from receipt to gate (pre-deploy policy check)
     - concurrency: groups on staging/production deploy workflows
     - Branch protection codified in .github/settings.yml, applied by 00d

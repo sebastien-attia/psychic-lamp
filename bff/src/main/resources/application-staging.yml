@@ -38,7 +38,26 @@ business-service:
   url: ${BUSINESS_SERVICE_URL}
 
 server:
+  # Honour X-Forwarded-* headers set by the Azure App Service front door.
+  # Without this, Spring builds redirect URIs (and OAuth2 redirect_uri) from
+  # the internal Host header (`localhost:8080`), so a browser hitting the
+  # public URL gets redirected to localhost after Keycloak login.
+  forward-headers-strategy: framework
   servlet:
     session:
       cookie:
         secure: true
+
+# Mirror Spring's stdout to a file — App Service for Containers does not
+# capture container stdout in the platform docker.log, so a startup crash
+# (e.g. Liquibase BeanCreationException) is invisible to
+# `az webapp log download` without this. /tmp is the only path inside the
+# image guaranteed writable by the non-root `spring` user (uid 1001):
+# /home is the Azure Files mount owned by root and rejects writes from
+# uid 1001, which causes Spring Boot's LoggingApplicationListener to
+# abort and the JVM to exit before any other initialization. The file
+# is read via `az webapp ssh` (or Kudu's WebSSH) — one command, no perms
+# dance:  cat /tmp/bff-spring.log
+logging:
+  file:
+    name: /tmp/bff-spring.log

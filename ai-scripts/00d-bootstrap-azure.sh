@@ -29,12 +29,7 @@
 #   6. GitHub repo/environment secrets + variables via gh CLI:
 #        secrets: AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_SUBSCRIPTION_ID,
 #                 TF_STATE_STORAGE_ACCOUNT, TF_STATE_RESOURCE_GROUP
-#        vars:    PROJECT, LOCATION
-#      (ACR name is NOT a bootstrap variable — Terraform owns it via the
-#       formula `${project_name}${environment}acr` in modules/container-
-#       registry/main.tf, and each deploy workflow re-derives it as a
-#       literal mirroring that formula. Pinning it in two places caused a
-#       drift bug — see git history of this file for the fix.)
+#        vars:    ACR_NAME, TF_STATE_CONTAINER
 #   7. Branch protection on `main` and `staging` from
 #      `.github/settings.yml` (committed by phase 4b). Skipped silently
 #      if `settings.yml` is absent — first-run bootstrap before phase 4b
@@ -55,7 +50,8 @@
 #     --project       boat-app \
 #     [--app-name     boat-app-ci] \
 #     [--state-rg     boat-app-tfstate-rg] \
-#     [--state-sa     boatapptfstateXXXXXX]
+#     [--state-sa     boatapptfstateXXXXXX] \
+#     [--acr-name     boatappacrXXXXXX]
 #
 # Dependencies: az CLI >= 2.65, gh CLI >= 2.40, jq.
 # Authentication: `az login` + `gh auth login` BEFORE running.
@@ -76,6 +72,7 @@ PROJECT="boat-app"
 APP_NAME=""
 STATE_RG=""
 STATE_SA=""
+ACR_NAME=""
 
 usage() {
   sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
@@ -91,6 +88,7 @@ while [[ $# -gt 0 ]]; do
     --app-name)      APP_NAME="$2"; shift 2 ;;
     --state-rg)      STATE_RG="$2"; shift 2 ;;
     --state-sa)      STATE_SA="$2"; shift 2 ;;
+    --acr-name)      ACR_NAME="$2"; shift 2 ;;
     -h|--help)       usage 0 ;;
     *)               echo "Unknown flag: $1" >&2; usage ;;
   esac
@@ -103,15 +101,14 @@ done
 APP_NAME="${APP_NAME:-${PROJECT}-ci}"
 STATE_RG="${STATE_RG:-${PROJECT}-tfstate-rg}"
 
-# Storage-account names must be globally unique and <= 24 chars, lowercase.
-# Derive a short deterministic suffix from the subscription ID so re-runs land
-# on the same name without the caller having to remember it. (ACR is NOT
-# suffixed here — Terraform names it `${project}${environment}acr`, which is
-# unique enough for a per-tenant project and avoids drift between bootstrap
-# and Terraform. See header comment.)
+# Storage account + ACR names must be globally unique and <= 24 chars, lowercase.
+# Derive a short deterministic suffix from the subscription ID so re-runs land on
+# the same names without the caller having to remember them.
 SUBHASH=$(printf '%s' "${SUBSCRIPTION}" | shasum | cut -c1-6)
 STATE_SA="${STATE_SA:-${PROJECT//-/}tfstate${SUBHASH}}"
+ACR_NAME="${ACR_NAME:-${PROJECT//-/}acr${SUBHASH}}"
 STATE_SA="${STATE_SA:0:24}"
+ACR_NAME="${ACR_NAME:0:24}"
 
 # ─── Dependency checks ─────────────────────────────────────────────────
 # `yq` is a soft dependency: only required when .github/settings.yml is
@@ -133,6 +130,7 @@ echo "▸ repo         : ${REPO}"
 echo "▸ project      : ${PROJECT}"
 echo "▸ app name     : ${APP_NAME}"
 echo "▸ state RG/SA  : ${STATE_RG} / ${STATE_SA}"
+echo "▸ ACR name     : ${ACR_NAME}  (created later by Terraform, name pinned here so CI can reference it)"
 echo
 
 # ─── 0. Resource provider registration ─────────────────────────────────
@@ -211,17 +209,11 @@ EOF
   echo "    created: ${name}  (subject: ${subject})"
 }
 
-add_fic "gh-main"             "repo:${REPO}:ref:refs/heads/main"
-add_fic "gh-staging"          "repo:${REPO}:ref:refs/heads/staging"
-add_fic "gh-pr"               "repo:${REPO}:pull_request"
-add_fic "gh-env-staging"      "repo:${REPO}:environment:staging"
-add_fic "gh-env-prod"         "repo:${REPO}:environment:production"
-# `production-bootstrap` is a sibling GitHub Environment to `production`
-# carrying the same secret set but NO protection rules. The infra-bootstrap
-# and plan jobs in deploy-production.yml claim it so the Required-Reviewer
-# rule on `production` fires only on the actually-mutating apply job — one
-# approval per release instead of three.
-add_fic "gh-env-prod-bootstrap" "repo:${REPO}:environment:production-bootstrap"
+add_fic "gh-main"        "repo:${REPO}:ref:refs/heads/main"
+add_fic "gh-staging"     "repo:${REPO}:ref:refs/heads/staging"
+add_fic "gh-pr"          "repo:${REPO}:pull_request"
+add_fic "gh-env-staging" "repo:${REPO}:environment:staging"
+add_fic "gh-env-prod"    "repo:${REPO}:environment:production"
 
 # ─── 3. Subscription role assignments ──────────────────────────────────
 echo "▸ [4/7] Subscription-scope role assignments for ${APP_NAME}"
@@ -340,6 +332,7 @@ set_repo_secret "AZURE_SUBSCRIPTION_ID"    "${SUBSCRIPTION}"
 set_repo_secret "TF_STATE_STORAGE_ACCOUNT" "${STATE_SA}"
 set_repo_secret "TF_STATE_RESOURCE_GROUP"  "${STATE_RG}"
 
+set_repo_var    "ACR_NAME"                 "${ACR_NAME}"
 set_repo_var    "PROJECT"                  "${PROJECT}"
 set_repo_var    "LOCATION"                 "${LOCATION}"
 
@@ -347,7 +340,7 @@ set_repo_var    "LOCATION"                 "${LOCATION}"
 # are the one thing this script cannot do (no REST API for required_reviewers
 # except on GitHub Enterprise with advanced protection rules) — flagged at
 # the end.
-for env in staging production production-bootstrap; do
+for env in staging production; do
   if gh api "repos/${REPO}/environments/${env}" >/dev/null 2>&1; then
     echo "    environment exists: ${env}"
   else
@@ -355,10 +348,6 @@ for env in staging production production-bootstrap; do
     echo "    environment created: ${env}"
   fi
 done
-# `production-bootstrap` MUST stay free of protection rules — it exists
-# precisely to host the unreviewed bootstrap/plan jobs. If you ever add
-# Required-Reviewer to it through the UI, you re-introduce the
-# triple-approval pain that motivated the dual-env design.
 
 # ─── 6. Branch protection (codified in .github/settings.yml) ───────────
 # Source of truth: .github/settings.yml (committed by phase 4b). The file
@@ -423,11 +412,6 @@ cat <<EOF
   Remaining manual action (cannot be scripted via public API):
     → GitHub → repo Settings → Environments → production →
       Deployment protection rules → "Required reviewers" → add reviewer(s).
-
-  ⚠  Do NOT add Required-Reviewer to "production-bootstrap" — that env
-     exists precisely to host the unreviewed bootstrap/plan jobs so the
-     reviewer rule fires only once per release. See .github/ENVIRONMENTS.md
-     ("Why two production envs?").
 
   Everything else (Terraform apply, Ansible deploys, image push, schema
   migrations, Keycloak config, secret rotation) is now code-driven through
