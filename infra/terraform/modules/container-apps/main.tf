@@ -255,6 +255,19 @@ resource "terraform_data" "bootstrap_db_roles_run" {
         done
 
         echo ">> bootstrap-db-roles: attempt $attempt ended with $STATUS"
+        # Dump the execution's full properties so the workflow log carries
+        # the replica's container state (terminationReason / exitCode) and
+        # Azure-side error message. Without this the only failure signal
+        # surfaced to CI is the bare "Failed" status — leaving us blind to
+        # whether the script reached psql, whether secret injection
+        # worked, or whether the container ever started. `|| true` so a
+        # transient ARM failure on the diagnostic call does not mask the
+        # underlying job failure under `set -e`.
+        echo ">> bootstrap-db-roles: dumping execution properties for $EXEC"
+        az containerapp job execution show \
+          --name "$JOB_NAME" --resource-group "$RG_NAME" \
+          --job-execution-name "$EXEC" --query properties \
+          -o json 2>&1 | sed 's/^/    /' || true
         if [ "$attempt" -lt 3 ]; then
           echo ">> bootstrap-db-roles: waiting 60 s for RBAC propagation"
           sleep 60
