@@ -32,19 +32,38 @@ regexes = [
   '''(?i)\b(changeme|change-me|demo|demo123|password|secret)\b''',
 ]
 
-# Scoped suppressions for the built-in `private-key` rule. Kept OUT of the
-# global [allowlist] above so a future real AWS key / JWT / token hard-coded
-# in any of these paths still trips the other default rules. Requires
-# gitleaks >= 8.21 (`targetRules`); the action pins 8.24.3.
-[[allowlists]]
-description = "False positives for the private-key rule"
-targetRules = ["private-key"]
-paths = [
-  # Tests build a PEM string at runtime from KeyPairGenerator; only the
-  # "-----BEGIN PRIVATE KEY-----" header literal appears in source.
-  '''.*/src/test/.*\.java$''',
-  # Comment block contrasting PKCS#1 vs PKCS#8 PEM headers; no key material.
-  '''infra/terraform/modules/keyvault/main\.tf$''',
-  # Documentation snippet showing the same runtime-generated test pattern.
-  '''ai-scripts/.*\.md$''',
-]
+# Per-rule allowlist for the inherited default `private-key` rule.
+#
+# Why this shape (not a top-level [[allowlists]] with targetRules):
+#   - gitleaks 8.24.3 has no top-level [[allowlists]] array and no
+#     `targetRules` field; the TOML decoder silently drops unknown
+#     sections, so that form is dead config. Verified in
+#     gitleaks/config/config.go @ v8.24.3.
+#   - Re-declaring [[rules]] id = "private-key" without a `regex` MERGES
+#     into the inherited default rule (Config.extend keeps baseRule.Regex
+#     when currentRule.Regex == nil), so PEM detection still fires on
+#     every other path. The [[rules.allowlists]] entry is appended to the
+#     rule's per-rule allowlist slice, so these paths are exempted for
+#     `private-key` ONLY. Other default rules (AWS keys, JWTs, GitHub
+#     tokens, generic high-entropy strings) still scan them normally.
+[[rules]]
+id = "private-key"
+
+  [[rules.allowlists]]
+  description = "PEM-header false positives: runtime-generated test fixtures, KV doc-comment, ai-scripts docs"
+  paths = [
+    # Tests build a PEM string at runtime from KeyPairGenerator; only the
+    # "-----BEGIN PRIVATE KEY-----" header literal appears in source.
+    # Anchored to the two known Maven roots — bff/ and any direct child
+    # module of business-service/ — so a stray `src/test/` segment
+    # elsewhere in the tree is NOT silently exempted.
+    '''^bff/src/test/java/.*\.java$''',
+    '''^business-service/[^/]+/src/test/java/.*\.java$''',
+    # Terraform module comment block contrasting PKCS#1 vs PKCS#8 PEM
+    # headers (no key material).
+    '''^infra/terraform/modules/keyvault/main\.tf$''',
+    # Single documentation file showing the runtime-generated test
+    # pattern. Pinned to one file rather than `ai-scripts/.*\.md` so a
+    # future doc that genuinely pastes a real key is still flagged.
+    '''^ai-scripts/02a4-backend-auth\.md$''',
+  ]
