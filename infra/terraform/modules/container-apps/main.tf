@@ -68,6 +68,17 @@ resource "azurerm_container_app_environment" "this" {
   }
 
   tags = var.tags
+
+  # Destroy-and-recreate of this resource is a 19-minute outage of the
+  # entire data plane (the recent staging deploy spent 15m53s on the
+  # destroy alone) and triggers a cascade of Job/App recreations that
+  # has its own failure modes. Force the operator to reach for
+  # `-replace=` or temporarily lift this guard for any change that
+  # would do so — the spurious replacement caught here in a recent
+  # versionless-secret-IDs PR was the entire reason staging went red.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # ── bootstrap-db-roles Job (one-shot, runs before any workload starts) ───
