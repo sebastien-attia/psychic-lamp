@@ -2,46 +2,61 @@
 
 This project was built with heavy AI assistance. Pretending otherwise would
 waste a reviewer's time. What follows is an honest account of *which* AI was
-used, *for what*, *what was kept human*, and where the AI's first draft
-needed surgery.
+used, *for what*, *what was kept human*, and how the AI's first draft was
+validated.
 
 ## AI tools used
 
-- **Claude Code** (Anthropic, model id `claude-opus-4-7[1m]` — Claude Opus 4.7
-  with 1M context) — primary day-to-day driver. Every new phase opens with
+- **Claude Code** (Anthropic CLI, model `claude-opus-4-7[1m]` — Claude Opus 4.7,
+  1M context). Primary day-to-day driver. Every new phase opens with
   `--permission-mode plan`; only after the proposed plan was reviewed did
   execution start.
-- **Claude.ai** (web app) — used early for whiteboard-style architecture
-  discussion before any prompt was committed: hexagonal layout, BFF /
-  resource-server boundary, `private_key_jwt` vs client-secret trade-off,
-  token-forwarding strategy.
+- **OpenAI Codex** (CLI). Occasional second opinion, usually when Claude got
+  stuck on a corner case or I wanted to cross-check an architectural call
+  with a different model.
+- **Claude.ai** (web app). Whiteboard-style architecture discussion before
+  any prompt was committed: hexagonal layout, BFF / resource-server boundary,
+  `private_key_jwt` vs client-secret trade-off, token-forwarding strategy.
 
-No other AI tools (Copilot, Cursor, ChatGPT, etc.) were used.
+No other AI tools (Copilot, Cursor, etc.) were used.
 
-## What AI was used for
+## What I used AI for
 
-- Project bootstrap and per-module hexagonal directory trees.
-- Spring Boot scaffolding (extending Initializr-generated `pom.xml`s, not
-  rewriting them).
-- Domain models, ports, use-case implementations, JPA mappers — Claude wrote
-  the code; ArchUnit kept it inside the lines.
-- Liquibase YAML changelogs (BFF `SPRING_SESSION`, Business Service
-  `APP_USER` / `BOATS` / `BOAT_AUDIT`).
-- Security wiring: BFF OAuth2 session, Business Service JWT resource server,
-  Keycloak `keycloak-config-cli` realm definitions.
-- Vue 3 components, Pinia stores, Axios interceptor, router guards.
-- OpenAPI codegen wiring on both sides (Spring HTTP Interface + TypeScript
-  Axios), plus all `Dockerfile`s and the two Compose stacks.
-- Terraform modules (network, database, ACR, Container Apps, Key Vault) and
-  Ansible playbooks (deploy, rollback, configure-keycloak, run-migrations).
-- Playwright E2E tests, axe-core accessibility checks, GitHub Actions
-  workflows.
-- This document.
+- **Prompt engineering as a meta-step.** Every prompt under
+  [`ai-scripts/`](ai-scripts/) was itself drafted with Claude — I described
+  the phase's intent, Claude shaped it into a `<role>` / `<context>` /
+  `<instructions>` / `<verification>` XML prompt, and I edited the
+  trade-offs by hand. The prompts then drive code generation. So the AI
+  writes *both* the spec and the code; the human pins the trade-offs.
+- **Code generation.** Domain models, ports, use-case implementations, JPA
+  mappers, security wiring, Vue 3 components, Pinia stores, Axios
+  interceptors, OpenAPI codegen wiring, Liquibase YAML changelogs — Claude
+  wrote the code; ArchUnit, Testcontainers and Playwright kept it honest.
+- **Architecture and design discussions.** Hexagonal split (one Maven module
+  per layer), `private_key_jwt` over client-secret, Spring Session JDBC over
+  Redis, `@Version` + ETag/If-Match for optimistic locking, custom Keycloak
+  image vs config-only — every call argued against AI before being committed
+  to a prompt.
+- **CI/CD pipelines.** GitHub Actions workflows, OIDC federation to Azure,
+  cosign+SLSA image signing, Trivy / CodeQL / gitleaks gates, branch
+  protection as code, Dependency-Track gating.
+- **Tooling development.** `ai-scripts/run-phase.sh`, the per-phase check
+  scripts under `ai-scripts/checks/`, `00b-generate-bff-key.sh`,
+  `00d-bootstrap-azure.sh`, `00e-create-staging-branch.sh`,
+  `00f-generate-db-secrets.sh`, the `.claude/settings.json` PostToolUse
+  hooks. The harness around the AI is itself written with the AI.
+- **Documentation.** [`README.md`](README.md), [`CONCEPTS.md`](CONCEPTS.md),
+  [`DEPLOYMENT.md`](DEPLOYMENT.md), [`USER_GUIDE.md`](USER_GUIDE.md), the
+  per-phase `human.md` checkpoints, this file's first draft.
+- **Learning.** Spring Boot 4 / Java 25 idioms, Keycloak 26 client
+  authentication modes, Azure Container Apps + Terraform modules, OSV-Scanner
+  thresholds, SLSA L3 specifics — Claude as an interactive textbook, with
+  the docs cross-checked.
 
-## Representative prompts
+## Representative prompts (verbatim)
 
-Three excerpts pulled byte-for-byte from `ai-scripts/`. The full prompts
-(plus surrounding rules and step-by-step instructions) live in
+Five excerpts pulled byte-for-byte from `ai-scripts/`. The full prompts (plus
+surrounding rules and step-by-step instructions) live in
 [`ai-scripts/`](ai-scripts/) — what's quoted here is the most load-bearing
 slice of each.
 
@@ -63,19 +78,24 @@ slice of each.
 </optimistic-locking>
 ```
 
-**What Claude produced.** A 790-line `contracts/openapi.yaml` covering
-boat CRUDL + user info, RFC 9457 ProblemDetail with a `messages[]` extension
-for validation, and a stable problem-type URI registry. Bean Validation
-constraints on DTOs (`maxLength`, `format: uuid`) survived round-tripping
-through the OpenAPI generator thanks to `useBeanValidation=true`.
+### 2 · `ai-scripts/02a2-backend-domain.md` — pure-Java domain layer
 
-**What I changed.** The first draft used `about:blank` as the default
-`type` URI for several errors. I overrode that — `about:blank` is the
-single biggest RFC 9457 anti-pattern — and added a documented URI registry
-in [`.claude/rules/validation-and-errors.md`](.claude/rules/validation-and-errors.md).
-That rule then propagated into every subsequent error-handling prompt.
+```
+<role>You are a senior Java architect implementing a strict hexagonal domain layer where the domain is 100% framework-free.</role>
 
-### 2 · `ai-scripts/02a4-backend-auth.md` — split authentication
+<hexagonal-rule>
+  CRITICAL: domain.model, application.port.in, application.port.out, application.service
+  must contain ZERO Spring/Jakarta annotations. Only java.* and domain.* imports.
+  JPA annotations (@Entity, @Column, @Version, @Table) belong ONLY in
+  adapter.out.persistence.entity — NOT in domain.model.
+  The domain model and JPA entity are SEPARATE classes, mapped by hand-written
+  @Component classes. Domain models are immutable records — no setters; updates
+  rebuild a fresh record via the canonical constructor. NO MapStruct, NO
+  annotation processor for mapping.
+</hexagonal-rule>
+```
+
+### 3 · `ai-scripts/02a4-backend-auth.md` — split authentication
 
 ```
 <role>You are a senior security engineer implementing two distinct security configurations: BFF (OAuth2 session) and Business Service (JWT resource server).</role>
@@ -98,8 +118,8 @@ That rule then propagated into every subsequent error-handling prompt.
 ```
 
 The matching Keycloak realm wiring (in
-[`ai-scripts/02c1-docker.md`](ai-scripts/02c1-docker.md)) pins the
-client-authentication mode:
+[`ai-scripts/02c1-docker.md`](ai-scripts/02c1-docker.md)) pins client
+authentication to `private_key_jwt`:
 
 ```yaml
 clientAuthenticatorType: client-jwt
@@ -109,143 +129,137 @@ attributes:
   token.endpoint.auth.signing.alg: RS256
 ```
 
-**What Claude produced.** Two `SecurityFilterChain` configs, a
-`BffSecurityHelper` that pulls the access token off the
-`OAuth2AuthorizedClient` and rides it into a `RestClient` interceptor, a
-`SecurityHelper` on the resource-server side that syncs `AppUser` from JWT
-claims on every request, plus a Keycloak realm YAML that wires
-`client-jwt` authentication and points at the BFF's JWKS endpoint.
-
-**What I changed.** Two corrections worth calling out:
-
-- The first draft used `clientAuthenticatorType: client-secret` — which
-  *works* but is the lazy answer. I rewrote the prompt to insist on
-  `private_key_jwt` (OIDC Core §9 / RFC 7523), generated an RSA key with
-  [`ai-scripts/00b-generate-bff-key.sh`](ai-scripts/00b-generate-bff-key.sh),
-  and exposed a `JwksController` so Keycloak fetches the public half on
-  demand. There is no client secret anywhere in this project.
-- An early version of `DevSecurityConfig` left Spring Boot's OAuth2 client
-  autoconfig active in `dev` profile, which fails fast on the missing
-  `client-id` registration. The fix (call out in
-  [`bff/src/main/resources/application-dev.yml`](bff/src/main/resources/application-dev.yml))
-  was to either exclude the autoconfig or provide a stub registration —
-  classic AI blind spot, caught by `make dev` blowing up on first run.
-
-### 3 · `ai-scripts/02c1-docker.md` — the four-stage BFF image
+### 4 · `ai-scripts/02a6-backend-security.md` — supply-chain build gates
 
 ```
-**Why 4 stages, not 3.** `@openapitools/openapi-generator-cli` (used by
-`frontend/package.json` → `generate:api`) is a thin Node wrapper that shells
-out to `java -jar`. `node:22-alpine` has no JRE, so calling `npm run build`
-(which chains `generate:api`) from the Node stage fails with
-`/bin/sh: java: not found`. Splitting codegen into its own JDK-bearing stage
-keeps the Node stage Java-free and matches the layout the verification script
-now enforces (see ai-scripts/checks/02c1/run.sh).
+<role>You are a senior application-security engineer wiring supply-chain gates (SCA, SAST, SBOM, DT upload) into two Maven modules.</role>
+
+<tools>
+  - SCA: Google OSV-Scanner CLI v2.3.5 — invoked from CI via
+    google/osv-scanner-action, plus an optional exec-maven-plugin profile
+    for local runs. HIGH + CRITICAL block CI; MEDIUM is reported.
+  - SAST: spotbugs-maven-plugin:4.9.8.3 + findsecbugs-plugin:1.14.0
+    (SECURITY-only filter, excludes **/generated/**).
+  - SBOM + Governance: cyclonedx-maven-plugin:2.9.1 → bom.json on package;
+    dependency-track-maven-plugin:1.11.0 uploads on deploy
+    (skip=true by default; CI overrides -Ddtrack.skip=false).
+</tools>
 ```
 
-**What Claude produced.** Initially, a *three*-stage Dockerfile that ran
-`npm run build` inside a Node image — and `npm run build` calls
-`openapi-generator-cli`, which is a Java tool. The build failed on Docker
-Hub with `Cannot run program "java"`. Commit
-[`598fb9b`](https://github.com/sebastien-attia/psychic-lamp/commit/598fb9b)
-fixed it by splitting TS codegen into a dedicated stage that has a JRE on
-the path.
+### 5 · `ai-scripts/04-cicd.md` — staging-vs-production deploy split
 
-**What I changed.** Even after the fix landed, the underlying frontend
-`prebuild` script *also* ran the codegen (belt-and-braces in dev mode), so
-a careless edit could quietly bring back the JRE-in-Node failure. Commit
-[`5a466dc`](https://github.com/sebastien-attia/psychic-lamp/commit/5a466dc)
-added a guard: the Docker `frontend` stage runs `npm run build:no-codegen`
-instead of `npm run build`, and the `prebuild` hook short-circuits when
-the generated `frontend/src/services/api-client/` already exists. This is
-a pattern I want to repeat: **once the AI flinches on a class of failure,
-add a build-level gate so the failure can't return**.
+```
+<role>You are a senior DevOps engineer creating a CI/CD pipeline with GitHub Actions deploying to Azure.</role>
+
+<deployment-strategy>
+  TWO environments with DIFFERENT triggers:
+
+  1. STAGING environment:
+     - Triggered AUTOMATICALLY when code is pushed/merged to the "staging" branch
+     - No manual approval needed
+     - Full pipeline: build → test → docker → push → deploy → e2e
+
+  2. PRODUCTION environment:
+     - Triggered MANUALLY by the user creating a GitHub Release on the "main" branch
+     - Requires manual approval via GitHub Environment protection rules
+     - Tags images with the release version (e.g., v1.0.0)
+</deployment-strategy>
+```
 
 ## How AI output was validated
 
-Every phase ran through the same gauntlet:
+The single biggest leverage point was **splitting the work into small,
+checkpointed phases** instead of asking for the whole app at once. Every
+phase under [`ai-scripts/`](ai-scripts/) is a self-contained slice with a
+plan, an automated check script, and a human checklist; nothing moves
+forward until the slice is green.
 
-1. **Plan first**: Claude Code ran in `--permission-mode plan` until I'd read
-   and approved the proposed file changes. No executions on first contact.
+Concretely, every phase ran through the same gauntlet:
+
+1. **Plan first.** `claude --permission-mode plan` proposed the file changes
+   read-only; I read and approved before any write.
 2. **Path-scoped rules** in [`.claude/rules/`](.claude/rules/) pinned
    conventions per area (BFF Java, Business Service Java, frontend Vue,
    infrastructure, OpenAPI contract, validation/errors, testing, git).
 3. **PostToolUse hooks** in [`.claude/settings.json`](.claude/settings.json)
    auto-format on every edit (`spotless:apply` for Java, `prettier --write`
-   for TS/Vue) — drift-free with zero ceremony.
+   for TS/Vue).
 4. **`@code-reviewer` subagent** invoked after every code-touching turn,
-   per [`CLAUDE.md`](CLAUDE.md) policy. Findings are graded **must-fix**,
-   **should-fix**, **consider** — must-fix get applied in the same turn.
-5. **ArchUnit** runs on every `mvn verify` and fails the build the moment
-   `domain.*` imports anything from Spring or Jakarta. This caught more
+   per [`CLAUDE.md`](CLAUDE.md) policy. Findings graded **must-fix**,
+   **should-fix**, **consider**; must-fix applied in the same turn.
+5. **ArchUnit + Maven module graph** fail the build the moment `domain.*`
+   imports anything from Spring or Jakarta. This caught more
    AI-introduced layering mistakes than any human review would have.
-6. **Testcontainers** spins up a real PostgreSQL for integration tests; BFF
+6. **Testcontainers** spins up real PostgreSQL for integration tests; BFF
    tests also run a real Keycloak. No mocks for the external systems that
    matter.
 7. **Playwright** drives the full local-intg stack end-to-end through the
    real BFF login flow.
 8. **Per-phase verification scripts** in
    [`ai-scripts/checks/`](ai-scripts/checks/) (one `run.sh` + one
-   `human.md` per phase) gated each commit with both automated checks and
-   a human-eyes-on checklist.
+   `human.md` per phase) gated each commit with both automated checks
+   (`pass`/`warn`/`fail` severity, `fail` aborts the phase unless
+   `FORCE=1`) and a human-eyes-on checklist.
+
+When the AI got something wrong, the fix was rarely "redo the prompt" —
+it was usually to *add a build-level gate so the failure can't return*.
+Two examples that ended up shaping the repo:
+
+- **`private_key_jwt` over client_secret.** First draft of
+  `ai-scripts/02a4-backend-auth.md` accepted `clientAuthenticatorType:
+  client-secret`. I rewrote it to insist on `private_key_jwt` (OIDC Core §9
+  / RFC 7523), generated an RSA key with
+  [`ai-scripts/00b-generate-bff-key.sh`](ai-scripts/00b-generate-bff-key.sh),
+  and exposed a `JwksController` so Keycloak fetches the public half on
+  demand. There is no client secret anywhere in this project.
+- **JRE-in-Node Docker stage.** The first BFF Dockerfile ran
+  `npm run build` from `node:22-alpine`, which fails because
+  `openapi-generator-cli` shells out to `java`. Fix: split codegen into a
+  dedicated JDK stage *and* short-circuit `frontend/package.json`'s
+  `prebuild` hook when the generated client already exists, so a careless
+  edit can't quietly bring back the failure.
 
 ## What was NOT delegated to AI
 
-- **OpenAPI contract design.** The endpoint shape, ETag/If-Match strategy,
-  and error envelope are domain decisions. AI helped *transcribe* them
-  into YAML, but the design came from sketches in Claude.ai and judgment.
-- **Security architecture choices.** `private_key_jwt` over client secret;
-  Spring Session JDBC over Redis; stateless JWT validation on the
-  resource server with no session; CSRF cookie strategy. Each is a
-  human-made trade-off, defended in
-  [`.claude/rules/`](.claude/rules/).
+I deliberately kept the hand on **architecture, design, and — when the
+trade-off was non-obvious — implementation**. AI is excellent at filling
+in shape once the shape is decided; it is not the right place to *make*
+the decision.
+
+- **Architecture & design choices.** Hexagonal split with one Maven module
+  per layer; `private_key_jwt` over client-secret; Spring Session JDBC over
+  Redis; stateless JWT validation on the resource server with no session;
+  CSRF cookie strategy; per-DB Postgres roles with `PUBLIC CONNECT` revoked;
+  custom Keycloak image with a baked-in theme vs config-only. Each is a
+  human-made trade-off, defended in [`.claude/rules/`](.claude/rules/) so it
+  propagates into every subsequent prompt.
+- **OpenAPI contract design.** Endpoint shape, ETag/If-Match strategy,
+  RFC 9457 ProblemDetail with a documented problem-type URI registry —
+  AI helped *transcribe* into YAML, the design came from sketches in
+  Claude.ai and human judgment.
+- **Some implementation when stakes were high.** Anywhere security or data
+  integrity bites — JWKS controller, BFF token-forwarding interceptor,
+  Liquibase per-DB role grants, the production deploy workflow guardrails —
+  I read line-by-line and rewrote what didn't sit right, rather than
+  rubber-stamping the AI's first pass.
 - **Azure subscription bootstrap.** OIDC federation, the
   `00d-bootstrap-azure.sh` one-off, GitHub Environment protection rules,
-  `DTRACK_*` secrets — all done by hand, never written to the AI prompts.
-- **Production releases.** `deploy-production.yml` requires manual
-  approval on a protected GitHub Environment. AI never has the keys.
+  `DTRACK_*` secrets — done by hand, never written into AI prompts.
+- **Production releases.** `deploy-production.yml` requires manual approval
+  on a protected GitHub Environment. AI never has the keys.
 - **Git commit messages.** Conventional-commits style (see
   [`.claude/rules/git-conventions.md`](.claude/rules/git-conventions.md)),
-  hand-written, with the *why* in the body. Browse the log — every commit
-  is atomic, scoped, and tells a story.
-- **This document.** AI_USAGE.md must reflect lived experience. Anything
-  else would defeat its purpose.
-
-## Development workflow
-
-The whole project is driven by [`ai-scripts/run-phase.sh`](ai-scripts/run-phase.sh):
-
-```
-./ai-scripts/run-phase.sh <phase>      # e.g. 02a4, 02c1, 04
-```
-
-For each phase:
-
-1. The orchestrator prints a coloured summary of what's about to be produced.
-2. `claude --permission-mode plan "$(cat ai-scripts/<phase>.md)"` proposes a
-   plan; you read and accept it.
-3. Execution happens with the relevant rules auto-loaded (path-scoped) and
-   formatting hooks active.
-4. `ai-scripts/checks/<phase>/run.sh` runs the automated gate; it must be
-   green before the commit.
-5. `ai-scripts/checks/<phase>/human.md` is a manual checklist (visual
-   inspection, UX, accessibility, anything a script can't see).
-6. Commit, with a hand-written conventional message.
-
-The repo's commit log is the cleanest possible answer to "what did AI
-actually do?" — every commit is small enough to review, and the messages
-say *why* in the body. Look at e.g.
-[`598fb9b`](https://github.com/sebastien-attia/psychic-lamp/commit/598fb9b)
-or [`5a466dc`](https://github.com/sebastien-attia/psychic-lamp/commit/5a466dc):
-those are the corrections, written down so the next AI iteration learns
-from them.
+  hand-written, with the *why* in the body. Atomic, scoped, and the log
+  tells a story.
 
 ## Closing note
 
-Building this app with Claude was faster than building it without. It was
-*not* push-button. The biggest leverage came from (a) writing tight,
-opinionated prompts that pinned down trade-offs the AI would otherwise
-fumble, (b) wiring ArchUnit / Testcontainers / Playwright as merciless
-external graders, and (c) reading every diff before committing. The AI is
-a junior engineer who types fast and never gets tired; senior judgment is
+Building this app with Claude (and the occasional Codex cross-check) was
+faster than building it without. It was *not* push-button. The biggest
+leverage came from (a) **splitting the work into small, checkpointed
+phases** so every AI output is reviewed before the next one builds on it,
+(b) writing tight, opinionated prompts that pin down trade-offs the AI
+would otherwise fumble, (c) wiring ArchUnit / Testcontainers / Playwright
+as merciless external graders, and (d) reading every diff before
+committing. The AI is a fast, tireless junior engineer; senior judgment is
 still required, and that's where the human stays in the loop.
