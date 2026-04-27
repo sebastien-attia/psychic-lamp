@@ -1,21 +1,20 @@
-# Key Vault module — RBAC-only authorization, public access disabled,
-# private endpoint, and the six secrets the workload needs.
+# Key Vault module — RBAC-only authorization, public endpoint, and the six
+# secrets the workload needs.
 #
 # Authorization model
 # ───────────────────
 # `enable_rbac_authorization = true` is the only auth path; no
 # `access_policy { }` blocks. The role assignments at the bottom of this
-# file are the sole grants that exist on the vault.
+# file are the sole grants on the vault. The Web Apps' system-assigned MIs
+# are granted Key Vault Secrets User by the app-service module after the
+# vault and the apps both exist.
 #
 # Network access
 # ──────────────
-# `public_network_access_enabled = false` + `network_acls` default Deny.
-# The vault is only reachable through:
-#   - the private endpoint in the keyvault subnet (used by Ansible from the
-#     bastion / runner host), and
-#   - the AzureServices bypass, which is what allows Container Apps'
-#     azure_key_vault_secrets references to resolve from inside the ACA
-#     Environment without any direct VNet path.
+# `public_network_access_enabled = true` + `network_acls.default_action =
+# "Allow"`. App Service resolves @Microsoft.KeyVault references over the
+# public Azure backbone using the Web App's MI; no VNet path is required.
+# This is the simplification the rest of this redesign is built around.
 #
 # BFF signing key
 # ───────────────
@@ -40,45 +39,17 @@ resource "azurerm_key_vault" "this" {
 
   sku_name = "standard"
 
-  enable_rbac_authorization = true
+  rbac_authorization_enabled = true
 
-  public_network_access_enabled = false
+  public_network_access_enabled = true
 
   soft_delete_retention_days = var.soft_delete_retention_days
   purge_protection_enabled   = true
 
-  network_acls {
-    default_action = "Deny"
-    # AzureServices bypass is what enables Container Apps' azure_key_vault_secrets
-    # references to resolve from inside the ACA Environment via the platform's
-    # MI exchange — no direct VNet path from the apps subnet is needed.
-    # Operators / Ansible reach the vault over the private endpoint instead.
-    bypass                     = "AzureServices"
-    ip_rules                   = []
-    virtual_network_subnet_ids = []
-  }
-
-  tags = var.tags
-}
-
-# ── Private endpoint ──────────────────────────────────────────────────────
-resource "azurerm_private_endpoint" "kv" {
-  name                = "${local.vault_name}-pe"
-  location            = var.location
-  resource_group_name = var.resource_group_name
-  subnet_id           = var.keyvault_subnet_id
-
-  private_service_connection {
-    name                           = "kv"
-    private_connection_resource_id = azurerm_key_vault.this.id
-    subresource_names              = ["vault"]
-    is_manual_connection           = false
-  }
-
-  private_dns_zone_group {
-    name                 = "kv-dns"
-    private_dns_zone_ids = [var.keyvault_private_dns_zone_id]
-  }
+  # No network_acls block — the RBAC layer (Key Vault Secrets User on the
+  # Web Apps' MIs) is the access boundary; default network access is
+  # unrestricted so App Service can resolve @Microsoft.KeyVault references
+  # over the Azure backbone without bypass tricks.
 
   tags = var.tags
 }
@@ -92,28 +63,17 @@ resource "tls_private_key" "bff_signing" {
 
 # ── Role assignments ──────────────────────────────────────────────────────
 # The TF apply identity needs Secrets Officer to write the secret payloads
-# below. Grant it BEFORE any azurerm_key_vault_secret resources are
-# evaluated — depends_on on the secrets enforces that ordering.
+# below. depends_on on the secrets enforces ordering.
 resource "azurerm_role_assignment" "kv_secrets_officer" {
   scope                = azurerm_key_vault.this.id
   role_definition_name = "Key Vault Secrets Officer"
   principal_id         = var.tf_apply_principal_id
 }
 
-# Each consumer's MI gets read-only access (Secrets User = read + list).
-resource "azurerm_role_assignment" "kv_secrets_user" {
-  for_each = var.consumer_principal_ids
-
-  scope                = azurerm_key_vault.this.id
-  role_definition_name = "Key Vault Secrets User"
-  principal_id         = each.value
-}
-
 # ── Secrets ───────────────────────────────────────────────────────────────
 # expiration_date is intentionally NOT set: driving it from `timestamp()`
 # triggers a no-op rewrite on every plan, and a hard-coded date drifts.
-# Soft-delete + purge_protection cover accidental loss; rotation is owned
-# by Ansible (and a future rotation_policy when the POC graduates).
+# Soft-delete + purge_protection cover accidental loss.
 locals {
   password_secrets = {
     "postgres-admin-password" = var.postgres_admin_password

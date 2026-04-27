@@ -28,7 +28,8 @@ spring:
 
 bff:
   signing-key:
-    path: ${BFF_SIGNING_KEY_PATH}
+    # Empty default — see application-staging.yml for the rationale.
+    pem: ${BFF_SIGNING_KEY_PEM:}
     id: ${BFF_SIGNING_KEY_ID}
 
 business-service:
