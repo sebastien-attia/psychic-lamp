@@ -33,15 +33,15 @@ variable "project_name" {
   default     = "boatapp"
 }
 
-variable "azure_subscription_id" {
-  description = "Azure subscription ID. Optional — when null, falls back to the ARM_SUBSCRIPTION_ID environment variable (preferred in CI)."
+variable "service_plan_sku" {
+  description = "SKU name for the shared Linux App Service Plan. Default P0v3 (1 vCPU / 4 GiB) — the minimum that comfortably fits BFF + business-service + Keycloak."
   type        = string
-  default     = null
+  default     = "P0v3"
 }
 
 # ── Database admin (server-level Flexible Server administrator_login) ──────
 variable "postgres_admin_username" {
-  description = "Server-level administrator login on the PostgreSQL Flexible Server. Used ONLY by the Ansible bootstrap-db-roles playbook to create per-DB application roles; the running apps never bind with this account."
+  description = "Server-level administrator login on the PostgreSQL Flexible Server. Used ONLY by the db-bootstrap module to create per-DB application roles; the running apps never bind with this account."
   type        = string
   default     = "pgadmin"
 }
@@ -54,19 +54,19 @@ variable "postgres_admin_password" {
 
 # ── Per-DB application role passwords ──────────────────────────────────────
 variable "bff_db_password" {
-  description = "Password for the bff PostgreSQL role. Stored as the bff-db-password Key Vault secret and injected as DATABASE_PASSWORD on the BFF Container App."
+  description = "Password for the bff PostgreSQL role. Stored as the bff-db-password Key Vault secret and injected as BFF_DB_PASSWORD on the BFF Web App."
   type        = string
   sensitive   = true
 }
 
 variable "business_db_password" {
-  description = "Password for the business_service PostgreSQL role. Stored as the business-db-password Key Vault secret and injected as DATABASE_PASSWORD on the business-service Container App and the business_service Liquibase Job."
+  description = "Password for the business_service PostgreSQL role. Stored as the business-db-password Key Vault secret and injected as BUSINESS_DB_PASSWORD on the business-service Web App."
   type        = string
   sensitive   = true
 }
 
 variable "keycloak_db_password" {
-  description = "Password for the keycloak PostgreSQL role. Stored as the keycloak-db-password Key Vault secret and injected as KC_DB_PASSWORD on the Keycloak Container App."
+  description = "Password for the keycloak PostgreSQL role. Stored as the keycloak-db-password Key Vault secret and injected as KC_DB_PASSWORD on the Keycloak Web App."
   type        = string
   sensitive   = true
 }
@@ -93,19 +93,13 @@ variable "bff_signing_key_id" {
 
 # ── Entra ID identities for CI / Terraform ────────────────────────────────
 variable "ci_push_principal_id" {
-  description = "Object ID of the Entra ID app used by GitHub Actions for image pushes. Granted AcrPush on the registry. Sourced from `az ad app show --id <AZURE_CLIENT_ID>`. Same identity as tf_apply_principal_id in this baseline."
+  description = "Service Principal Object ID of the Entra ID app used by GitHub Actions for image pushes. MUST come from `az ad sp show --id <AZURE_CLIENT_ID> --query id -o tsv` (the SP object ID), NOT `az ad app show` (which returns the app registration object ID — a different value, accepted silently by the role-assignment API but causing 401/403 at runtime). Granted AcrPush on the registry."
   type        = string
 }
 
 variable "tf_apply_principal_id" {
-  description = "Object ID of the Entra ID app that runs `terraform apply` from CI. Granted Key Vault Secrets Officer to write secret material. Typically the same identity as ci_push_principal_id."
+  description = "Service Principal Object ID of the Entra ID app that runs `terraform apply` from CI. Same `az ad sp show` rule as ci_push_principal_id — typically the same identity. Granted Key Vault Secrets Officer to write secret material."
   type        = string
-}
-
-variable "additional_kv_consumer_principal_ids" {
-  description = "Optional extra principal IDs (e.g. ansible_runner, an operator break-glass identity) granted Key Vault Secrets User. Merged with the system-assigned MIs of the Container Apps and Liquibase Jobs."
-  type        = map(string)
-  default     = {}
 }
 
 # ── Container image tags ──────────────────────────────────────────────────
@@ -122,19 +116,14 @@ variable "business_service_image_tag" {
 }
 
 variable "keycloak_image_tag" {
-  description = "Tag of the upstream quay.io/keycloak/keycloak image. Pinned to 26.6.1 to match the local-intg Docker Compose stack."
+  description = "Tag of the upstream quay.io/keycloak/keycloak image. The Keycloak Web App pulls this image directly from quay.io — no custom build, no ACR push."
   type        = string
   default     = "26.6.1"
 }
 
-variable "bff_custom_domain" {
-  description = "Optional custom FQDN for the BFF (e.g. app.example.com). Empty = use only the Azure-assigned default FQDN. See modules/container-apps/variables.tf for the DNS preconditions."
-  type        = string
-  default     = ""
-}
-
-variable "keycloak_custom_domain" {
-  description = "Optional custom FQDN for Keycloak (e.g. auth.example.com). Empty = use only the Azure-assigned default FQDN. Setting this also flips KC_HOSTNAME and the JWT issuer URI — re-run the Ansible keycloak-client config after applying."
-  type        = string
-  default     = ""
+# ── Database firewall (extra IPs) ─────────────────────────────────────────
+variable "additional_firewall_ips" {
+  description = "Extra IPv4 addresses (CI runner egress, operator workstation) granted access to the Flexible Server. Map of rule-name → IP. The deploy workflow adds its runner IP at the start of the job and removes it at the end."
+  type        = map(string)
+  default     = {}
 }
