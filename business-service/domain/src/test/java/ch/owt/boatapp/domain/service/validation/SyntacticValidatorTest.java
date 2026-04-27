@@ -81,18 +81,42 @@ class SyntacticValidatorTest {
     @Test
     void validate_acceptsDescriptionAtMaxLength() {
         String description = "x".repeat(SyntacticValidator.DESCRIPTION_MAX_LENGTH);
-        assertThat(validator.validate("OK", description)).isEmpty();
+        assertThat(validator.validate("Argo", description)).isEmpty();
     }
 
     /** Description one over the boundary → SIZE_EXCEEDED on Boat.description. */
     @Test
     void validate_flagsOversizeDescription() {
         String description = "x".repeat(SyntacticValidator.DESCRIPTION_MAX_LENGTH + 1);
-        List<ValidationMessage> messages = validator.validate("OK", description);
+        List<ValidationMessage> messages = validator.validate("Argo", description);
 
         assertThat(messages).hasSize(1);
         assertThat(messages.get(0).type()).isEqualTo(MessageType.SIZE_EXCEEDED);
         assertThat(messages.get(0).field()).isEqualTo("Boat.description");
+    }
+
+    /**
+     * Name shorter than {@link SyntacticValidator#NAME_SHORT_THRESHOLD} non-whitespace
+     * characters → advisory WARNING, not ERROR. The whitespace-padded inputs pin the
+     * documented "trim before measuring" contract.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = {"OK", "x", " a ", "\tb\t"})
+    void validate_flagsShortName_asAdvisoryWarning(String shortName) {
+        List<ValidationMessage> messages = validator.validate(shortName, null);
+
+        assertThat(messages).hasSize(1);
+        ValidationMessage m = messages.get(0);
+        assertThat(m.severity()).isEqualTo(Severity.WARNING);
+        assertThat(m.type()).isEqualTo(MessageType.NAME_TOO_SHORT);
+        assertThat(m.field()).isEqualTo("Boat.name");
+    }
+
+    /** Name with exactly NAME_SHORT_THRESHOLD non-whitespace chars → no finding. */
+    @Test
+    void validate_acceptsNameAtShortThreshold() {
+        String name = "x".repeat(SyntacticValidator.NAME_SHORT_THRESHOLD);
+        assertThat(validator.validate(name, null)).isEmpty();
     }
 
     /** Both fields invalid → both findings, in order. */
