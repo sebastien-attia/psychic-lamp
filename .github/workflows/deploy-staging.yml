@@ -71,6 +71,66 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ── Path-filter gate ────────────────────────────────────────────────────
+  # Goal: a pure image deploy (no infra/ change) must NOT plan or apply
+  # Terraform. The recent staging outage was caused by a versionless-
+  # secret-IDs change cascading into a 19-min ACA-env destroy/recreate;
+  # `prevent_destroy` now blocks that at apply-time, but we'd rather not
+  # even reach apply for image-only PRs.
+  #
+  # Implementation note: no external action — `git diff --name-only
+  # ${before}..${after}` reads the push event payload directly. dorny/
+  # paths-filter would do the same with more pinning + supply-chain
+  # surface; the 15-line bash here is preferable.
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      infra: ${{ steps.detect.outputs.infra }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          # `git diff` between two commits requires history for both ends.
+          # 0 = full history; cheaper than computing the right shallow depth
+          # for arbitrary force-push edge cases.
+          fetch-depth: 0
+      - id: detect
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # First push to the branch (e.g. branch creation) has BEFORE_SHA
+          # = 40 zeros. Treat that as "everything changed" so the full
+          # apply path runs.
+          if [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ] || [ -z "$BEFORE_SHA" ]; then
+            echo "First push to branch — treating as infra change."
+            echo "infra=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Force-pushes orphan the previous SHA — `git diff` would then
+          # die on "bad object" and `set -e` would block all subsequent
+          # staging deploys until someone debugs this job. Treat any diff
+          # failure as "treat as infra" so the worst case is just a slower
+          # path, not a stuck pipeline.
+          if ! CHANGED=$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA" 2>/dev/null); then
+            echo "Could not diff $BEFORE_SHA..$AFTER_SHA (force-push, pruned commit, or similar) — treating as infra change."
+            echo "infra=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Changed files in this push:"
+          echo "$CHANGED" | sed 's/^/  /'
+          # Match any path under infra/, the keycloak Dockerfile/realms
+          # (which feed terraform variables), or this workflow itself
+          # (so workflow edits go through the full path).
+          if echo "$CHANGED" | grep -qE '^(infra/|keycloak/Dockerfile|keycloak/realms/|\.github/workflows/(deploy-staging|ci)\.yml$|\.github/actions/)'; then
+            echo "Infra-touching change detected → full terraform path."
+            echo "infra=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "App-only change → image-update path (no terraform)."
+            echo "infra=false" >> "$GITHUB_OUTPUT"
+          fi
+
   ci:
     name: CI (reuse ci.yml)
     uses: ./.github/workflows/ci.yml
@@ -108,7 +168,8 @@ jobs:
     # Staging has no approval gate, so this job can safely claim the same
     # `staging` environment as the full plan/apply jobs.
     name: Bootstrap ACR (targeted terraform apply)
-    needs: [ci]
+    needs: [ci, changes]
+    if: needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest
     environment: staging
     concurrency:
@@ -182,6 +243,12 @@ jobs:
     # a SLSA Build L3 provenance attestation.
     name: Build, push, sign
     needs: [ci, infra-bootstrap]
+    # `infra-bootstrap` is skipped on image-only PRs (changes.infra == 'false').
+    # We still want to build+push on those PRs — the ACR already exists from a
+    # prior infra deploy. `!cancelled()` instead of `always()` so a workflow
+    # cancel from the UI doesn't spin up a runner here just to short-circuit;
+    # `!= 'failure'` collapses success/skipped/cancelled into one check.
+    if: ${{ !cancelled() && needs.ci.result == 'success' && needs.infra-bootstrap.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write       # OIDC for `azure/login@v2` + cosign keyless + attestations
@@ -329,7 +396,8 @@ jobs:
     # Staging has no protection rule, so the claim does not introduce an
     # operator click.
     name: Terraform plan (staging)
-    needs: [build-push]
+    needs: [build-push, changes]
+    if: needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
     environment: staging
     concurrency:
@@ -435,7 +503,8 @@ jobs:
     # so deployment protection rules fire AFTER the plan exists — moving
     # the gate here is the whole point of plan-as-artifact.
     name: Terraform apply + post-deploy (staging)
-    needs: [build-push, plan]
+    needs: [build-push, plan, changes]
+    if: needs.changes.outputs.infra == 'true'
     runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
     environment: staging
     concurrency:
@@ -568,5 +637,145 @@ jobs:
             echo "## Staging deploy FAILED"
             echo ""
             echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  deploy-images:
+    # Image-only fast path: NO terraform. Builds were already pushed by
+    # `build-push`; here we point the live Container Apps + Liquibase Jobs
+    # at the new SHA tag via `az containerapp [job] update --image`, then
+    # run the migrations and smoke. Total runtime target: <5 min.
+    #
+    # Why not just always run `apply`? `apply` plans the full root module —
+    # any drift, any cosmetic provider change (cf. the versionless-secret-
+    # IDs incident) becomes a destructive surprise. This path bypasses
+    # that entire surface for the 90% case where staging deploys are
+    # "ship a new bff/business-service/keycloak image".
+    #
+    # Pre-condition: the ACA env, Postgres server, KV, and the Container
+    # App resources already exist (any prior successful infra deploy).
+    # On a from-scratch environment, push something to infra/ first to
+    # take the full apply path; this job will fail fast on a missing
+    # Container App otherwise.
+    name: Deploy images (no terraform)
+    needs: [build-push, changes]
+    if: needs.changes.outputs.infra != 'true'
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      id-token: write
+      contents: read
+    env:
+      RG_NAME:       boatapp-staging-rg
+      ACR_LOGIN:     boatappstagingacr.azurecr.io
+      IMAGE_TAG_SHA: ${{ needs.build-push.outputs.image_tag_sha }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+
+      - name: Azure login (OIDC, no client secret)
+        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Three Container Apps + two Liquibase Jobs. `containerapp update`
+      # creates a new revision and (under revision_mode=Single) deactivates
+      # the old one once the new one is healthy. `containerapp job update`
+      # mutates the Job template so the next `start` runs the new image.
+      - name: Update Container App + Job images to ${{ env.IMAGE_TAG_SHA }}
+        run: |
+          set -euo pipefail
+          for app in bff business-service keycloak; do
+            echo "▸ az containerapp update --name $app"
+            az containerapp update \
+              --name "$app" --resource-group "$RG_NAME" \
+              --image "$ACR_LOGIN/$app:$IMAGE_TAG_SHA" \
+              --output none
+          done
+          for job in liquibase-bff liquibase-business-service; do
+            # Liquibase image follows the bff/business-service image tag —
+            # they share the JAR. Map back to the source image name.
+            case "$job" in
+              liquibase-bff)              src=bff ;;
+              liquibase-business-service) src=business-service ;;
+            esac
+            echo "▸ az containerapp job update --name $job (image=$src:$IMAGE_TAG_SHA)"
+            az containerapp job update \
+              --name "$job" --resource-group "$RG_NAME" \
+              --image "$ACR_LOGIN/$src:$IMAGE_TAG_SHA" \
+              --output none
+          done
+
+      # Trigger Liquibase migrations sequentially (BFF → bff_session,
+      # business-service → boatapp). Fail fast if either ends in any
+      # terminal non-Succeeded state. Same `--name` / `--job-execution-name`
+      # pattern as the bootstrap-db-roles provisioner.
+      - name: Run Liquibase migrations
+        run: |
+          set -euo pipefail
+          for job in liquibase-bff liquibase-business-service; do
+            echo "▸ az containerapp job start --name $job"
+            EXEC=$(az containerapp job start \
+              --name "$job" --resource-group "$RG_NAME" \
+              --query name -o tsv)
+            echo "  execution=$EXEC"
+            # Liquibase Job has replica_timeout_in_seconds = 600; budget
+            # 75 × 10 s = 750 s here so the "still queuing" prefix before
+            # the replica even starts has ~20% headroom (mirrors the
+            # bootstrap-db-roles loop's 360 s vs 300 s split).
+            STATUS=Unknown
+            for i in $(seq 1 75); do
+              if ! STATUS=$(az containerapp job execution show \
+                    --name "$job" --resource-group "$RG_NAME" \
+                    --job-execution-name "$EXEC" \
+                    --query properties.status -o tsv 2>poll.err); then
+                STATUS=Unknown
+              fi
+              echo "  [$i/75] $EXEC: $STATUS"
+              case "$STATUS" in
+                Succeeded) break ;;
+                Failed|Canceled|Degraded)
+                  echo "::error::$job execution $EXEC ended $STATUS"
+                  az containerapp job execution show \
+                    --name "$job" --resource-group "$RG_NAME" \
+                    --job-execution-name "$EXEC" --query properties \
+                    -o json 2>&1 | sed 's/^/    /' || true
+                  exit 1 ;;
+              esac
+              sleep 10
+            done
+            if [ "$STATUS" != "Succeeded" ]; then
+              echo "::error::$job execution $EXEC did not reach Succeeded within 750 s"
+              exit 1
+            fi
+          done
+
+      # Resolve BFF FQDN via control-plane query (no terraform state needed).
+      - name: Smoke health-check against staging FQDN
+        run: |
+          set -euo pipefail
+          BFF_FQDN=$(az containerapp show \
+            --name bff --resource-group "$RG_NAME" \
+            --query properties.configuration.ingress.fqdn -o tsv)
+          echo "Polling https://${BFF_FQDN}/actuator/health"
+          for i in $(seq 1 30); do
+            if curl -sfo /dev/null --max-time 5 "https://${BFF_FQDN}/actuator/health"; then
+              echo "  healthy after ${i} attempts"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::BFF at https://${BFF_FQDN} failed to become healthy after 150s"
+          exit 1
+
+      - name: Failure summary
+        if: failure()
+        run: |
+          {
+            echo "## Staging image deploy FAILED"
+            echo ""
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- Tag: \`${IMAGE_TAG_SHA}\`"
             echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
           } >> "$GITHUB_STEP_SUMMARY"

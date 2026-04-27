@@ -53,6 +53,23 @@ locals {
   }
 }
 
+# ── Log Analytics workspace ───────────────────────────────────────────────
+# The ACA Environment ships console + system streams here; without a
+# workspace, `az containerapp logs show` only streams live and historical
+# queries return nothing — which is exactly the diagnostic gap that left
+# the recent bootstrap-db-roles failure unexplained for hours. The
+# workspace is co-located with the ACA env (this module owns its
+# observability surface). PerGB2018 SKU + 30-day retention is the cheap
+# default; our log volume is tiny.
+resource "azurerm_log_analytics_workspace" "aca" {
+  name                = "${local.name_prefix}-aca-logs"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+  tags                = var.tags
+}
+
 # ── ACA Environment ───────────────────────────────────────────────────────
 resource "azurerm_container_app_environment" "this" {
   name                = "${local.name_prefix}-aca-env"
@@ -62,12 +79,39 @@ resource "azurerm_container_app_environment" "this" {
   infrastructure_subnet_id       = var.container_apps_subnet_id
   internal_load_balancer_enabled = false
 
+  # Wire the workspace so all Container Apps + Jobs in this env stream
+  # console output to a queryable destination. Setting this attribute on
+  # an existing env is an in-place update under azurerm v4 — explicitly
+  # not force-new — so adding it to a live env does NOT trigger the
+  # multi-minute teardown that prevent_destroy below now also blocks.
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.aca.id
+
   workload_profile {
     name                  = "Consumption"
     workload_profile_type = "Consumption"
   }
 
   tags = var.tags
+
+  # Destroy-and-recreate of this resource is a 19-minute outage of the
+  # entire data plane (the recent staging deploy spent 15m53s on the
+  # destroy alone) and triggers a cascade of Job/App recreations that
+  # has its own failure modes. Force the operator to reach for
+  # `-replace=` or temporarily lift this guard for any change that
+  # would do so — the spurious replacement caught here in a recent
+  # versionless-secret-IDs PR was the entire reason staging went red.
+  #
+  # Operator override flow when this guard trips:
+  #   1. Comment out the `prevent_destroy = true` line (don't delete it).
+  #   2. terraform plan — confirm the destroy is the one you intended.
+  #   3. terraform apply.
+  #   4. Restore the line in the same commit so master is never
+  #      committed in the unprotected state.
+  # (Properties that force-new on this resource: infrastructure_subnet_id,
+  # workload_profile composition, internal_load_balancer_enabled.)
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # ── bootstrap-db-roles Job (one-shot, runs before any workload starts) ───
@@ -195,8 +239,9 @@ resource "terraform_data" "bootstrap_db_roles_run" {
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
     environment = {
-      JOB_NAME = azurerm_container_app_job.bootstrap_db_roles.name
-      RG_NAME  = var.resource_group_name
+      JOB_NAME              = azurerm_container_app_job.bootstrap_db_roles.name
+      RG_NAME               = var.resource_group_name
+      LOG_ANALYTICS_WS_GUID = azurerm_log_analytics_workspace.aca.workspace_id
     }
     command = <<-EOT
       set -euo pipefail
@@ -255,6 +300,66 @@ resource "terraform_data" "bootstrap_db_roles_run" {
         done
 
         echo ">> bootstrap-db-roles: attempt $attempt ended with $STATUS"
+        # Dump the execution's full properties so the workflow log carries
+        # the replica's container state (terminationReason / exitCode) and
+        # Azure-side error message. Without this the only failure signal
+        # surfaced to CI is the bare "Failed" status — leaving us blind to
+        # whether the script reached psql, whether secret injection
+        # worked, or whether the container ever started.
+        #
+        # Safe to log: ACA returns `template.containers[].env[].secretRef`
+        # (the secret *name*, e.g. "postgres-admin-password") and never the
+        # resolved value. Resolved secrets are materialised inside the
+        # replica process; ARM never sees them.
+        #
+        # stdout/stderr are split (mirroring the poll above on line 253)
+        # so a flaky `az` call shows as a clear non-fatal warning instead
+        # of mixing into the JSON dump. `[ -n "$EXEC" ]` is defensive
+        # against any future refactor of the early-exit path that might
+        # leave $EXEC unset.
+        if [ -n "$${EXEC:-}" ] && [ "$EXEC" != "$JOB_NAME" ]; then
+          echo ">> bootstrap-db-roles: dumping execution properties for $EXEC"
+          if ! az containerapp job execution show \
+                --name "$JOB_NAME" --resource-group "$RG_NAME" \
+                --job-execution-name "$EXEC" --query properties \
+                -o json 2>diag.err | sed 's/^/    /'; then
+            echo "  [diag] az dump failed (non-fatal):" >&2
+            sed 's/^/    /' diag.err >&2 || true
+          fi
+
+          # Pull the replica's stdout/stderr from Log Analytics so the
+          # actual psql error (e.g. "could not translate host name",
+          # "password authentication failed") surfaces in CI. ACA Jobs
+          # ship console output to ContainerAppConsoleLogs_CL via the
+          # workspace wired into the env above. Logs typically appear
+          # within 30–60 s of the container exiting; sleep then query.
+          # Same stdout/stderr split + non-fatal-on-failure pattern as
+          # the properties dump.
+          echo ">> bootstrap-db-roles: waiting 30 s for log ingest, then querying $EXEC console logs"
+          sleep 30
+          KQL="ContainerAppConsoleLogs_CL"
+          KQL="$KQL | where ContainerJobName_s == '$JOB_NAME' and ExecutionName_s == '$EXEC'"
+          KQL="$KQL | order by TimeGenerated asc"
+          KQL="$KQL | project TimeGenerated, Log_s"
+          KQL="$KQL | limit 200"
+          # Capture stdout separately so we can distinguish "0 rows" from
+          # "az failed". 0-row case usually means ingest lag — surface that
+          # explicitly so the operator knows the diagnostic itself is the
+          # limiting factor, not a missing log line.
+          if OUT=$(az monitor log-analytics query \
+                --workspace "$LOG_ANALYTICS_WS_GUID" \
+                --analytics-query "$KQL" \
+                -o tsv 2>la.err); then
+            if [ -z "$OUT" ]; then
+              echo "  [diag] log-analytics returned 0 rows — ingest lag, missing workspace wiring, or job never wrote stdout"
+            else
+              printf '%s\n' "$OUT" | sed 's/^/    /'
+            fi
+          else
+            echo "  [diag] log-analytics query failed (non-fatal — logs may not have ingested yet):" >&2
+            sed 's/^/    /' la.err >&2 || true
+          fi
+        fi
         if [ "$attempt" -lt 3 ]; then
           echo ">> bootstrap-db-roles: waiting 60 s for RBAC propagation"
           sleep 60
