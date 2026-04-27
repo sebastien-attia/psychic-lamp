@@ -53,6 +53,15 @@ resource "azurerm_postgresql_flexible_server" "this" {
     # geo_redundant_backup_enabled = false posture, that's a regional
     # event). Force the operator to lift this guard explicitly for any
     # plan that would replace the server.
+    #
+    # Operator override flow when this guard trips:
+    #   1. Comment out the `prevent_destroy = true` line (don't delete it).
+    #   2. terraform plan — confirm the destroy is the one you intended.
+    #   3. terraform apply.
+    #   4. Restore the line in the same commit so master is never
+    #      committed in the unprotected state.
+    # (Known force-new attributes: delegated_subnet_id, sku tier family
+    # changes between B_*/GP_*/MO_*, version downgrade.)
     prevent_destroy = true
   }
 }

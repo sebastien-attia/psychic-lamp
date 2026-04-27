@@ -76,6 +76,15 @@ resource "azurerm_container_app_environment" "this" {
   # `-replace=` or temporarily lift this guard for any change that
   # would do so — the spurious replacement caught here in a recent
   # versionless-secret-IDs PR was the entire reason staging went red.
+  #
+  # Operator override flow when this guard trips:
+  #   1. Comment out the `prevent_destroy = true` line (don't delete it).
+  #   2. terraform plan — confirm the destroy is the one you intended.
+  #   3. terraform apply.
+  #   4. Restore the line in the same commit so master is never
+  #      committed in the unprotected state.
+  # (Properties that force-new on this resource: infrastructure_subnet_id,
+  # workload_profile composition, internal_load_balancer_enabled.)
   lifecycle {
     prevent_destroy = true
   }
@@ -271,14 +280,28 @@ resource "terraform_data" "bootstrap_db_roles_run" {
         # Azure-side error message. Without this the only failure signal
         # surfaced to CI is the bare "Failed" status — leaving us blind to
         # whether the script reached psql, whether secret injection
-        # worked, or whether the container ever started. `|| true` so a
-        # transient ARM failure on the diagnostic call does not mask the
-        # underlying job failure under `set -e`.
-        echo ">> bootstrap-db-roles: dumping execution properties for $EXEC"
-        az containerapp job execution show \
-          --name "$JOB_NAME" --resource-group "$RG_NAME" \
-          --job-execution-name "$EXEC" --query properties \
-          -o json 2>&1 | sed 's/^/    /' || true
+        # worked, or whether the container ever started.
+        #
+        # Safe to log: ACA returns `template.containers[].env[].secretRef`
+        # (the secret *name*, e.g. "postgres-admin-password") and never the
+        # resolved value. Resolved secrets are materialised inside the
+        # replica process; ARM never sees them.
+        #
+        # stdout/stderr are split (mirroring the poll above on line 253)
+        # so a flaky `az` call shows as a clear non-fatal warning instead
+        # of mixing into the JSON dump. `[ -n "$EXEC" ]` is defensive
+        # against any future refactor of the early-exit path that might
+        # leave $EXEC unset.
+        if [ -n "$${EXEC:-}" ] && [ "$EXEC" != "$JOB_NAME" ]; then
+          echo ">> bootstrap-db-roles: dumping execution properties for $EXEC"
+          if ! az containerapp job execution show \
+                --name "$JOB_NAME" --resource-group "$RG_NAME" \
+                --job-execution-name "$EXEC" --query properties \
+                -o json 2>diag.err | sed 's/^/    /'; then
+            echo "  [diag] az dump failed (non-fatal):" >&2
+            sed 's/^/    /' diag.err >&2 || true
+          fi
+        fi
         if [ "$attempt" -lt 3 ]; then
           echo ">> bootstrap-db-roles: waiting 60 s for RBAC propagation"
           sleep 60
