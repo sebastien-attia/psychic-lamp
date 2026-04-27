@@ -108,13 +108,22 @@ jobs:
             echo "infra=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          CHANGED=$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA")
+          # Force-pushes orphan the previous SHA — `git diff` would then
+          # die on "bad object" and `set -e` would block all subsequent
+          # staging deploys until someone debugs this job. Treat any diff
+          # failure as "treat as infra" so the worst case is just a slower
+          # path, not a stuck pipeline.
+          if ! CHANGED=$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA" 2>/dev/null); then
+            echo "Could not diff $BEFORE_SHA..$AFTER_SHA (force-push, pruned commit, or similar) — treating as infra change."
+            echo "infra=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           echo "Changed files in this push:"
           echo "$CHANGED" | sed 's/^/  /'
           # Match any path under infra/, the keycloak Dockerfile/realms
           # (which feed terraform variables), or this workflow itself
           # (so workflow edits go through the full path).
-          if echo "$CHANGED" | grep -qE '^(infra/|keycloak/Dockerfile|keycloak/realms/|\.github/workflows/deploy-staging\.yml$)'; then
+          if echo "$CHANGED" | grep -qE '^(infra/|keycloak/Dockerfile|keycloak/realms/|\.github/workflows/(deploy-staging|ci)\.yml$|\.github/actions/)'; then
             echo "Infra-touching change detected → full terraform path."
             echo "infra=true" >> "$GITHUB_OUTPUT"
           else
@@ -236,9 +245,10 @@ jobs:
     needs: [ci, infra-bootstrap]
     # `infra-bootstrap` is skipped on image-only PRs (changes.infra == 'false').
     # We still want to build+push on those PRs — the ACR already exists from a
-    # prior infra deploy. Allow this job to run when infra-bootstrap is either
-    # success or skipped, but never when it failed.
-    if: ${{ always() && needs.ci.result == 'success' && (needs.infra-bootstrap.result == 'success' || needs.infra-bootstrap.result == 'skipped') }}
+    # prior infra deploy. `!cancelled()` instead of `always()` so a workflow
+    # cancel from the UI doesn't spin up a runner here just to short-circuit;
+    # `!= 'failure'` collapses success/skipped/cancelled into one check.
+    if: ${{ !cancelled() && needs.ci.result == 'success' && needs.infra-bootstrap.result != 'failure' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write       # OIDC for `azure/login@v2` + cosign keyless + attestations
@@ -710,15 +720,19 @@ jobs:
               --name "$job" --resource-group "$RG_NAME" \
               --query name -o tsv)
             echo "  execution=$EXEC"
+            # Liquibase Job has replica_timeout_in_seconds = 600; budget
+            # 75 × 10 s = 750 s here so the "still queuing" prefix before
+            # the replica even starts has ~20% headroom (mirrors the
+            # bootstrap-db-roles loop's 360 s vs 300 s split).
             STATUS=Unknown
-            for i in $(seq 1 60); do
+            for i in $(seq 1 75); do
               if ! STATUS=$(az containerapp job execution show \
                     --name "$job" --resource-group "$RG_NAME" \
                     --job-execution-name "$EXEC" \
                     --query properties.status -o tsv 2>poll.err); then
                 STATUS=Unknown
               fi
-              echo "  [$i/60] $EXEC: $STATUS"
+              echo "  [$i/75] $EXEC: $STATUS"
               case "$STATUS" in
                 Succeeded) break ;;
                 Failed|Canceled|Degraded)
@@ -732,7 +746,7 @@ jobs:
               sleep 10
             done
             if [ "$STATUS" != "Succeeded" ]; then
-              echo "::error::$job execution $EXEC did not reach Succeeded within 600 s"
+              echo "::error::$job execution $EXEC did not reach Succeeded within 750 s"
               exit 1
             fi
           done

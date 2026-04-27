@@ -342,10 +342,20 @@ resource "terraform_data" "bootstrap_db_roles_run" {
           KQL="$KQL | order by TimeGenerated asc"
           KQL="$KQL | project TimeGenerated, Log_s"
           KQL="$KQL | limit 200"
-          if ! az monitor log-analytics query \
+          # Capture stdout separately so we can distinguish "0 rows" from
+          # "az failed". 0-row case usually means ingest lag — surface that
+          # explicitly so the operator knows the diagnostic itself is the
+          # limiting factor, not a missing log line.
+          if OUT=$(az monitor log-analytics query \
                 --workspace "$LOG_ANALYTICS_WS_GUID" \
                 --analytics-query "$KQL" \
-                -o tsv 2>la.err | sed 's/^/    /'; then
+                -o tsv 2>la.err); then
+            if [ -z "$OUT" ]; then
+              echo "  [diag] log-analytics returned 0 rows — ingest lag, missing workspace wiring, or job never wrote stdout"
+            else
+              printf '%s\n' "$OUT" | sed 's/^/    /'
+            fi
+          else
             echo "  [diag] log-analytics query failed (non-fatal — logs may not have ingested yet):" >&2
             sed 's/^/    /' la.err >&2 || true
           fi
