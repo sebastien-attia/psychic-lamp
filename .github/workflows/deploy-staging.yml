@@ -35,66 +35,6 @@ env:
   TF_DIR: infra/terraform/environments/staging
 
 jobs:
-  # ── Path-filter gate ────────────────────────────────────────────────────
-  # Goal: a pure image deploy (no infra/ change) must NOT plan or apply
-  # Terraform. The recent staging outage was caused by a versionless-
-  # secret-IDs change cascading into a 19-min ACA-env destroy/recreate;
-  # `prevent_destroy` now blocks that at apply-time, but we'd rather not
-  # even reach apply for image-only PRs.
-  #
-  # Implementation note: no external action — `git diff --name-only
-  # ${before}..${after}` reads the push event payload directly. dorny/
-  # paths-filter would do the same with more pinning + supply-chain
-  # surface; the 15-line bash here is preferable.
-  changes:
-    name: Detect changed paths
-    runs-on: ubuntu-latest
-    outputs:
-      infra: ${{ steps.detect.outputs.infra }}
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-        with:
-          # `git diff` between two commits requires history for both ends.
-          # 0 = full history; cheaper than computing the right shallow depth
-          # for arbitrary force-push edge cases.
-          fetch-depth: 0
-      - id: detect
-        env:
-          BEFORE_SHA: ${{ github.event.before }}
-          AFTER_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          # First push to the branch (e.g. branch creation) has BEFORE_SHA
-          # = 40 zeros. Treat that as "everything changed" so the full
-          # apply path runs.
-          if [ "$BEFORE_SHA" = "0000000000000000000000000000000000000000" ] || [ -z "$BEFORE_SHA" ]; then
-            echo "First push to branch — treating as infra change."
-            echo "infra=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # Force-pushes orphan the previous SHA — `git diff` would then
-          # die on "bad object" and `set -e` would block all subsequent
-          # staging deploys until someone debugs this job. Treat any diff
-          # failure as "treat as infra" so the worst case is just a slower
-          # path, not a stuck pipeline.
-          if ! CHANGED=$(git diff --name-only "$BEFORE_SHA" "$AFTER_SHA" 2>/dev/null); then
-            echo "Could not diff $BEFORE_SHA..$AFTER_SHA (force-push, pruned commit, or similar) — treating as infra change."
-            echo "infra=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "Changed files in this push:"
-          echo "$CHANGED" | sed 's/^/  /'
-          # Match any path under infra/, the keycloak Dockerfile/realms
-          # (which feed terraform variables), or this workflow itself
-          # (so workflow edits go through the full path).
-          if echo "$CHANGED" | grep -qE '^(infra/|keycloak/Dockerfile|keycloak/realms/|\.github/workflows/(deploy-staging|ci)\.yml$|\.github/actions/)'; then
-            echo "Infra-touching change detected → full terraform path."
-            echo "infra=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "App-only change → image-update path (no terraform)."
-            echo "infra=false" >> "$GITHUB_OUTPUT"
-          fi
-
   ci:
     uses: ./.github/workflows/ci.yml
     secrets: inherit

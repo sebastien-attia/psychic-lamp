@@ -93,6 +93,7 @@ variable "business_service_image_tag" {
 variable "keycloak_image_tag" {
   description = "Tag of the upstream quay.io/keycloak/keycloak image. Production pins to a specific version."
   type        = string
+  default     = "26.6.1"
 }
 
 variable "service_plan_sku" {

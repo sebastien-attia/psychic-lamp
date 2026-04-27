@@ -40,18 +40,7 @@ on:
     branches: [main, staging, 'feature/**']
   pull_request:
     branches: [main, staging]
-  workflow_call:
-    inputs:
-      dtrack-project-uuid:
-        description: 'Dependency-Track project UUID for pre-deploy gating in reusable-workflow callers.'
-        required: false
-        type: string
-        default: ''
-      require-dtrack-project-uuid:
-        description: 'Fail early when a caller expects the DT gate to run but no project UUID was supplied.'
-        required: false
-        type: boolean
-        default: false
+  workflow_call: {}
 
 # Least-privilege defaults. Individual jobs can widen with their own
 # `permissions:` block if needed (none currently do).
@@ -198,21 +187,20 @@ jobs:
           if-no-files-found: error
 
   docker-build:
-    # Sanity-build all deployable Dockerfiles end-to-end. No push — deploy
-    # workflows are the only push path.
+    # Sanity-build both Dockerfiles end-to-end. No push — deploy workflows are the only push path.
     runs-on: ubuntu-latest
     needs: [build-bff, build-business-service, build-frontend, sca-scan]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-      # All deployable images take the repo root as build context. Tag with
-      # the commit SHA only — this job validates that the images build; the
-      # deploy workflows are the only path that pushes.
+      # Both Dockerfiles take the repo root as build context (the bff
+      # 4-stage build references frontend/ and contracts/, the
+      # business-service 2-stage build references contracts/). Tag with
+      # the commit SHA only — this job validates that the image builds;
+      # the deploy workflows are the only path that pushes.
       - name: Build bff image
         run: docker build -f bff/Dockerfile -t boatapp/bff:ci-${{ github.sha }} .
       - name: Build business-service image
         run: docker build -f business-service/Dockerfile -t boatapp/business-service:ci-${{ github.sha }} .
-      - name: Build keycloak image
-        run: docker build -f keycloak/Dockerfile -t boatapp/keycloak:ci-${{ github.sha }} .
 
   secret-scan:
     # gitleaks: scan full history on every push/PR for non-format-known secrets.
@@ -245,7 +233,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: [bff, business-service, keycloak]
+        image: [bff, business-service]
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       # Rebuild on this runner: jobs do not share the docker-build job's
@@ -267,7 +255,6 @@ jobs:
           # still surface in the Security tab via SARIF — same bar as
           # OSV-Scanner's source-side `--fail-on-vuln=HIGH`.
           ignore-unfixed: true
-          trivyignores: '.trivyignore'
       # Upload SARIF even when Trivy failed the job, otherwise the
       # findings would only live in the run log — `if: always()` makes
       # them queryable from the Security tab and Dependabot.

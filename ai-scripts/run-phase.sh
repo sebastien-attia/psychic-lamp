@@ -460,8 +460,8 @@ case "${1:-help}" in
   │    • Subscription Contributor + User Access Admin roles  │
   │    • Storage account + blob containers for Terraform     │
   │      remote state (staging, production)                  │
-  │    • gh secret/variable set for AZURE_* / TF_STATE_*     │
-  │      and PROJECT / LOCATION                              │
+  │    • gh secret/variable set for AZURE_* / TF_STATE_* /   │
+  │      ACR_NAME / PROJECT / LOCATION                       │
   │  Invariant: NO admin secrets land in the repo — Azure    │
   │             auth is OIDC-federated only.                 │
   │  Verify:   manual — enable "Required reviewers" on the   │

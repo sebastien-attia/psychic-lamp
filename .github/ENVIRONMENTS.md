@@ -17,30 +17,15 @@ first, then come back here for the manual steps.
 
 ## Environments
 
-| Environment              | Trigger                                              | Manual approval        | Tags pushed to ACR                                | Used by                                                                                  |
-|--------------------------|------------------------------------------------------|------------------------|---------------------------------------------------|------------------------------------------------------------------------------------------|
-| `staging`                | push to the `staging` branch                         | none                   | `staging`, `staging-<short-sha>`                  | All Terraform and deployment jobs in `deploy-staging.yml`.                               |
-| `production`             | publishing a GitHub Release on `main`                | required reviewer (1)  | `<release-tag>`, `latest`, `production`           | The `apply` job in `deploy-production.yml` ONLY (the one that mutates the live stack).   |
-| `production-bootstrap`   | publishing a GitHub Release on `main`                | **none — MUST stay unprotected** (see below) | (no push — claim is for OIDC + secret access)     | The `infra-bootstrap` and `plan` jobs in `deploy-production.yml`.                        |
+| Environment  | Trigger                                              | Manual approval | Tags pushed to ACR                                |
+|--------------|------------------------------------------------------|-----------------|---------------------------------------------------|
+| `staging`    | push to the `staging` branch                         | none            | `staging`, `staging-<short-sha>`                  |
+| `production` | publishing a GitHub Release on `main`                | required reviewer (1) | `<release-tag>`, `latest`, `production`     |
 
-All three environments are created (empty) by `00d-bootstrap-azure.sh`.
-The **production reviewer rule** must be added manually — GitHub's REST
-API does not expose required-reviewer configuration outside Enterprise,
-so the bootstrap script flags it at the end of its summary.
-
-**Why `production-bootstrap`?** GitHub's deployment-protection rules fire
-*per job* that claims an environment, not once per workflow run, and
-environment-scoped secrets are only visible inside jobs that claim that
-environment. In production, the `infra-bootstrap` and `plan` jobs need
-environment-based OIDC subjects plus the same `TF_VAR_*` secrets as the
-main environment, but only the final `apply` job should require manual
-approval. The unprotected `production-bootstrap` environment keeps those
-early jobs off the protected `production` environment, so a release asks
-for approval once, on the job that mutates the live stack.
-
-**Do NOT add protection rules to `production-bootstrap`**. It exists
-specifically for unprotected bootstrap/plan jobs that still need
-environment-scoped secrets and environment-based OIDC subjects.
+Both environments are created (empty) by `00d-bootstrap-azure.sh`. The
+**production reviewer rule** must be added manually — GitHub's REST API does
+not expose required-reviewer configuration outside Enterprise, so the
+bootstrap script flags it at the end of its summary.
 
 To set the reviewer:
 
@@ -70,32 +55,19 @@ them become useful.
 
 | Variable    | Example value | Used by                              |
 |-------------|---------------|--------------------------------------|
+| `ACR_NAME`  | `boatappstagingacr` | `az acr login --name ${{ vars.ACR_NAME }}` |
 | `PROJECT`   | `boatapp`     | logging / tagging                    |
 | `LOCATION`  | `switzerlandnorth` | downstream Terraform reference  |
 
 `vars` (not `secrets`) because none of these are sensitive.
 
-The ACR name is **not** a bootstrap variable. Terraform owns it via
-`modules/container-registry/main.tf` (formula:
-`replace("${project_name}${environment}acr","-","")`); each deploy workflow
-re-derives it as a literal mirroring that formula
-(`boatappstagingacr` / `boatappproductionacr`). Pinning the name in two places
-caused a drift bug — see git history of `00d-bootstrap-azure.sh` for the fix.
-
 ---
 
-## Environment-scoped secrets (set by `00f-generate-db-secrets.sh`)
+## Environment-scoped secrets (must be set MANUALLY)
 
 These secrets exist **per environment** because their values differ between
-staging and production. They are written by
-[`ai-scripts/00f-generate-db-secrets.sh`](../ai-scripts/00f-generate-db-secrets.sh)
-— a sibling to `00d-bootstrap-azure.sh` that generates 256-bit URL-safe
-values (`openssl rand -hex 32`) and writes them to both environments via
-`gh secret set --env <env>`. Run it once after `00d` succeeds:
-
-```bash
-./ai-scripts/00f-generate-db-secrets.sh --repo <owner>/<repo>
-```
+staging and production. Add them at `Settings → Environments → <env> →
+Environment secrets` for both `staging` and `production`.
 
 ### Terraform sensitive inputs
 
@@ -111,11 +83,10 @@ run logs.
 | `TF_VAR_keycloak_db_password`       | Per-DB password for the `keycloak` role.                      |
 | `TF_VAR_keycloak_admin_password`    | Initial Keycloak admin password.                              |
 
-The Terraform state is encrypted at rest in the state storage account, and
-Azure Key Vault holds the canonical copy after the first `terraform apply`
-— but nothing recovers these specific GitHub-environment values once
-overwritten, so capture `00f`'s output if you need them out-of-band.
-Re-running `00f` rotates every secret in one shot.
+Generate strong values once per environment, store them in your password
+manager **and** in the GitHub environment secret. The Terraform state is
+encrypted at rest in the state storage account, but nothing recovers
+these passwords if you lose them.
 
 ### Dependency-Track governance
 
@@ -152,8 +123,7 @@ principal with the following federated credentials:
 | `repo:<owner>/<repo>:ref:refs/heads/staging`            | `deploy-staging.yml`                        |
 | `repo:<owner>/<repo>:pull_request`                      | `terraform-plan.yml`                        |
 | `repo:<owner>/<repo>:environment:staging`               | `deploy-staging.yml` job that uses `environment: staging`     |
-| `repo:<owner>/<repo>:environment:production`            | `deploy-production.yml` `apply` job (the one mutating the live stack) |
-| `repo:<owner>/<repo>:environment:production-bootstrap`  | `deploy-production.yml` `infra-bootstrap` and `plan` jobs (unprotected sibling env) |
+| `repo:<owner>/<repo>:environment:production`            | `deploy-production.yml` job that uses `environment: production` |
 
 The same script grants the SP these role assignments:
 
@@ -213,19 +183,18 @@ in ACR.
 
 To verify a deployed image locally (replace `<digest>` with the
 `sha256:…` value from `docker inspect ${ACR}.azurecr.io/bff:staging` or
-the deploy run summary, and `${ACR}` with the env-specific registry —
-`boatappstagingacr` for staging, `boatappproductionacr` for production):
+the deploy run summary):
 
 ```bash
 cosign verify \
   --certificate-identity-regexp 'https://github\.com/<org>/<repo>/\.github/workflows/deploy-(staging|production)\.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  ${ACR}.azurecr.io/bff@<digest>
+  ${ACR_NAME}.azurecr.io/bff@<digest>
 ```
 
 Replace `bff` with `business-service` for the other image. To list every
 attached artifact (signature, provenance, SBOM if any), use
-`cosign tree ${ACR}.azurecr.io/bff:staging`.
+`cosign tree ${ACR_NAME}.azurecr.io/bff:staging`.
 
 > **Storage cost.** cosign signatures + SLSA provenance are stored as
 > additional OCI artifacts in ACR (~5–10 KB per image). They do not
@@ -305,13 +274,12 @@ Two repository-level GitHub variables wire the gate:
 
 | Variable                          | Purpose                                                      |
 |-----------------------------------|--------------------------------------------------------------|
-| `vars.DTRACK_PROJECT_UUID_STAGING`    | UUID of the staging DT project. Optional; used by direct push/PR CI and by `deploy-staging.yml` when DT is configured. |
-| `vars.DTRACK_PROJECT_UUID_PRODUCTION` | UUID of the production DT project. Optional; used by `deploy-production.yml` when DT is configured. |
+| `vars.DTRACK_PROJECT_UUID_STAGING`    | UUID of the staging DT project. The gate is skipped silently when this variable is unset (e.g. fresh fork before DT is wired). |
+| `vars.DTRACK_PROJECT_UUID_PRODUCTION` | Reserved for a future production-side gate; currently unused. |
 
 Set them with:
 ```bash
 gh variable set DTRACK_PROJECT_UUID_STAGING --repo <owner/repo> --body <uuid>
-gh variable set DTRACK_PROJECT_UUID_PRODUCTION --repo <owner/repo> --body <uuid>
 ```
 
 ---

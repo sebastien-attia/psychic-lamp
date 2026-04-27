@@ -20,9 +20,3 @@ output "password_secrets_versions" {
     for k, s in azurerm_key_vault_secret.passwords : k => s.version
   }
 }
-
-output "bff_signing_key_versionless_secret_id" {
-  description = "Versionless ID of the bff-signing-key secret. The BFF Container App mounts it as a secret-volume PEM file at /mnt/secrets/."
-  sensitive   = true
-  value       = azurerm_key_vault_secret.bff_signing_key.versionless_id
-}

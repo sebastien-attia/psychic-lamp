@@ -47,7 +47,7 @@ Personal account (you)
     ├── Pull Requests           → fire ci.yml + CodeQL + terraform-plan
     ├── Releases (on main)      → fire deploy-production.yml
     ├── Repository secrets      ← AZURE_CLIENT_ID, AZURE_TENANT_ID, …
-    ├── Repository variables    ← PROJECT, LOCATION
+    ├── Repository variables    ← ACR_NAME, PROJECT, LOCATION
     ├── Environments
     │   ├── staging             ← TF_VAR_* secrets, no approval
     │   └── production          ← TF_VAR_* secrets + Required Reviewer
@@ -126,23 +126,16 @@ script / Terraform) is responsible for setting it.
 
 | Variable    | Value source           | Used by                             |
 |-------------|------------------------|-------------------------------------|
+| `ACR_NAME`  | Derived from sub-hash  | Image push/pull in deploy workflows |
 | `PROJECT`   | `--project` flag       | Terraform variable + naming         |
 | `LOCATION`  | `--location` flag      | Terraform variable                  |
-
-The ACR name is **not** stored as a GitHub variable. Terraform owns it
-(`modules/container-registry/main.tf` → `${project_name}${environment}acr`,
-dashes stripped) and each deploy workflow re-derives it as an environment-
-specific literal — `boatappstagingacr` in `deploy-staging.yml`,
-`boatappproductionacr` in `deploy-production.yml`. Single source of truth.
 
 ### Table 4 — GitHub environment-level secrets (you set MANUALLY)
 
 Set these once per environment (`staging` and `production`). The
-Azure bootstrap script intentionally does **not** generate
-database/admin passwords — they belong to you. Use
-[`ai-scripts/00f-generate-db-secrets.sh`](ai-scripts/00f-generate-db-secrets.sh)
-(see §A.4) which generates 256-bit URL-safe values via
-`openssl rand -hex 32` and writes them to both environments in one go.
+bootstrap script intentionally does **not** generate
+database/admin passwords — they belong to you. Generate values with
+`openssl rand -base64 32`.
 
 | Secret                            | Stored in Azure as | Purpose                       |
 |-----------------------------------|--------------------|-------------------------------|
@@ -249,31 +242,37 @@ tenant is a no-op.
 
 ### A.4 Set the per-environment Terraform passwords
 
-`00d-bootstrap-azure.sh` does *not* generate these — they belong to
-you. Run [`ai-scripts/00f-generate-db-secrets.sh`](ai-scripts/00f-generate-db-secrets.sh)
-to seed all five secrets in **both** `staging` and `production` in one
-go:
+The bootstrap script does *not* generate these — they belong to you.
+The snippet below seeds all five secrets in **both** `staging` and
+`production` in one go. Replace the `REPO=` value with your own
+`owner/repo` slug. Works in both bash and zsh; uses an array instead
+of backslash line-continuations so a stray copy-paste whitespace
+cannot break it.
 
 ```bash
-./ai-scripts/00f-generate-db-secrets.sh --repo <owner>/<repo>
-# e.g. ./ai-scripts/00f-generate-db-secrets.sh --repo sebastien-attia/psychic-lamp
+REPO=<owner>/<repo>           # e.g. sebastien-attia/psychic-lamp
+
+SECRETS=(
+  TF_VAR_postgres_admin_password
+  TF_VAR_bff_db_password
+  TF_VAR_business_db_password
+  TF_VAR_keycloak_db_password
+  TF_VAR_keycloak_admin_password
+)
+
+for env in staging production; do
+  for name in "${SECRETS[@]}"; do
+    # `gh secret set` reads from stdin when --body is omitted.
+    # Do NOT use `--body -` — that stores the literal string "-".
+    openssl rand -base64 32 \
+      | gh secret set "$name" --env "$env" --repo "$REPO"
+  done
+done
 ```
 
-The script:
-
-- generates 256 bits of entropy per secret with `openssl rand -hex 32`
-  — hex (not base64) keeps values URL-safe so they can be embedded in
-  JDBC URLs and Keycloak DB env vars without `+` / `/` / `=` breakage;
-- pipes each value into `gh secret set --env <env> --repo <repo>`
-  (stdin, **not** `--body -` — see commit 202e236);
-- pre-checks that both GitHub Environments exist (so a stale repo
-  fails fast instead of leaving the secret store half-populated);
-- supports `--dry-run` to preview without writing.
-
-If you need to store the values out-of-band (your password manager),
-use `--dry-run` first to see exactly what *would* be written, then run
-without `--dry-run` and capture stdout. Azure Key Vault will hold the
-canonical copy after the first `terraform apply`.
+Store the generated values out-of-band (your password manager) — Azure
+Key Vault will hold the canonical copy after the first
+`terraform apply`, but you may need them for a manual psql session.
 
 ### A.5 Enable "Required reviewers" on the `production` Environment
 
@@ -360,26 +359,8 @@ repo the gitleaks job runs without a license — no action needed.
 |-------------------------------------|-------------------------------------------|---------------------------------------------------------------------------------------|
 | Open PR to `main` or `staging`      | `ci.yml`, `codeql.yml`, `terraform-plan.yml` | Lint, build, SAST, SBOM, SCA, container scan, e2e; terraform plan posted as PR comment |
 | Push to `main`                      | `ci.yml`                                  | Same as above (no deploy)                                                             |
-| Push to `staging`                   | `deploy-staging.yml`                      | Bootstrap ACR (targeted apply) → build + push images → full `terraform apply` → Ansible deploy → smoke tests |
+| Push to `staging`                   | `deploy-staging.yml`                      | Build + push images to ACR, terraform apply, Ansible deploy, smoke tests              |
 | Publish a GitHub Release on `main`  | `deploy-production.yml`                   | Production version of the staging flow, gated by the Required-Reviewer rule (§A.5)    |
-
-> Both deploy workflows use a **two-phase apply**. A short
-> `infra-bootstrap` job runs a `terraform apply -target=` scoped to just
-> the ACR (and its AcrPush role binding) BEFORE `build-push` so the very
-> first deploy doesn't fail on `az acr login`. The full apply is the
-> second phase (after `build-push`) so it can pin container apps to the
-> freshly built image SHA tag. Bootstrap is idempotent — a no-op once
-> the ACR is in state. Staging bootstrap claims the normal `staging`
-> environment because staging has no approval gate. Production bootstrap
-> claims the sibling `production-bootstrap` environment, which mirrors
-> production's Terraform secrets but stays unprotected; production's
-> reviewer prompt remains on the final `apply` job only.
->
-> **Do not delete `infra-bootstrap` once an environment is up.** It is a
-> no-op on every subsequent run, but removing it breaks the next
-> greenfield apply (new subscription, restored-from-backup environment,
-> rotated tenant) — the chicken-and-egg comes back the moment there is
-> no ACR in state.
 
 ### B.6 First-build smoke test
 
@@ -652,11 +633,10 @@ In an incognito window, browse the repo URL and confirm:
 - **Roll out a new version** — open a PR to `main`, merge after CI
   is green, then publish a Release: `gh release create v1.2.3
   --generate-notes`. Approve the production deployment when prompted.
-- **Rotate database passwords** — re-run
-  `./ai-scripts/00f-generate-db-secrets.sh --repo <owner>/<repo>`
-  (see §A.4), then push an empty commit to `staging` (or publish a new
-  release) so the deploy workflow picks the new values up via
-  Terraform → Key Vault.
+- **Rotate database passwords** — re-run the loop from §A.4 with a
+  fresh `openssl rand -base64 32`, then push an empty commit to
+  `staging` (or publish a new release) so the deploy workflow picks
+  the new value up via Terraform → Key Vault.
 - **Tear down** — `cd infra/terraform/environments/staging &&
   terraform destroy`. Repeat for production. The bootstrap-managed
   `boat-app-tfstate-rg` is safe to keep across destroys.

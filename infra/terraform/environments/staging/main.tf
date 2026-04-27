@@ -91,7 +91,7 @@ variable "business_service_image_tag" {
 variable "keycloak_image_tag" {
   description = "Tag of the upstream quay.io/keycloak/keycloak image."
   type        = string
-  default     = "latest"
+  default     = "26.6.1"
 }
 
 variable "additional_firewall_ips" {

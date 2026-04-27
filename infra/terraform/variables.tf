@@ -118,7 +118,7 @@ variable "business_service_image_tag" {
 variable "keycloak_image_tag" {
   description = "Tag of the upstream quay.io/keycloak/keycloak image. The Keycloak Web App pulls this image directly from quay.io — no custom build, no ACR push."
   type        = string
-  default     = "latest"
+  default     = "26.6.1"
 }
 
 # ── Database firewall (extra IPs) ─────────────────────────────────────────
