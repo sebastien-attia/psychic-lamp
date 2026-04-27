@@ -11,9 +11,15 @@ terraform {
 module "boatapp" {
   source = "../.."
 
-  environment  = "staging"
-  location     = "switzerlandnorth"
-  project_name = "boatapp"
+  environment = "staging"
+  location    = "switzerlandnorth"
+
+  # Renamed from "boatapp" to sidestep name collisions with the OLD ACA-
+  # topology stack still living in `boatapp-staging-rg`. The new
+  # simplification lands in `boatapp-v2-staging-rg`; the old RG can be
+  # decommissioned once we've validated the new deploy. Production stays
+  # on the original `boatapp` slug because it has no parallel old stack.
+  project_name = "boatapp-v2"
 
   # ── Sensitive (TF_VAR_*) ──────────────────────────────────────────────
   postgres_admin_password = var.postgres_admin_password
@@ -29,9 +35,10 @@ module "boatapp" {
   business_service_image_tag = var.business_service_image_tag
   keycloak_image_tag         = var.keycloak_image_tag
 
-  # ── Custom domains (opt-in; default "" keeps the Azure FQDN-only setup)
-  bff_custom_domain      = var.bff_custom_domain
-  keycloak_custom_domain = var.keycloak_custom_domain
+  # ── Optional firewall extras ─────────────────────────────────────────
+  # The deploy workflow injects {"runner" => "<runner-egress-ip>"} for the
+  # duration of the apply so the db-bootstrap psql step can reach the DB.
+  additional_firewall_ips = var.additional_firewall_ips
 }
 
 # ── Variable pass-through (kept here so each env declares its own surface)
@@ -88,37 +95,46 @@ variable "business_service_image_tag" {
 }
 
 variable "keycloak_image_tag" {
-  description = "Keycloak upstream image tag."
+  description = "Tag of the upstream quay.io/keycloak/keycloak image."
   type        = string
   default     = "26.6.1"
 }
 
-variable "bff_custom_domain" {
-  description = "Optional custom FQDN for the staging BFF (e.g. app-staging.example.com). Empty = keep the Azure FQDN only."
-  type        = string
-  default     = ""
-}
-
-variable "keycloak_custom_domain" {
-  description = "Optional custom FQDN for the staging Keycloak (e.g. auth-staging.example.com). Empty = keep the Azure FQDN only."
-  type        = string
-  default     = ""
+variable "additional_firewall_ips" {
+  description = "Optional extra IPs allowlisted on the database (e.g. CI runner)."
+  type        = map(string)
+  default     = {}
 }
 
 # ── Re-export root outputs ────────────────────────────────────────────────
 output "bff_fqdn" {
-  description = "External FQDN of the BFF Container App."
+  description = "Public FQDN of the BFF Web App."
   value       = module.boatapp.bff_fqdn
 }
 
+output "business_service_fqdn" {
+  description = "Public FQDN of the business-service Web App."
+  value       = module.boatapp.business_service_fqdn
+}
+
 output "keycloak_fqdn" {
-  description = "External FQDN of the Keycloak Container App."
+  description = "Public FQDN of the Keycloak Web App."
   value       = module.boatapp.keycloak_fqdn
 }
 
-output "business_service_internal_fqdn" {
-  description = "Internal FQDN of the business-service Container App."
-  value       = module.boatapp.business_service_internal_fqdn
+output "bff_app_name" {
+  description = "Resource name of the BFF Web App (used by `az webapp config container set`)."
+  value       = module.boatapp.bff_app_name
+}
+
+output "business_service_app_name" {
+  description = "Resource name of the business-service Web App."
+  value       = module.boatapp.business_service_app_name
+}
+
+output "keycloak_app_name" {
+  description = "Resource name of the Keycloak Web App."
+  value       = module.boatapp.keycloak_app_name
 }
 
 output "postgres_fqdn" {
@@ -136,17 +152,7 @@ output "keyvault_uri" {
   value       = module.boatapp.keyvault_uri
 }
 
-output "liquibase_job_names" {
-  description = "Map of Liquibase ACA Job names."
-  value       = module.boatapp.liquibase_job_names
-}
-
-output "bff_custom_domain_verification_id" {
-  description = "Token to publish as the value of `asuid.<bff_custom_domain>` TXT record before turning on bff_custom_domain."
-  value       = module.boatapp.bff_custom_domain_verification_id
-}
-
-output "keycloak_custom_domain_verification_id" {
-  description = "Token to publish as the value of `asuid.<keycloak_custom_domain>` TXT record before turning on keycloak_custom_domain."
-  value       = module.boatapp.keycloak_custom_domain_verification_id
+output "resource_group_name" {
+  description = "Resource group name."
+  value       = module.boatapp.resource_group_name
 }
