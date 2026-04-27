@@ -52,6 +52,13 @@ public final class JakartaCodeTranslator {
      *         or unknown
      */
     public static String toApplicationCode(String jakartaCode) {
+        // Map.ofEntries returns an immutable map that throws NPE on a null key
+        // lookup, so short-circuit `null` here. GlobalExceptionHandler reaches
+        // this path with a null name when ConstraintViolation.getConstraintDescriptor()
+        // returns null. Mirrors the Business Service copy verbatim.
+        if (jakartaCode == null) {
+            return "field.invalid";
+        }
         return TO_APP_CODE.getOrDefault(jakartaCode, "field.invalid");
     }
 

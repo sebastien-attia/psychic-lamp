@@ -23,7 +23,7 @@
     <project>The Boat App — domain layer + persistence adapter</project>
     <existing-code>Hexagonal skeleton from Step 2A.1. Read existing package structure.</existing-code>
     <hexagonal-rule>
-      CRITICAL: domain.model, domain.port.in, domain.port.out, domain.service
+      CRITICAL: domain.model, application.port.in, application.port.out, application.service
       must contain ZERO Spring/Jakarta annotations. Only java.* and domain.* imports.
       JPA annotations (@Entity, @Column, @Version, @Table) belong ONLY in
       adapter.out.persistence.entity — NOT in domain.model.
@@ -134,9 +134,9 @@
       - NO Spring, NO Jakarta imports — only java.util.List and java.util.Collections.
     </step>
     <step order="2">
-      Create INBOUND PORTS (domain.port.in) — command/query records + interfaces, pure Java:
+      Create INBOUND PORTS (application.port.in) — command/query records + interfaces, pure Java:
 
-      First, create COMMAND and QUERY records (pure Java records, co-located in domain.port.in).
+      First, create COMMAND and QUERY records (pure Java records, co-located in application.port.in).
       Naming convention (enforced by ArchUnit):
         mutations → &lt;Action&gt;&lt;Entity&gt;Command  (e.g. CreateBoatCommand, UpdateBoatCommand)
         reads     → &lt;Action&gt;&lt;Entity&gt;Query    (e.g. ListBoatsQuery, GetBoatQuery)
@@ -184,7 +184,7 @@
       - AppUser getUserByKeycloakId(String keycloakId)   // single-arg lookup — primitive acceptable
     </step>
     <step order="3">
-      Create OUTBOUND PORTS (domain.port.out) — interfaces, pure Java:
+      Create OUTBOUND PORTS (application.port.out) — interfaces, pure Java:
 
       BoatRepositoryPort.java:
       - Optional&lt;Boat&gt; findById(UUID id)
@@ -291,7 +291,7 @@
       - Similarly for AppUserRepositoryAdapter and BoatAuditRepositoryAdapter
     </step>
     <step order="5">
-      Create Business Service Liquibase changelogs (business-service/src/main/resources/db/changelog/),
+      Create Business Service Liquibase changelogs (business-service/infrastructure/src/main/resources/db/changelog/),
       applied against the `boatapp` database as role `business_service`:
       - 001-create-app-user-table.yaml (APP_USER)
       - 002-create-boats-table.yaml (BOATS: id UUID PK, name VARCHAR 64, description VARCHAR 256, created_at TIMESTAMPTZ, version BIGINT)

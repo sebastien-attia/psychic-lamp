@@ -133,9 +133,20 @@
       flags. The codegen stage is the canonical fix.
     </step>
     <step order="2">
-      Create business-service/Dockerfile (2-stage build — no frontend):
-      - Stage 1 (build): eclipse-temurin:25-jdk → cd business-service && ./mvnw package -DskipTests
-      - Stage 2 (runtime): eclipse-temurin:25-jre → non-root user, HEALTHCHECK on /actuator/health, JVM container flags
+      Create business-service/Dockerfile (2-stage build — no frontend).
+      business-service is a four-module Maven reactor (domain → application →
+      infrastructure → bootstrap), so the Dockerfile must:
+      - Copy each submodule's pom.xml *before* `dependency:go-offline` so the
+        layer cache survives source-only changes (parent + 4 child poms).
+      - Run `./mvnw -pl bootstrap -am package -DskipTests` (build bootstrap
+        and everything it depends on; skip unrelated reactor work).
+      - Copy the runnable artifact from
+        `business-service/bootstrap/target/business-service.jar` (finalName
+        in bootstrap/pom.xml strips the version suffix).
+      Stages:
+      - Stage 1 (build): eclipse-temurin:25-jdk → reactor build as above.
+      - Stage 2 (runtime): eclipse-temurin:25-jre → non-root user, HEALTHCHECK
+        on /actuator/health, JVM container flags.
     </step>
     <step order="3">
       Create docker-compose.yml (default = local-intg, full stack — all 4 services):

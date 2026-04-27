@@ -20,11 +20,12 @@ for svc in bff business-service; do
 done
 
 # ── Package layout (hexagonal) ─────────────────────────────────────────────
-# Business Service: full hex, BFF: partial (no domain/persistence)
-bs="business-service/src/main/java"
-if [ -d "${bs}" ]; then
-  for pkg in domain/model domain/port/in domain/port/out adapter/in/web adapter/out/persistence infrastructure/config; do
-    if find "${bs}" -type d -path "*/${pkg}" 2>/dev/null | grep -q .; then
+# Business Service: full hex packaged across 4 Maven submodules — search across all of them.
+# BFF: partial (no domain/persistence) — single module.
+bs_main_globs=(business-service/*/src/main/java)
+if [ -d "${bs_main_globs[0]}" ]; then
+  for pkg in domain/model application/port/in application/port/out adapter/in/web adapter/out/persistence infrastructure/config; do
+    if find "${bs_main_globs[@]}" -type d -path "*/${pkg}" 2>/dev/null | grep -q .; then
       pass "business-service: ${pkg} package present"
     else
       fail "business-service: ${pkg} package missing"
@@ -44,9 +45,13 @@ if [ -d "${bff}" ]; then
 fi
 
 # ── 4 profiles: application-{dev,local-intg,staging,prod}.yml ───────────────
+# BFF profiles live under bff/src/main/resources; business-service profiles
+# live in the bootstrap submodule (only the runnable jar packs the YAML).
 for svc in bff business-service; do
+  resources_root="${svc}/src/main/resources"
+  [ "${svc}" = "business-service" ] && resources_root="business-service/bootstrap/src/main/resources"
   for prof in dev local-intg staging prod; do
-    f="${svc}/src/main/resources/application-${prof}.yml"
+    f="${resources_root}/application-${prof}.yml"
     if [ -f "${f}" ]; then
       pass "${svc}: application-${prof}.yml"
     else
@@ -56,14 +61,18 @@ for svc in bff business-service; do
 done
 
 # ── Contract: OpenAPI generator outputs ────────────────────────────────────
-if [ -d business-service/target/generated-sources/openapi ]; then
-  if find business-service/target/generated-sources/openapi -name 'BusinessServiceApi.java' | grep -q .; then
+# Business Service runs openapi-generator inside the `infrastructure`
+# submodule (the adapter that owns @RestController). Output lives at
+# business-service/infrastructure/target/generated-sources/openapi/.
+bs_openapi_dir="business-service/infrastructure/target/generated-sources/openapi"
+if [ -d "${bs_openapi_dir}" ]; then
+  if find "${bs_openapi_dir}" -name 'BusinessServiceApi.java' | grep -q .; then
     pass "business-service: generated BusinessServiceApi.java"
   else
     fail "business-service: BusinessServiceApi.java not generated"
   fi
 else
-  warn "business-service: generated-sources/openapi/ not present (run ./mvnw generate-sources)"
+  warn "business-service: ${bs_openapi_dir}/ not present (run ./mvnw generate-sources)"
 fi
 
 if [ -d bff/target/generated-sources/openapi ]; then

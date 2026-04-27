@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>ch.owt.boatapp</groupId>
+		<artifactId>business-service-parent</artifactId>
+		<version>0.0.1-SNAPSHOT</version>
+		<relativePath>../pom.xml</relativePath>
+	</parent>
+	<artifactId>business-service-domain</artifactId>
+	<packaging>jar</packaging>
+	<name>business-service-domain</name>
+	<description>Pure-Java domain layer: entities, value objects, exceptions, and stateless validators.</description>
+
+	<!--
+	    Domain deliberately has NO Spring, NO Jakarta, NO Lombok, NO logging.
+	    The Maven graph (this empty <dependencies>) physically prevents any
+	    accidental framework leak — `import org.springframework.*` would not
+	    resolve. Tests use plain JUnit 5 + AssertJ + ArchUnit (the in-module
+	    DomainPurityArchTest documents and double-checks the no-Spring/no-
+	    Jakarta/no-SLF4J invariant the Maven graph already enforces).
+	-->
+	<dependencies>
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.tngtech.archunit</groupId>
+			<artifactId>archunit-junit5</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>com.github.spotbugs</groupId>
+				<artifactId>spotbugs-maven-plugin</artifactId>
+			</plugin>
+		</plugins>
+	</build>
+</project>

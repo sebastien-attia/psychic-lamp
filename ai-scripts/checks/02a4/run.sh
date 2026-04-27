@@ -39,13 +39,13 @@ fi
 
 # ── Security: SecurityConfigs exist and carry the right @Profile ────────────
 if grep -rq '@Profile("dev")' bff/src/main/java/ 2>/dev/null \
-   || grep -rq '@Profile("dev")' business-service/src/main/java/ 2>/dev/null; then
+   || grep -rq '@Profile("dev")' business-service/*/src/main/java/ 2>/dev/null; then
   pass "Dev security config annotated @Profile(\"dev\")"
 else
   warn "No @Profile(\"dev\") security config found"
 fi
 
-if grep -rq '@Profile("!dev")' business-service/src/main/java/ 2>/dev/null \
+if grep -rq '@Profile("!dev")' business-service/*/src/main/java/ 2>/dev/null \
    || grep -rq '@Profile("!dev")' bff/src/main/java/ 2>/dev/null; then
   pass "Production security config annotated @Profile(\"!dev\")"
 else

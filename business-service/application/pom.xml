@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+	<parent>
+		<groupId>ch.owt.boatapp</groupId>
+		<artifactId>business-service-parent</artifactId>
+		<version>0.0.1-SNAPSHOT</version>
+		<relativePath>../pom.xml</relativePath>
+	</parent>
+	<artifactId>business-service-application</artifactId>
+	<packaging>jar</packaging>
+	<name>business-service-application</name>
+	<description>Use-case orchestration: ports (in/out), pure-Java use-case implementations.</description>
+
+	<!--
+	    Application depends on the domain jar and SLF4J only — no Spring,
+	    no Jakarta. Use cases are pure-Java orchestrators wired as @Bean by
+	    BeanConfig in the infrastructure module; the @Transactional
+	    boundary lives in the adapter.in.web gateway. ArchUnit
+	    (application_must_not_depend_on_spring_or_jakarta) and the absence
+	    of Spring/Jakarta on the classpath together enforce the invariant.
+	-->
+	<dependencies>
+		<dependency>
+			<groupId>ch.owt.boatapp</groupId>
+			<artifactId>business-service-domain</artifactId>
+		</dependency>
+		<dependency>
+			<groupId>org.slf4j</groupId>
+			<artifactId>slf4j-api</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>org.junit.jupiter</groupId>
+			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.assertj</groupId>
+			<artifactId>assertj-core</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>org.mockito</groupId>
+			<artifactId>mockito-junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.tngtech.archunit</groupId>
+			<artifactId>archunit-junit5</artifactId>
+			<scope>test</scope>
+		</dependency>
+	</dependencies>
+
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.jacoco</groupId>
+				<artifactId>jacoco-maven-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>com.github.spotbugs</groupId>
+				<artifactId>spotbugs-maven-plugin</artifactId>
+			</plugin>
+		</plugins>
+	</build>
+</project>

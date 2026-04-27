@@ -38,7 +38,9 @@
   <instructions-business-service>
     <step order="1">
       Create ArchUnit hexagonal tests for Business Service
-      (business-service/src/test/java/ch/owt/boatapp/architecture/HexagonalArchitectureTest.java):
+      (business-service/bootstrap/src/test/java/ch/owt/boatapp/architecture/BusinessServiceArchitectureTest.java
+      — they live in the bootstrap submodule because that is the only test
+      classpath that sees all four jars at once):
 
       ```java
       @AnalyzeClasses(packages = "ch.owt.boatapp", importOptions = ImportOption.DoNotIncludeTests.class)
@@ -64,16 +66,16 @@
               .as("Domain packages must not import jakarta.validation — Bean Validation is an adapter concern");
 
           @ArchTest
-          static final ArchRule domain_ports_should_not_depend_on_spring =
-              noClasses().that().resideInAPackage("..domain.port..")
+          static final ArchRule application_ports_should_not_depend_on_spring =
+              noClasses().that().resideInAPackage("..application.port..")
               .should().dependOnClassesThat().resideInAnyPackage(
                   "org.springframework..", "jakarta..", "javax..",
                   "..adapter..", "..infrastructure.."
-              ).as("Domain ports must be pure Java interfaces");
+              ).as("Application ports must be pure Java interfaces");
 
           @ArchTest
           static final ArchRule domain_services_should_not_depend_on_spring =
-              noClasses().that().resideInAPackage("..domain.service..")
+              noClasses().that().resideInAPackage("..application.service..")
               .should().dependOnClassesThat().resideInAnyPackage(
                   "org.springframework..", "jakarta..", "javax..",
                   "..adapter..", "..infrastructure.."
@@ -81,7 +83,7 @@
 
           @ArchTest
           static final ArchRule domain_services_should_only_depend_on_domain =
-              classes().that().resideInAPackage("..domain.service..")
+              classes().that().resideInAPackage("..application.service..")
               .should().onlyDependOnClassesThat().resideInAnyPackage(
                   "..domain..", "java..", "org.slf4j.."
               ).as("Domain services only depend on domain packages + java stdlib");
@@ -91,16 +93,16 @@
           static final ArchRule web_adapter_should_depend_on_application_service =
               classes().that().resideInAPackage("..adapter.in.web..")
               .should().onlyDependOnClassesThat().resideInAnyPackage(
-                  "..adapter.in.web..", "..domain.model..", "..infrastructure.service..",
+                  "..adapter.in.web..", "..domain.model..", "..application.service..",
                   "..infrastructure.security..",
                   "org.springframework..", "jakarta..", "java..", "org.slf4j.."
-              ).as("Web adapter depends on infrastructure.service (application services) and SecurityHelper only");
+              ).as("Web adapter depends on application.service (use cases) and SecurityHelper only");
 
           @ArchTest
           static final ArchRule persistence_adapter_should_implement_outbound_ports =
               classes().that().resideInAPackage("..adapter.out.persistence..")
               .and().areAnnotatedWith(org.springframework.stereotype.Repository.class)
-              .should().implement(resideInAPackage("..domain.port.out.."))
+              .should().implement(resideInAPackage("..application.port.out.."))
               .as("Persistence adapters must implement outbound port interfaces");
 
           @ArchTest
@@ -150,12 +152,13 @@
               .resideInAPackage("org.springframework.security.oauth2.client..")
               .as("Business Service must only use oauth2-resource-server, never oauth2-client");
 
-          // Onion architecture (built-in ArchUnit check)
+          // Onion architecture (built-in ArchUnit check) — package layout
+          // matches the multi-module Maven boundaries.
           @ArchTest
           static final ArchRule onion_architecture = Architectures.onionArchitecture()
               .domainModels("..domain.model..")
               .domainServices("..domain.service..")
-              .applicationServices("..domain.port..")
+              .applicationServices("..application..")
               .adapter("web", "..adapter.in.web..")
               .adapter("persistence", "..adapter.out.persistence..")
               .withOptionalLayers(true);
@@ -166,20 +169,22 @@
     <step order="2">
       Create NamingConventionTest.java for Business Service:
       - Controllers: suffixed "Controller"
-      - Domain services: suffixed "DomainService"
-      - Spring application services (infrastructure.service): suffixed "ApplicationService"
+      - Spring application services (in application.service, annotated @Service): suffixed "ApplicationService"
       - Repository adapters: suffixed "RepositoryAdapter"
       - JPA entities: suffixed "JpaEntity"
       - Ports: must be interfaces
-      - @Service classes must reside in "..infrastructure.service.."
-      - Command objects in domain.port.in: suffixed "Command", must be records
-      - Query objects in domain.port.in: suffixed "Query", must be records
+      - @Service classes must reside in "..application.service.."
+      - Command objects in application.port.in: suffixed "Command", must be records
+      - Query objects in application.port.in: suffixed "Query", must be records
       - Use case interface methods must not have more than 1 primitive/UUID/String parameter (use Command/Query)
     </step>
 
     <step order="3">
       Create integration tests for Business Service
-      (business-service/src/test/java/ch/owt/boatapp/integration/).
+      (business-service/bootstrap/src/test/java/ch/owt/boatapp/integration/
+      — bootstrap is the only submodule with the full Spring Boot test
+      classpath: spring-boot-testcontainers, security-test, oauth2-rs-test,
+      etc.).
 
       AbstractIntegrationTest (base — JWT auth, NO Keycloak container):
       - @SpringBootTest(webEnvironment = RANDOM_PORT) + @Testcontainers
@@ -379,7 +384,7 @@
           (so the same source-of-truth YAML used by compose + Ansible is also used
           in tests — no drift).
         - Alternative (if preferred for test speed): ship a pre-materialised
-          realm-export.json under business-service/src/test/resources/ AND add a
+          realm-export.json under business-service/bootstrap/src/test/resources/ AND add a
           test that regenerates it from realm.yaml via config-cli and diffs —
           so drift is still caught on every build.
       - @WireMockTest or @Container WireMockContainer — stubs Business Service responses

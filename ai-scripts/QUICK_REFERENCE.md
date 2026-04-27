@@ -83,30 +83,59 @@ bff/
     └── config/                    BeanConfig (RestClient with Bearer interceptor)
 ```
 
-### Business Service (`business-service/src/main/java/ch/owt/boatapp/`)
+### Business Service — four-module Maven reactor
+
+`business-service/` is a parent POM (packaging=pom) with four submodules.
+The Maven graph physically prevents domain from depending on Spring/Jakarta
+(those JARs aren't on the domain jar's classpath). Java packages are stable
+across the split — only the jar boundary changes.
 
 ```
-business-service/
-├── domain/                        ← PURE JAVA (ArchUnit enforced: NO Spring/Jakarta)
-│   ├── model/                     Boat, AppUser, BoatAudit, BoatId, UserId, PageResult
-│   ├── port/
-│   │   ├── in/                    ManageBoatsUseCase, GetUserUseCase + Command/Query records
-│   │   └── out/                   BoatRepositoryPort, AppUserRepositoryPort, ...
-│   └── service/                   BoatDomainService, UserDomainService
-├── adapter/
-│   ├── in/web/                    ← Spring @RestController — JWT resource server
-│   │   ├── BoatController         (implements BusinessServiceApi)
-│   │   ├── generated/             (BusinessServiceApi interface, openapi-generator output)
-│   │   ├── dto/generated/         (DTOs, openapi-generator output — do not edit)
-│   │   └── mapper/                (web ↔ domain)
-│   └── out/persistence/           ← Spring Data JPA (implements domain.port.out)
-│       ├── entity/                JPA @Entity (separate from domain model)
-│       ├── mapper/                (JPA entity ↔ domain record — hand-written @Component)
-│       └── repository/            JpaRepository + RepositoryAdapter
-└── infrastructure/
-    ├── config/                    BeanConfig (wires pure-Java domain beans)
-    ├── security/                  ResourceServerSecurityConfig (JWT), DevSecurityConfig (permitAll)
-    └── service/                   BoatApplicationService (@Service @Transactional bridge layer)
+business-service/                  ← parent POM (packaging=pom)
+│
+├── domain/                        ← business-service-domain (pure Java jar, ZERO Spring deps)
+│   └── src/main/java/ch/owt/boatapp/domain/
+│       ├── model/                 Boat, AppUser, BoatAudit, BoatId, UserId, PageResult
+│       ├── exception/             BoatNotFoundException, ConcurrentModificationException, ValidationFailureException
+│       └── service/validation/    SyntacticValidator, SemanticValidator (pure Java)
+│
+├── application/                   ← business-service-application (depends on domain + spring-context + spring-tx)
+│   └── src/main/java/ch/owt/boatapp/application/
+│       ├── port/in/               ManageBoatsUseCase, GetUserUseCase + Command/Query records
+│       ├── port/out/              BoatRepositoryPort, AppUserRepositoryPort, BoatAuditRepositoryPort
+│       └── service/               BoatApplicationService (@Service @Transactional bridge),
+│                                  BoatDomainService, UserDomainService (pure Java, wired by BeanConfig)
+│
+├── infrastructure/                ← business-service-infrastructure (Spring web/JPA/security)
+│   └── src/main/
+│       ├── java/ch/owt/boatapp/
+│       │   ├── adapter/in/web/    Spring @RestController — JWT resource server
+│       │   │   ├── BoatController              (implements BusinessServiceApi)
+│       │   │   ├── generated/                  (openapi-generator output)
+│       │   │   ├── dto/generated/              (DTOs, openapi-generator output — do not edit)
+│       │   │   └── mapper/                     (web ↔ domain)
+│       │   ├── adapter/out/persistence/        Spring Data JPA (implements application.port.out)
+│       │   │   ├── entity/                     JPA @Entity (separate from domain model)
+│       │   │   ├── mapper/                     (JPA entity ↔ domain record — hand-written @Component)
+│       │   │   └── repository/                 JpaRepository + RepositoryAdapter
+│       │   └── infrastructure/
+│       │       ├── config/                     BeanConfig (wires pure-Java application services as beans)
+│       │       └── security/                   ResourceServerSecurityConfig (JWT), DevSecurityConfig
+│       └── resources/
+│           ├── db/changelog/                   Liquibase migrations
+│           └── messages.properties             i18n source
+│
+└── bootstrap/                     ← business-service-bootstrap (runnable jar, finalName=business-service)
+    └── src/
+        ├── main/
+        │   ├── java/ch/owt/boatapp/BusinessServiceApplication.java   @SpringBootApplication(scanBasePackages = "ch.owt.boatapp")
+        │   └── resources/application*.yml      shared + per-profile config
+        └── test/
+            ├── java/ch/owt/boatapp/
+            │   ├── architecture/               ArchUnit tests (whole-graph view)
+            │   ├── integration/                @SpringBootTest + Testcontainers
+            │   └── support/                    JwtTestSupport, TestcontainersConfiguration
+            └── resources/application.yml       test-profile config
 ```
 
 ## 4 Environments

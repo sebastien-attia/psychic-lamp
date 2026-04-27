@@ -34,16 +34,20 @@
          - infrastructure.config → BffConfig (wires HTTP client beans).
 
       2. Business Service (business-service/) — port 8081
-         STRICT hexagonal. JWT resource server. All domain logic.
-         - domain.model → pure Java domain objects. ZERO Spring/Jakarta imports.
-         - domain.port.in → inbound port interfaces (use cases). Pure Java.
-         - domain.port.out → outbound port interfaces (repos). Pure Java.
-         - domain.service → use case implementations. Pure Java. Depends only on domain.*.
-         - adapter.in.web → Spring @RestController. Stateless (no session, no CSRF).
-         - adapter.out.persistence → JPA entities + Spring Data repos. Implements domain.port.out.
-         - infrastructure.config → BeanConfig (wires pure-Java domain beans).
-         - infrastructure.security → ResourceServerSecurityConfig (JWT), DevSecurityConfig.
-         - infrastructure.service → BoatApplicationService (@Service @Transactional, bridge layer).
+         STRICT hexagonal, packaged as a four-module Maven reactor (parent POM
+         + domain / application / infrastructure / bootstrap submodules).
+         The Maven graph physically prevents domain from depending on Spring.
+         JWT resource server.
+         - domain.model → pure Java domain objects. ZERO Spring/Jakarta imports. Lives in `domain` jar.
+         - domain.service.validation → SyntacticValidator + SemanticValidator (pure Java, in `domain`).
+         - application.port.in → inbound port interfaces (use cases) and Command/Query records. In `application` jar.
+         - application.port.out → outbound port interfaces (repos). In `application` jar.
+         - application.service → use case implementations. BoatApplicationService (@Service @Transactional bridge), plus pure-Java BoatDomainService / UserDomainService wired by BeanConfig. In `application` jar.
+         - adapter.in.web → Spring @RestController. Stateless. In `infrastructure` jar.
+         - adapter.out.persistence → JPA entities + Spring Data repos. Implements application.port.out. In `infrastructure` jar.
+         - infrastructure.config → BeanConfig (wires pure-Java application services as beans). In `infrastructure` jar.
+         - infrastructure.security → ResourceServerSecurityConfig (JWT), DevSecurityConfig. In `infrastructure` jar.
+         - BusinessServiceApplication + application*.yml → in `bootstrap` jar (the only one that produces a runnable artifact, finalName=business-service).
     </architecture>
     <environments>
       - dev: NO BFF. Business Service only (auth bypass via permitAll). PostgreSQL. No Keycloak.
@@ -306,13 +310,13 @@
     </step>
 
     <step order="7">
-      Create business-service/src/main/resources/application.yml (shared config):
+      Create business-service/bootstrap/src/main/resources/application.yml (shared config):
       - server.port: 8081
       - spring.liquibase.change-log: classpath:db/changelog/db.changelog-master.yaml
       - spring.jpa.open-in-view: false
       NOTE: No session config (stateless JWT resource server)
 
-      business-service/src/main/resources/application-dev.yml:
+      business-service/bootstrap/src/main/resources/application-dev.yml:
       - spring.datasource.url: jdbc:postgresql://localhost:5432/${BUSINESS_DB_NAME:boatapp}
       - spring.datasource.username: ${BUSINESS_DB_USER:business_service}
       - spring.datasource.password: ${BUSINESS_DB_PASSWORD:business_service}
@@ -321,29 +325,30 @@
       - NO spring.security.oauth2.resourceserver config (dev: permitAll, no JWT needed)
       - server.servlet.session.cookie.secure: false (not used but harmless)
 
-      business-service/src/main/resources/application-local-intg.yml:
+      business-service/bootstrap/src/main/resources/application-local-intg.yml:
       - spring.datasource.url: jdbc:postgresql://localhost:5432/${BUSINESS_DB_NAME:boatapp}
       - spring.datasource.username: ${BUSINESS_DB_USER:business_service}
       - spring.datasource.password: ${BUSINESS_DB_PASSWORD:business_service}
       - spring.security.oauth2.resourceserver.jwt.issuer-uri: ${KEYCLOAK_ISSUER_URI}
         (Keycloak publishes JWKS at {issuer-uri}/protocol/openid-connect/certs)
 
-      business-service/src/main/resources/application-staging.yml:
+      business-service/bootstrap/src/main/resources/application-staging.yml:
       - spring.datasource.url: jdbc:postgresql://${POSTGRES_FQDN}:5432/${BUSINESS_DB_NAME:boatapp}?sslmode=require
       - spring.datasource.username: ${BUSINESS_DB_USER}
       - spring.datasource.password: ${BUSINESS_DB_PASSWORD}
       - spring.security.oauth2.resourceserver.jwt.issuer-uri: Azure Keycloak URL
 
-      business-service/src/main/resources/application-prod.yml:
+      business-service/bootstrap/src/main/resources/application-prod.yml:
       - Same structure as staging with production URLs
     </step>
 
     <step order="8">
       Create the Business Service hexagonal package structure with placeholder classes:
       ch.owt.boatapp.domain.model/       → Boat.java, AppUser.java, BoatAudit.java (pure Java)
-      ch.owt.boatapp.domain.port.in/     → ManageBoatsUseCase.java, GetUserUseCase.java (interfaces)
-      ch.owt.boatapp.domain.port.out/    → BoatRepositoryPort.java, AppUserRepositoryPort.java, BoatAuditRepositoryPort.java (interfaces)
-      ch.owt.boatapp.domain.service/     → BoatDomainService.java, UserDomainService.java (implements use cases)
+      ch.owt.boatapp.application.port.in/     → ManageBoatsUseCase.java, GetUserUseCase.java (interfaces)
+      ch.owt.boatapp.application.port.out/    → BoatRepositoryPort.java, AppUserRepositoryPort.java, BoatAuditRepositoryPort.java (interfaces)
+      ch.owt.boatapp.application.service/     → BoatApplicationService.java (@Service @Transactional bridge),
+                                                BoatDomainService.java, UserDomainService.java (pure Java, wired by BeanConfig)
       ch.owt.boatapp.adapter.in.web/     → BoatController.java (implements BusinessServiceApi from the generated package)
                                          (DTOs live in dto.generated — do NOT create by hand)
       ch.owt.boatapp.adapter.in.web.dto.generated/ → generated at build time (do not create; gitignored)
@@ -351,18 +356,17 @@
       ch.owt.boatapp.adapter.out.persistence/ → entity/, mapper/, repository/
       ch.owt.boatapp.infrastructure.config/   → BeanConfig.java
       ch.owt.boatapp.infrastructure.security/ → ResourceServerSecurityConfig.java, DevSecurityConfig.java, SecurityHelper.java
-      ch.owt.boatapp.infrastructure.service/  → BoatApplicationService.java
     </step>
 
     <step order="9">
-      Verify business-service/src/main/java/ch/owt/boatapp/BusinessServiceApplication.java exists
+      Verify business-service/bootstrap/src/main/java/ch/owt/boatapp/BusinessServiceApplication.java exists
       (produced by Initializr). If Initializr emitted a different default name
       (e.g. DemoApplication), rename the class + file to BusinessServiceApplication. No other edits.
     </step>
 
     <step order="10">
       Create empty Liquibase master changelogs in both services:
-      - business-service/src/main/resources/db/changelog/db.changelog-master.yaml
+      - business-service/infrastructure/src/main/resources/db/changelog/db.changelog-master.yaml
         (Migrations 001-APP_USER, 002-BOATS, 003-BOAT_AUDIT added in step 02a2.)
       - bff/src/main/resources/db/changelog/db.changelog-master.yaml
         (Migration 001-SPRING_SESSION added in step 02a2 step 5b.)
