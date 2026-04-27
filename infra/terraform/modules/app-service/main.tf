@@ -157,18 +157,21 @@ resource "azurerm_linux_web_app" "business_service" {
   tags = var.tags
 }
 
-# ── Keycloak (public, port 8080, pulled straight from quay.io) ────────────
-# Unlike the BFF / business-service which run code from this repo, Keycloak
-# is upstream's own image — no custom Dockerfile, no ACR push. App Service
-# pulls the public quay.io tag directly. The `start` (not --optimized)
-# entry-point is used because we don't pre-bake `kc.sh build --db=postgres`;
-# the on-start build adds ~30-60 s to a cold boot but avoids maintaining
-# a derivative image.
+# ── Keycloak (public, port 8080, pulled from ACR) ─────────────────────────
+# Built from `keycloak/Dockerfile` in this repo — same path as bff and
+# business-service. The custom Dockerfile bakes two things into the
+# stock quay.io/keycloak/keycloak image:
+#   1. `kc.sh build --db=postgres`, so `start --optimized` succeeds
+#      (skipping the on-start re-build saves 30-60 s of cold boot).
+#   2. The `boatapp-fun` login theme under /opt/keycloak/themes, so
+#      `loginTheme: boatapp-fun` in infra/keycloak/realm.yaml resolves
+#      to the custom CSS / glyph / messages instead of silently falling
+#      back to the default Keycloak theme.
 #
 # Realm bootstrap: NOT automated by this module. The boat-app realm and
-# boat-app-confidential client must be applied post-first-deploy by
-# operators (admin UI or `keycloak-config-cli` run from a workstation).
-# The desired-state YAML lives at infra/keycloak/realm.yaml.
+# boat-app-confidential client are applied post-deploy by the
+# `keycloak-config` job in the deploy workflows, reading
+# infra/keycloak/realm.yaml.
 resource "azurerm_linux_web_app" "keycloak" {
   name                = local.keycloak_app_name
   resource_group_name = var.resource_group_name
@@ -182,18 +185,22 @@ resource "azurerm_linux_web_app" "keycloak" {
   }
 
   site_config {
-    always_on                         = true
-    health_check_path                 = "/health/ready"
-    health_check_eviction_time_in_min = 5
-    ftps_state                        = "Disabled"
-    minimum_tls_version               = "1.2"
+    always_on                                     = true
+    health_check_path                             = "/health/ready"
+    health_check_eviction_time_in_min             = 5
+    container_registry_use_managed_identity       = true
+    container_registry_managed_identity_client_id = null
+    ftps_state                                    = "Disabled"
+    minimum_tls_version                           = "1.2"
 
     application_stack {
-      docker_image_name   = "keycloak/keycloak:${var.keycloak_image_tag}"
-      docker_registry_url = "https://quay.io"
+      docker_image_name   = "keycloak:${var.keycloak_image_tag}"
+      docker_registry_url = "https://${var.acr_login_server}"
     }
 
-    app_command_line = "start"
+    # Optimized start works because keycloak/Dockerfile already ran
+    # `kc.sh build --db=postgres` in the builder stage.
+    app_command_line = "start --optimized"
   }
 
   app_settings = {
@@ -201,19 +208,22 @@ resource "azurerm_linux_web_app" "keycloak" {
     DOCKER_ENABLE_CI                    = "false"
     WEBSITES_ENABLE_APP_SERVICE_STORAGE = "false"
 
-    KC_DB          = "postgres"
+    # KC_DB is build-time and is baked into the image by keycloak/Dockerfile.
+    # The DB connection details are runtime-resolved from Key Vault.
     KC_DB_URL      = var.jdbc_urls["keycloak"]
     KC_DB_USERNAME = "keycloak"
     KC_DB_PASSWORD = "@Microsoft.KeyVault(SecretUri=${var.keyvault_uri}secrets/keycloak-db-password)"
 
     # App Service is the TLS terminator; tell Keycloak to honour the
     # X-Forwarded-* headers it injects.
-    KC_HOSTNAME        = "https://${local.keycloak_fqdn}"
-    KC_PROXY_HEADERS   = "xforwarded"
-    KC_HTTP_ENABLED    = "true"
-    KC_HTTP_PORT       = "8080"
-    KC_HEALTH_ENABLED  = "true"
-    KC_METRICS_ENABLED = "true"
+    KC_HOSTNAME      = "https://${local.keycloak_fqdn}"
+    KC_PROXY_HEADERS = "xforwarded"
+    KC_HTTP_ENABLED  = "true"
+    KC_HTTP_PORT     = "8080"
+
+    # KC_HEALTH_ENABLED and KC_METRICS_ENABLED are build-time options;
+    # they are baked into the image by keycloak/Dockerfile. Setting them
+    # here would be silently ignored under `start --optimized`.
 
     # App Service health probes hit the container on 127.0.0.1:8080 with a
     # `Host: localhost` header. Keycloak production-mode `start` rejects
@@ -234,12 +244,15 @@ resource "azurerm_linux_web_app" "keycloak" {
 }
 
 # ── Role assignments ──────────────────────────────────────────────────────
-# AcrPull on the registry — only the BFF and business-service need it; the
-# Keycloak Web App pulls from public quay.io.
+# AcrPull on the registry — required by every Web App that pulls a custom
+# image from this project's ACR (BFF, business-service, and now Keycloak,
+# which is built from keycloak/Dockerfile and pushed to ACR alongside
+# the other two).
 resource "azurerm_role_assignment" "acr_pull" {
   for_each = {
     bff      = azurerm_linux_web_app.bff.identity[0].principal_id
     business = azurerm_linux_web_app.business_service.identity[0].principal_id
+    keycloak = azurerm_linux_web_app.keycloak.identity[0].principal_id
   }
 
   scope                = var.acr_id

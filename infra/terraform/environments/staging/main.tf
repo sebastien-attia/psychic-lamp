@@ -95,9 +95,9 @@ variable "business_service_image_tag" {
 }
 
 variable "keycloak_image_tag" {
-  description = "Tag of the upstream quay.io/keycloak/keycloak image."
+  description = "Keycloak image tag to deploy (pulled from the project's ACR; built from keycloak/Dockerfile)."
   type        = string
-  default     = "26.6.1"
+  default     = "latest"
 }
 
 variable "additional_firewall_ips" {

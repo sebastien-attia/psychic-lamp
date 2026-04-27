@@ -154,10 +154,20 @@ jobs:
           image:      ${{ steps.tf-output.outputs.acr_login_server }}/business-service
           tags:       ${{ steps.tag.outputs.tag }}
 
-      # Keycloak is NOT built here — App Service pulls the upstream image
-      # straight from quay.io. The keycloak_image_tag TF variable is the
-      # only knob; bump it via a TF apply when a new Keycloak release is
-      # cut.
+      # Keycloak is built from keycloak/Dockerfile so the custom
+      # `boatapp-fun` login theme (referenced by infra/keycloak/realm.yaml)
+      # is baked into the image. The build context is ./keycloak so the
+      # `COPY ./themes` line in the Dockerfile resolves to keycloak/themes.
+      # Upstream Keycloak version is pinned by the Dockerfile's
+      # KEYCLOAK_VERSION ARG, NOT by this image tag — the image tag here
+      # is the per-deploy ACR tag, mirroring bff and business-service.
+      - name: Build & push keycloak
+        uses: ./.github/actions/docker-build-push
+        with:
+          context:    ./keycloak
+          dockerfile: keycloak/Dockerfile
+          image:      ${{ steps.tf-output.outputs.acr_login_server }}/keycloak
+          tags:       ${{ steps.tag.outputs.tag }}
 
   terraform:
     needs: build-push
@@ -175,7 +185,7 @@ jobs:
       # Image tags can't be at workflow scope (they reference job outputs).
       TF_VAR_bff_image_tag:              ${{ needs.build-push.outputs.image_tag }}
       TF_VAR_business_service_image_tag: ${{ needs.build-push.outputs.image_tag }}
-      # Keycloak image tag is set by the TF default; no per-deploy override.
+      TF_VAR_keycloak_image_tag:         ${{ needs.build-push.outputs.image_tag }}
     steps:
       - uses: actions/checkout@v4
 
@@ -289,21 +299,24 @@ jobs:
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Set new image tag on bff + business-service and restart
+      - name: Set new image tag on bff + business-service + keycloak and restart
         env:
           ACR_LOGIN_SERVER: ${{ needs.build-push.outputs.acr_login_server }}
           IMAGE_TAG:        ${{ needs.build-push.outputs.image_tag }}
           RG:               ${{ needs.terraform.outputs.resource_group_name }}
           BFF_APP:          ${{ needs.terraform.outputs.bff_app_name }}
           BUSINESS_APP:     ${{ needs.terraform.outputs.business_service_app_name }}
+          KEYCLOAK_APP:     ${{ needs.terraform.outputs.keycloak_app_name }}
         run: |
           set -euo pipefail
-          # Keycloak is intentionally absent — its image is pinned in TF and
-          # changes only via TF apply. The new BFF / business-service tags
-          # need an out-of-TF nudge so the apps actually load them now.
+          # Terraform sets the image tag in the Web App config, but App
+          # Service does not always pull the new image without an explicit
+          # nudge. Re-set the container reference and restart, the same
+          # way bff and business-service do.
           for app_repo in \
               "${BFF_APP}:bff" \
-              "${BUSINESS_APP}:business-service"; do
+              "${BUSINESS_APP}:business-service" \
+              "${KEYCLOAK_APP}:keycloak"; do
             APP="${app_repo%%:*}"
             REPO="${app_repo##*:}"
             az webapp config container set \
