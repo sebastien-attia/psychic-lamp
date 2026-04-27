@@ -66,6 +66,7 @@ resource "azurerm_linux_web_app" "bff" {
   site_config {
     always_on                                     = true
     health_check_path                             = "/actuator/health"
+    health_check_eviction_time_in_min             = 5
     container_registry_use_managed_identity       = true
     container_registry_managed_identity_client_id = null
     ftps_state                                    = "Disabled"
@@ -126,6 +127,7 @@ resource "azurerm_linux_web_app" "business_service" {
   site_config {
     always_on                                     = true
     health_check_path                             = "/actuator/health"
+    health_check_eviction_time_in_min             = 5
     container_registry_use_managed_identity       = true
     container_registry_managed_identity_client_id = null
     ftps_state                                    = "Disabled"
@@ -180,10 +182,11 @@ resource "azurerm_linux_web_app" "keycloak" {
   }
 
   site_config {
-    always_on           = true
-    health_check_path   = "/health/ready"
-    ftps_state          = "Disabled"
-    minimum_tls_version = "1.2"
+    always_on                         = true
+    health_check_path                 = "/health/ready"
+    health_check_eviction_time_in_min = 5
+    ftps_state                        = "Disabled"
+    minimum_tls_version               = "1.2"
 
     application_stack {
       docker_image_name   = "keycloak/keycloak:${var.keycloak_image_tag}"
