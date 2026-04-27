@@ -26,7 +26,11 @@ resource "null_resource" "bootstrap" {
   triggers = var.trigger_dependencies
 
   provisioner "local-exec" {
-    interpreter = ["/bin/sh", "-c"]
+    # bash, not /bin/sh — Ubuntu's /bin/sh is dash, which rejects
+    # `set -o pipefail`. We want pipefail so a mid-pipe psql failure
+    # propagates rather than being masked by the trailing command's
+    # success.
+    interpreter = ["/bin/bash", "-c"]
     environment = {
       # PGSSLMODE is the libpq env var that enforces TLS. (--set sets a
       # psql variable, not a connection option, so passing sslmode there
