@@ -46,7 +46,7 @@
 		<archunit.version>1.4.1</archunit.version>
 		<springdoc.version>2.8.13</springdoc.version>
 		<openapi-generator.version>7.11.0</openapi-generator.version>
-		<jacoco.version>0.8.13</jacoco.version>
+		<jacoco.version>0.8.14</jacoco.version>
 		<spotbugs-maven-plugin.version>4.9.8.3</spotbugs-maven-plugin.version>
 		<findsecbugs-plugin.version>1.14.0</findsecbugs-plugin.version>
 		<cyclonedx-maven-plugin.version>2.9.1</cyclonedx-maven-plugin.version>
