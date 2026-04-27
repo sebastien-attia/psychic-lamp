@@ -76,6 +76,15 @@ resource "azurerm_container_app_environment" "this" {
   resource_group_name = var.resource_group_name
   location            = var.location
 
+  # When the ACA env was first provisioned, Azure auto-generated this
+  # managed RG name; not declaring it in Terraform meant every subsequent
+  # plan saw `null -> "ME_..."` and tagged the diff as force-replace —
+  # which, combined with the subnet-delegation drift in networking/main.tf,
+  # was the actual driver of the recent destroy cascade. Declaring it
+  # explicitly with the same formula Azure uses (`ME_{env}_{rg}_{location}`)
+  # eliminates the diff and is portable across environments.
+  infrastructure_resource_group_name = "ME_${local.name_prefix}-aca-env_${var.resource_group_name}_${var.location}"
+
   infrastructure_subnet_id       = var.container_apps_subnet_id
   internal_load_balancer_enabled = false
 

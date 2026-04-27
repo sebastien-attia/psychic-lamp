@@ -43,8 +43,14 @@ resource "azurerm_subnet" "container_apps" {
   delegation {
     name = "aca-delegation"
     service_delegation {
-      name    = "Microsoft.App/environments"
-      actions = ["Microsoft.Network/virtualNetworks/subnets/action"]
+      name = "Microsoft.App/environments"
+      # Azure persists `subnets/join/action` for Microsoft.App/environments
+      # delegations (the canonical action per current ARM docs). The
+      # previous `subnets/action` value caused a perpetual subnet diff at
+      # every plan, which Terraform then tried to "fix" — and the resulting
+      # subnet modification was the silent driver of the ACA-env replace
+      # cascade that broke the staging deploy on commit 09385a9.
+      actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
     }
   }
 }
