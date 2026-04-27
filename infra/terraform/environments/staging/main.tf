@@ -11,9 +11,15 @@ terraform {
 module "boatapp" {
   source = "../.."
 
-  environment  = "staging"
-  location     = "switzerlandnorth"
-  project_name = "boatapp"
+  environment = "staging"
+  location    = "switzerlandnorth"
+
+  # Renamed from "boatapp" to sidestep name collisions with the OLD ACA-
+  # topology stack still living in `boatapp-staging-rg`. The new
+  # simplification lands in `boatapp-v2-staging-rg`; the old RG can be
+  # decommissioned once we've validated the new deploy. Production stays
+  # on the original `boatapp` slug because it has no parallel old stack.
+  project_name = "boatapp-v2"
 
   # ── Sensitive (TF_VAR_*) ──────────────────────────────────────────────
   postgres_admin_password = var.postgres_admin_password
