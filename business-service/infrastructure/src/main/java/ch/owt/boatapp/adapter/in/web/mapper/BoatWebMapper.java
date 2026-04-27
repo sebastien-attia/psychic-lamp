@@ -34,32 +34,36 @@ public final class BoatWebMapper {
     }
 
     /**
-     * Map a domain {@link Boat} to its wire response DTO, attaching a list
-     * of advisory ({@code WARNING} / {@code INFO}) validation messages on
-     * the response body. Used by the create/update success path so the
-     * caller can render soft hints alongside the persisted boat.
+     * Map a domain {@link Boat} to its wire response DTO and attach any
+     * non-blocking advisories the domain emitted while accepting a
+     * mutation. Used by the create/update success path so the caller can
+     * render soft hints ({@code WARNING} / {@code INFO}) alongside the
+     * persisted boat.
      *
      * <p>Severity filtering is the bridge layer's responsibility: by the
      * time control reaches this mapper the {@code ERROR}-bearing path has
      * already short-circuited via {@code ValidationFailureException}, so
-     * every entry in {@code messages} is expected to be advisory. The
+     * every entry in {@code advisories} is expected to be advisory. The
      * mapper does not re-filter — it just formats.
      *
-     * @param boat          the domain boat (never {@code null})
-     * @param messages      the advisory findings to attach (never
-     *                      {@code null}; may be empty)
+     * <p>The optional {@code messages} field on the response is left
+     * {@code null} (Jackson omits it from JSON) when {@code advisories} is
+     * empty, so read responses and advisory-free mutations remain
+     * byte-identical.
+     *
+     * @param boat          the persisted/updated boat (never {@code null})
+     * @param advisories    non-blocking domain messages (never {@code null}; may be empty)
      * @param messageSource Spring's i18n message source
      * @param locale        the resolved request locale
-     * @return the response DTO with both the boat fields and the formatted
-     *         advisory messages set
+     * @return the response DTO with {@code messages} populated only when non-empty
      */
     public static BoatResponse toResponse(Boat boat,
-                                          List<ValidationMessage> messages,
+                                          List<ValidationMessage> advisories,
                                           MessageSource messageSource,
                                           Locale locale) {
         BoatResponse response = toResponse(boat);
-        if (!messages.isEmpty()) {
-            response.setMessages(toWire(messages, messageSource, locale));
+        if (!advisories.isEmpty()) {
+            response.setMessages(toWire(advisories, messageSource, locale));
         }
         return response;
     }
@@ -82,30 +86,6 @@ public final class BoatWebMapper {
         boolean empty = content.isEmpty();
         return new PageBoatResponse(content, page.totalElements(), page.totalPages(),
                 page.size(), page.number(), first, last, empty);
-    }
-
-    /**
-     * Map a domain {@link Boat} to its wire response DTO and attach any
-     * non-blocking advisories the domain emitted while accepting a
-     * mutation. The optional {@code messages} field is left {@code null}
-     * (Jackson omits it from JSON) when {@code advisories} is empty, so
-     * read responses and advisory-free mutations remain byte-identical.
-     *
-     * @param boat          the persisted/updated boat (never {@code null})
-     * @param advisories    non-blocking domain messages (never {@code null}; may be empty)
-     * @param messageSource Spring's i18n message source
-     * @param locale        the resolved request locale
-     * @return the response DTO with {@code messages} populated only when non-empty
-     */
-    public static BoatResponse toResponse(Boat boat,
-                                          List<ValidationMessage> advisories,
-                                          MessageSource messageSource,
-                                          Locale locale) {
-        BoatResponse response = toResponse(boat);
-        if (!advisories.isEmpty()) {
-            response.setMessages(toWire(advisories, messageSource, locale));
-        }
-        return response;
     }
 
     /**
