@@ -4,121 +4,86 @@
 # or operator workstation) MUST be on the Flexible Server firewall allowlist
 # for the duration of the apply — modules/database is responsible for that.
 #
-# Idempotence
-# ───────────
-# Per role, two psql calls in sequence:
-#   1. DO $$ … $$ that CREATE ROLEs only if the role does not exist (no
-#      password set here — psql does NOT expand `:'pw'` inside a
-#      dollar-quoted string).
-#   2. ALTER ROLE … WITH LOGIN PASSWORD :'pw' — outside any DO block, so
-#      psql expands `:'pw'` correctly and quote-and-escapes the secret.
-# This is unconditional so password rotation propagates without manual
-# intervention. GRANTs are idempotent (re-running is safe).
+# Why a script file (psql -f) rather than inline psql -c?
+# ───────────────────────────────────────────────────────
+# psql performs `:'name'` / `:"name"` variable substitution only when
+# parsing input as a script (file, stdin, \i). It does NOT substitute
+# inside the value of `-c`/`--command=` — that string is sent verbatim to
+# the server as one simple-query. Three consecutive staging deploys broke
+# on the same `syntax error at or near ":"` because of this; the inline
+# heredoc + nested quoting layers (Terraform → bash → psql) made every
+# tweak a coin flip. Moving the SQL into sql/bootstrap-role.sql collapses
+# this to a single layer of quoting and lets psql do its job.
 #
-# Why local-exec rather than terraform-postgresql provider?
-# ─────────────────────────────────────────────────────────
+# Why local-exec rather than the cyrilgdn/postgresql provider?
+# ────────────────────────────────────────────────────────────
 # The provider would force every per-grant resource into Terraform state,
-# producing dozens of resources for a one-shot bootstrap that mirrors what
-# the apps need on first contact. A single null_resource with the SQL
-# inline is simpler, leaves a smaller state surface, and matches what the
-# (now-deleted) bootstrap-db-roles ACA Job did.
+# producing dozens of resources for a one-shot bootstrap that mirrors
+# what the apps need on first contact. A single null_resource per role
+# is simpler, leaves a smaller state surface, and matches what the
+# (now-deleted) bootstrap-db-roles ACA Job did. Revisit if drift
+# detection becomes a real need.
+
+locals {
+  # Role → target application database. The DBs themselves are created by
+  # modules/database; this module only creates roles and grants on them.
+  roles = {
+    bff = {
+      db       = "bff_session"
+      password = var.bff_db_password
+    }
+    business_service = {
+      db       = "boatapp"
+      password = var.business_db_password
+    }
+    keycloak = {
+      db       = "keycloak"
+      password = var.keycloak_db_password
+    }
+  }
+}
 
 resource "null_resource" "bootstrap" {
-  # Re-run when any input dependency changes (e.g. password rotated, server
-  # rebuilt). The trigger map is hashed by Terraform; values are stringified
-  # automatically.
-  triggers = var.trigger_dependencies
+  for_each = local.roles
+
+  # Re-run triggers:
+  #  - var.trigger_dependencies: password rotation, server rebuild (caller).
+  #  - _role: per-instance stable identity (also avoids collision if a
+  #    caller's trigger map ever contained a key named `role`).
+  #  - _script_hash: re-run when the SQL itself changes — without this,
+  #    edits to bootstrap-role.sql would silently never apply, since
+  #    Terraform sees no diff in the resource.
+  triggers = merge(var.trigger_dependencies, {
+    _role        = each.key
+    _script_hash = filesha256("${path.module}/sql/bootstrap-role.sql")
+  })
 
   provisioner "local-exec" {
     # bash, not /bin/sh — Ubuntu's /bin/sh is dash, which rejects
-    # `set -o pipefail`. We want pipefail so a mid-pipe psql failure
-    # propagates rather than being masked by the trailing command's
-    # success.
+    # `set -o pipefail`. NB: deliberately NO `set -x` — argv tracing would
+    # leak any future password-on-argv mistakes into the GH Actions log.
     interpreter = ["/bin/bash", "-c"]
     environment = {
       # PGSSLMODE is the libpq env var that enforces TLS. (--set sets a
       # psql variable, not a connection option, so passing sslmode there
       # would have no effect on the connection.)
-      PGSSLMODE            = "require"
-      PGPASSWORD           = var.admin_password
-      BFF_DB_PASSWORD      = var.bff_db_password
-      BUSINESS_DB_PASSWORD = var.business_db_password
-      KEYCLOAK_DB_PASSWORD = var.keycloak_db_password
+      PGSSLMODE  = "require"
+      PGPASSWORD = var.admin_password
+      # Password reaches psql via the env: bootstrap-role.sql does
+      # `\getenv pw ROLE_PW` so the secret never appears on argv.
+      ROLE_PW = each.value.password
     }
     command = <<-EOT
-      set -euxo pipefail
-
-      PSQL="psql --host=${var.postgres_fqdn} --port=5432 \
-                 --username=${var.admin_username} \
-                 --set=ON_ERROR_STOP=on --no-psqlrc"
-
-      # ── bff role + DB grants ────────────────────────────────────────────
-      # Step 1: ensure the role exists (no password — :'pw' would not
-      # expand inside the DO $$ … $$ block).
-      $PSQL --dbname=postgres --command="
-        DO \$\$
-        BEGIN
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'bff') THEN
-            CREATE ROLE bff LOGIN;
-          END IF;
-        END \$\$;
-      "
-      # Step 2: set the password unconditionally — :'pw' IS expanded
-      # here because the statement is at psql's top level, not inside
-      # a dollar-quoted string.
-      $PSQL --dbname=postgres --variable=pw="$BFF_DB_PASSWORD" --command="
-        ALTER ROLE bff WITH LOGIN PASSWORD :'pw';
-      "
-      $PSQL --dbname=bff_session --command="
-        GRANT CONNECT ON DATABASE bff_session TO bff;
-        GRANT USAGE, CREATE ON SCHEMA public TO bff;
-        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO bff;
-        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO bff;
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO bff;
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO bff;
-      "
-
-      # ── business_service role + DB grants ───────────────────────────────
-      $PSQL --dbname=postgres --command="
-        DO \$\$
-        BEGIN
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'business_service') THEN
-            CREATE ROLE business_service LOGIN;
-          END IF;
-        END \$\$;
-      "
-      $PSQL --dbname=postgres --variable=pw="$BUSINESS_DB_PASSWORD" --command="
-        ALTER ROLE business_service WITH LOGIN PASSWORD :'pw';
-      "
-      $PSQL --dbname=boatapp --command="
-        GRANT CONNECT ON DATABASE boatapp TO business_service;
-        GRANT USAGE, CREATE ON SCHEMA public TO business_service;
-        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO business_service;
-        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO business_service;
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO business_service;
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO business_service;
-      "
-
-      # ── keycloak role + DB grants ───────────────────────────────────────
-      $PSQL --dbname=postgres --command="
-        DO \$\$
-        BEGIN
-          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'keycloak') THEN
-            CREATE ROLE keycloak LOGIN;
-          END IF;
-        END \$\$;
-      "
-      $PSQL --dbname=postgres --variable=pw="$KEYCLOAK_DB_PASSWORD" --command="
-        ALTER ROLE keycloak WITH LOGIN PASSWORD :'pw';
-      "
-      $PSQL --dbname=keycloak --command="
-        GRANT CONNECT ON DATABASE keycloak TO keycloak;
-        GRANT USAGE, CREATE ON SCHEMA public TO keycloak;
-        GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO keycloak;
-        GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO keycloak;
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO keycloak;
-        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO keycloak;
-      "
+      set -euo pipefail
+      psql --host=${var.postgres_fqdn} \
+           --port=5432 \
+           --username=${var.admin_username} \
+           --dbname=postgres \
+           --no-psqlrc \
+           --set=ON_ERROR_STOP=on \
+           --variable=role=${each.key} \
+           --variable=db=${each.value.db} \
+           --file=${abspath("${path.module}/sql/bootstrap-role.sql")}
     EOT
   }
 }
