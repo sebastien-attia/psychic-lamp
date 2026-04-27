@@ -31,3 +31,20 @@ paths = [
 regexes = [
   '''(?i)\b(changeme|change-me|demo|demo123|password|secret)\b''',
 ]
+
+# Scoped suppressions for the built-in `private-key` rule. Kept OUT of the
+# global [allowlist] above so a future real AWS key / JWT / token hard-coded
+# in any of these paths still trips the other default rules. Requires
+# gitleaks >= 8.21 (`targetRules`); the action pins 8.24.3.
+[[allowlists]]
+description = "False positives for the private-key rule"
+targetRules = ["private-key"]
+paths = [
+  # Tests build a PEM string at runtime from KeyPairGenerator; only the
+  # "-----BEGIN PRIVATE KEY-----" header literal appears in source.
+  '''.*/src/test/.*\.java$''',
+  # Comment block contrasting PKCS#1 vs PKCS#8 PEM headers; no key material.
+  '''infra/terraform/modules/keyvault/main\.tf$''',
+  # Documentation snippet showing the same runtime-generated test pattern.
+  '''ai-scripts/.*\.md$''',
+]
