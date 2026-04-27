@@ -215,6 +215,15 @@ jobs:
   secret-scan:
     # gitleaks: scan full history on every push/PR for non-format-known secrets.
     # Job ID is the required-status-check name in settings.yml.
+    # gitleaks-action v2 hard-fails on events outside push/pull_request/
+    # workflow_dispatch/schedule. When ci.yml is reused from a release-
+    # triggered workflow (deploy-production.yml), github.event_name is
+    # "release" and the action errors out, so skip here — the release
+    # commit was already scanned on its push to staging/main. The guard
+    # MUST stay at job level: secret-scan is a required status check
+    # (.github/settings.yml), and GitHub only treats a skipped required
+    # job as success when the skip is via a job-level `if:`.
+    if: github.event_name != 'release'
     runs-on: ubuntu-latest
     permissions:
       contents: read
