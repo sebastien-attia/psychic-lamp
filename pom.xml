@@ -43,7 +43,7 @@
 		<java.version>25</java.version>
 
 		<!-- Plugin / library versions used by both bff and business-service -->
-		<archunit.version>1.4.1</archunit.version>
+		<archunit.version>1.4.2</archunit.version>
 		<springdoc.version>2.8.13</springdoc.version>
 		<openapi-generator.version>7.11.0</openapi-generator.version>
 		<jacoco.version>0.8.13</jacoco.version>
