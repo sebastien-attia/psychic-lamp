@@ -181,9 +181,9 @@ public class GlobalExceptionHandler {
     // ── 422 Unprocessable Entity — domain validation failure ────────────────
 
     /**
-     * @param ex  the bridge exception thrown by {@code BoatApplicationService}
-     *            when the use-case returned a {@code ServiceResponse} with
-     *            {@code hasErrors() == true}
+     * @param ex  the gateway exception thrown by
+     *            {@code BoatTransactionalGateway} when the use-case returned
+     *            a {@code ServiceResponse} with {@code hasErrors() == true}
      * @param req the inbound request — used for {@code instance} and logging
      * @return RFC 9457 422 with one entry in {@code messages} per domain finding
      */

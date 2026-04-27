@@ -54,6 +54,30 @@ public final class BoatWebMapper {
     }
 
     /**
+     * Map a domain {@link Boat} to its wire response DTO and attach any
+     * non-blocking advisories the domain emitted while accepting a
+     * mutation. The optional {@code messages} field is left {@code null}
+     * (Jackson omits it from JSON) when {@code advisories} is empty, so
+     * read responses and advisory-free mutations remain byte-identical.
+     *
+     * @param boat          the persisted/updated boat (never {@code null})
+     * @param advisories    non-blocking domain messages (never {@code null}; may be empty)
+     * @param messageSource Spring's i18n message source
+     * @param locale        the resolved request locale
+     * @return the response DTO with {@code messages} populated only when non-empty
+     */
+    public static BoatResponse toResponse(Boat boat,
+                                          List<ValidationMessage> advisories,
+                                          MessageSource messageSource,
+                                          Locale locale) {
+        BoatResponse response = toResponse(boat);
+        if (!advisories.isEmpty()) {
+            response.setMessages(toWire(advisories, messageSource, locale));
+        }
+        return response;
+    }
+
+    /**
      * Map a single domain {@link ValidationMessage} into its wire DTO,
      * resolving the human-readable {@code message} via the supplied
      * {@link MessageSource} against the request locale.

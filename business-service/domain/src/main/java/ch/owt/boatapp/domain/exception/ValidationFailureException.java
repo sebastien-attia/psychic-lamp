@@ -9,8 +9,9 @@ import java.util.List;
  * Bridge exception between the domain's {@code ServiceResponse} failure mode
  * and the REST adapter's HTTP 422 response.
  *
- * <p>Thrown by {@code BoatApplicationService} when a use-case returns a
- * {@code ServiceResponse} with {@code hasErrors() == true}. The web adapter's
+ * <p>Thrown by {@code BoatTransactionalGateway} (in {@code adapter.in.web})
+ * when a use-case returns a {@code ServiceResponse} with
+ * {@code hasErrors() == true}. The web adapter's
  * {@code GlobalExceptionHandler} maps it to HTTP 422 with the problem type
  * {@code https://boatapp.owt.ch/problems/validation} and populates
  * {@code ProblemDetail.messages[]} from {@link #getMessages()}.

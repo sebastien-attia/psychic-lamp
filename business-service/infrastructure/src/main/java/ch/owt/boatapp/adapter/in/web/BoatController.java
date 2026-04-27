@@ -9,14 +9,17 @@ import ch.owt.boatapp.adapter.in.web.mapper.BoatCommandMapper;
 import ch.owt.boatapp.adapter.in.web.mapper.BoatWebMapper;
 import ch.owt.boatapp.domain.model.Boat;
 import ch.owt.boatapp.domain.model.PageResult;
+import ch.owt.boatapp.domain.model.ServiceResponse;
 import ch.owt.boatapp.infrastructure.security.SecurityHelper;
-import ch.owt.boatapp.application.service.BoatApplicationService;
+import org.springframework.context.MessageSource;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.net.URI;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -24,7 +27,9 @@ import java.util.UUID;
  *
  * <p>Stateless — the {@code Bearer} JWT is validated upstream by Spring
  * Security; this class never opens a transaction (the
- * {@link BoatApplicationService} bridge owns {@code @Transactional}).
+ * {@link BoatTransactionalGateway} owns {@code @Transactional}). The gateway
+ * lives next to the controller so the {@code application} Maven module can
+ * stay pure Java with zero Spring/Jakarta deps.
  *
  * <p>Implements the OpenAPI-generated {@link BusinessServiceApi} interface,
  * so request mappings, path/query/header bindings and {@code @Valid}
@@ -38,16 +43,21 @@ import java.util.UUID;
 @Validated
 public class BoatController implements BusinessServiceApi {
 
-    private final BoatApplicationService boatApplicationService;
+    private final BoatTransactionalGateway boatTransactionalGateway;
     private final SecurityHelper securityHelper;
+    private final MessageSource messageSource;
 
     /**
-     * @param boatApplicationService transactional bridge to the boat use-case
-     * @param securityHelper         resolves the current authenticated user
+     * @param boatTransactionalGateway transactional gateway to the boat use-case
+     * @param securityHelper           resolves the current authenticated user
+     * @param messageSource            i18n source for advisory message texts on 2xx envelopes
      */
-    public BoatController(BoatApplicationService boatApplicationService, SecurityHelper securityHelper) {
-        this.boatApplicationService = boatApplicationService;
+    public BoatController(BoatTransactionalGateway boatTransactionalGateway,
+                          SecurityHelper securityHelper,
+                          MessageSource messageSource) {
+        this.boatTransactionalGateway = boatTransactionalGateway;
         this.securityHelper = securityHelper;
+        this.messageSource = messageSource;
     }
 
     /**
@@ -60,7 +70,7 @@ public class BoatController implements BusinessServiceApi {
      */
     @Override
     public ResponseEntity<PageBoatResponse> listBoats(Integer page, Integer size, String sort, String search) {
-        PageResult<Boat> result = boatApplicationService.listBoats(
+        PageResult<Boat> result = boatTransactionalGateway.listBoats(
                 BoatCommandMapper.toListQuery(page, size, sort, search));
         return ResponseEntity.ok(BoatWebMapper.toPage(result));
     }
@@ -73,7 +83,7 @@ public class BoatController implements BusinessServiceApi {
      */
     @Override
     public ResponseEntity<BoatResponse> getBoat(UUID id) {
-        Boat boat = boatApplicationService.getBoat(BoatCommandMapper.toGetQuery(id));
+        Boat boat = boatTransactionalGateway.getBoat(BoatCommandMapper.toGetQuery(id));
         return ResponseEntity.ok()
                 .eTag(String.valueOf(boat.version()))
                 .body(BoatWebMapper.toResponse(boat));
@@ -84,39 +94,47 @@ public class BoatController implements BusinessServiceApi {
      *
      * <p>Returns 201 Created with a {@code Location} header pointing at the
      * new resource and an {@code ETag} header carrying the initial version.
+     * The body carries the persisted boat plus any non-blocking advisories
+     * (`WARNING` / `INFO`) the domain emitted, surfaced as the optional
+     * {@code messages} field on {@link BoatResponse}.
      */
     @Override
     public ResponseEntity<BoatResponse> createBoat(BoatCreateRequest boatCreateRequest) {
         UUID userId = securityHelper.getCurrentAppUserId();
-        Boat boat = boatApplicationService.createBoat(
+        ServiceResponse<Boat> result = boatTransactionalGateway.createBoat(
                 BoatCommandMapper.toCreateCommand(boatCreateRequest, userId));
+        Boat boat = result.data();
         URI location = ServletUriComponentsBuilder.fromCurrentRequest()
                 .path("/{id}")
                 .buildAndExpand(boat.id())
                 .toUri();
+        Locale locale = LocaleContextHolder.getLocale();
         return ResponseEntity.created(location)
                 .eTag(String.valueOf(boat.version()))
-                .body(BoatWebMapper.toResponse(boat));
+                .body(BoatWebMapper.toResponse(boat, result.messages(), messageSource, locale));
     }
 
     /**
      * {@inheritDoc}
      *
      * <p>Returns 200 OK with the updated boat and a refreshed {@code ETag}
-     * header. The {@code If-Match} header is parsed as a bare {@code Long}
-     * (per {@code contracts/openapi.yaml}); a malformed value surfaces as
-     * a 400 via the global handler. A version mismatch surfaces as 409;
-     * a missing {@code If-Match} as 428.
+     * header. The body carries the boat plus any non-blocking advisories on
+     * the optional {@code messages} field. The {@code If-Match} header is
+     * parsed as a bare {@code Long} (per {@code contracts/openapi.yaml}); a
+     * malformed value surfaces as a 400 via the global handler. A version
+     * mismatch surfaces as 409; a missing {@code If-Match} as 428.
      */
     @Override
     public ResponseEntity<BoatResponse> updateBoat(UUID id, String ifMatch, BoatUpdateRequest boatUpdateRequest) {
         Long expectedVersion = parseIfMatch(ifMatch);
         UUID userId = securityHelper.getCurrentAppUserId();
-        Boat boat = boatApplicationService.updateBoat(
+        ServiceResponse<Boat> result = boatTransactionalGateway.updateBoat(
                 BoatCommandMapper.toUpdateCommand(id, expectedVersion, boatUpdateRequest, userId));
+        Boat boat = result.data();
+        Locale locale = LocaleContextHolder.getLocale();
         return ResponseEntity.ok()
                 .eTag(String.valueOf(boat.version()))
-                .body(BoatWebMapper.toResponse(boat));
+                .body(BoatWebMapper.toResponse(boat, result.messages(), messageSource, locale));
     }
 
     /**
@@ -128,7 +146,7 @@ public class BoatController implements BusinessServiceApi {
     @Override
     public ResponseEntity<Void> deleteBoat(UUID id) {
         UUID userId = securityHelper.getCurrentAppUserId();
-        boatApplicationService.deleteBoat(BoatCommandMapper.toDeleteCommand(id, userId));
+        boatTransactionalGateway.deleteBoat(BoatCommandMapper.toDeleteCommand(id, userId));
         return ResponseEntity.noContent().build();
     }
 

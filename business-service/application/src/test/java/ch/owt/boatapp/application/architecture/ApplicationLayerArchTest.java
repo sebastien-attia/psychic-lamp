@@ -11,17 +11,19 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
 /**
  * In-module architecture rules for the {@code application} layer.
  *
- * <p>The application layer owns use-case orchestration. It depends on the
- * domain jar plus a narrow Spring slice ({@code spring-context},
- * {@code spring-tx}); web and JPA starters are deliberately absent in the
- * Maven graph. These rules pin the rules ArchUnit can express on top of that:
+ * <p>The application layer owns use-case orchestration as pure Java. The
+ * Maven module declares only {@code business-service-domain} and
+ * {@code slf4j-api} on its classpath — no Spring, no Jakarta. The
+ * {@code @Transactional} boundary lives in the
+ * {@code adapter.in.web.BoatTransactionalGateway} so the {@code application}
+ * module never needs {@code spring-tx}/{@code spring-context}.
  *
  * <ul>
- *   <li>{@code application.port..} stays pure — no Spring, no Jakarta;</li>
+ *   <li>{@code application..} (whole module) is framework-agnostic — no
+ *       Spring, no Jakarta;</li>
  *   <li>outbound ports are interfaces;</li>
  *   <li>inbound port types are interfaces (use cases) or records
- *       (Command/Query carriers);</li>
- *   <li>Spring annotations stay confined to {@code application.service..}.</li>
+ *       (Command/Query carriers).</li>
  * </ul>
  *
  * <p>The cross-cutting {@code BusinessServiceArchitectureTest} in the
@@ -32,19 +34,20 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.noClasses;
         importOptions = ImportOption.DoNotIncludeTests.class)
 class ApplicationLayerArchTest {
 
-    /** Ports stay framework-agnostic — Spring imports are only allowed in the service package. */
+    /**
+     * The whole {@code application} module stays framework-agnostic — no
+     * Spring, no Jakarta. Defense-in-depth on top of Maven: the module's
+     * compile classpath has neither dependency, so the import would not
+     * compile, but this rule documents the intent. Test-scope classes are
+     * deliberately excluded ({@link ImportOption.DoNotIncludeTests}) — test
+     * classes may legitimately depend on ArchUnit and JUnit, neither of
+     * which is allowed in production.
+     */
     @ArchTest
-    static final ArchRule ports_must_not_depend_on_spring =
-            noClasses().that().resideInAPackage("ch.owt.boatapp.application.port..")
-                    .should().dependOnClassesThat().resideInAPackage("org.springframework..")
-                    .as("application.port.* must remain framework-agnostic");
-
-    /** Ports stay framework-agnostic — no Jakarta either (validation, persistence, anything). */
-    @ArchTest
-    static final ArchRule ports_must_not_depend_on_jakarta =
-            noClasses().that().resideInAPackage("ch.owt.boatapp.application.port..")
-                    .should().dependOnClassesThat().resideInAPackage("jakarta..")
-                    .as("application.port.* must remain framework-agnostic");
+    static final ArchRule application_must_not_depend_on_spring_or_jakarta =
+            noClasses().that().resideInAPackage("ch.owt.boatapp.application..")
+                    .should().dependOnClassesThat().resideInAnyPackage("org.springframework..", "jakarta..")
+                    .as("application module is pure Java; transaction boundaries live in adapter.in.web");
 
     /** Outbound ports are pure interfaces. */
     @ArchTest

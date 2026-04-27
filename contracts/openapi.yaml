@@ -533,6 +533,22 @@ components:
             Optimistic-locking version. Echoed in the `ETag` response
             header; clients send it back via `If-Match` on PUT.
           example: 3
+        messages:
+          type: array
+          nullable: true
+          description: |
+            Non-blocking advisories (`WARNING` / `INFO` severity) that
+            the domain emitted while accepting a mutating operation.
+            Populated **only** on POST/PUT responses when the domain
+            emitted at least one advisory; serialized as `null` (not
+            omitted) on read responses (GET single, GET list page
+            items) and on POST/PUT responses with no advisories. This
+            matches the project's wire convention for nullable fields
+            (see `description`). `ERROR` severity findings never
+            appear here — those surface as a 422 `ProblemDetail`
+            instead.
+          items:
+            $ref: '#/components/schemas/ValidationMessageResponse'
 
     BoatCreateRequest:
       type: object

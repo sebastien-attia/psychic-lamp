@@ -15,13 +15,15 @@ import static com.tngtech.archunit.lang.syntax.ArchRuleDefinition.classes;
  * documented in {@code .claude/rules/business-service-java.md} and
  * {@code CLAUDE.md > Conventions} so a misnamed class fails the build.
  *
- * <p>Suffixes after the multi-module / canonical-Hombergs refactor:
+ * <p>Suffixes after the pure-Java-application refactor:
  * <ul>
  *   <li>{@code @RestController} → {@code *Controller}</li>
- *   <li>{@code application.service.@Service} → {@code *ApplicationService}</li>
+ *   <li>{@code adapter.in.web.@Service} → {@code *Gateway} (transactional
+ *       gateway between HTTP and the use-case port; the {@code application}
+ *       module is pure Java and carries no {@code @Service})</li>
  *   <li>{@code adapter.out.persistence.@Repository} → {@code *RepositoryAdapter}</li>
  *   <li>{@code @jakarta.persistence.Entity} → {@code *JpaEntity}</li>
- *   <li>{@code application.port.in} records ending {@code Command} or
+ *   <li>{@code application.port.in} types ending {@code Command} or
  *       {@code Query} must be records</li>
  * </ul>
  */
@@ -37,15 +39,15 @@ class NamingConventionTest {
                     .should().haveSimpleNameEndingWith("Controller");
 
     /**
-     * Spring-managed application services (annotated {@code @Service}) end
-     * with {@code ApplicationService} to mark them as transactional bridges
-     * over the use-case implementations.
+     * {@code @Service} classes live in {@code adapter.in.web} as transactional
+     * gateways over the pure-Java use-case port; their names end with
+     * {@code Gateway} to mark the role.
      */
     @ArchTest
-    static final ArchRule application_services_suffixed_ApplicationService =
+    static final ArchRule transactional_gateways_suffixed_Gateway =
             classes().that().areAnnotatedWith(Service.class)
-                    .and().resideInAPackage("..application.service..")
-                    .should().haveSimpleNameEndingWith("ApplicationService");
+                    .and().resideInAPackage("..adapter.in.web..")
+                    .should().haveSimpleNameEndingWith("Gateway");
 
     /** Persistence adapters are suffixed {@code RepositoryAdapter}. */
     @ArchTest

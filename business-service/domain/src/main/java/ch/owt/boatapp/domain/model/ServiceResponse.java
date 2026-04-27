@@ -38,7 +38,29 @@ public final class ServiceResponse<T> {
      * @return a success response with an empty messages list
      */
     public static <T> ServiceResponse<T> success(T data) {
-        return new ServiceResponse<>(data, List.of());
+        return success(data, List.of());
+    }
+
+    /**
+     * Build a successful response carrying {@code data} and any non-blocking
+     * advisories (INFO/WARNING messages) the use case wants to surface on a
+     * 2xx response. Throws if any {@link Severity#ERROR ERROR} entry is
+     * present — those must go through {@link #failure(List)} so the bridge
+     * translates them to a 422.
+     *
+     * @param data     the result value (may be {@code null})
+     * @param messages the advisories to carry (never {@code null}; may be empty)
+     * @param <T>      the result type
+     * @return a success response carrying both data and advisories
+     * @throws IllegalArgumentException if {@code messages} contains an
+     *         {@link Severity#ERROR ERROR} entry
+     */
+    public static <T> ServiceResponse<T> success(T data, List<ValidationMessage> messages) {
+        if (hasErrors(messages)) {
+            throw new IllegalArgumentException(
+                    "ServiceResponse.success(...) must not carry ERROR-severity messages — use failure(...)");
+        }
+        return new ServiceResponse<>(data, messages);
     }
 
     /**
@@ -67,6 +89,20 @@ public final class ServiceResponse<T> {
      *         {@link Severity#ERROR ERROR} severity
      */
     public boolean hasErrors() {
+        return hasErrors(messages);
+    }
+
+    /**
+     * Test whether a list of {@link ValidationMessage} contains a blocking
+     * {@link Severity#ERROR ERROR} entry. Use cases call this to decide
+     * whether validator output should short-circuit to a failure response,
+     * so a list containing only {@link Severity#INFO INFO} or
+     * {@link Severity#WARNING WARNING} messages does not block the operation.
+     *
+     * @param messages the messages to inspect (never {@code null})
+     * @return {@code true} if at least one message carries ERROR severity
+     */
+    public static boolean hasErrors(List<ValidationMessage> messages) {
         return messages.stream().anyMatch(m -> m.severity() == Severity.ERROR);
     }
 }

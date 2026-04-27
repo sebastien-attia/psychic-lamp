@@ -180,6 +180,50 @@ class BoatDomainServiceTest {
         verifyNoInteractions(boatRepository, boatAuditRepository);
     }
 
+    /**
+     * WARNING/INFO findings are non-blocking advisories: the boat MUST still
+     * be persisted and audited. Pins the fix for the "non-empty messages
+     * blocked the operation" bug.
+     */
+    @Test
+    void createBoat_warningOnly_persistsAndAudits() {
+        ValidationMessage warn = new ValidationMessage(
+                Severity.WARNING, MessageType.INVALID_FORMAT, "Boat.description");
+        ValidationMessage info = new ValidationMessage(
+                Severity.INFO, MessageType.INVALID_FORMAT, "Boat.name");
+        when(syntacticValidator.validate("Argo", "trireme")).thenReturn(List.of(warn));
+        when(semanticValidator.validate("Argo", "trireme")).thenReturn(List.of(info));
+        Boat persisted = boat(UUID.randomUUID(), "Argo", 0L);
+        when(boatRepository.save(any(Boat.class))).thenReturn(persisted);
+
+        ServiceResponse<Boat> result = service.createBoat(
+                new CreateBoatCommand("Argo", "trireme", PERFORMED_BY));
+
+        assertThat(result.hasErrors()).isFalse();
+        assertThat(result.data()).isSameAs(persisted);
+        assertThat(result.messages()).containsExactlyInAnyOrder(warn, info);
+        verify(boatRepository).save(any(Boat.class));
+        verify(boatAuditRepository).save(any(BoatAudit.class));
+    }
+
+    /** Mixed INFO + ERROR → still a failure; ERROR is what blocks the operation. */
+    @Test
+    void createBoat_infoPlusError_returnsFailureWithoutPersisting() {
+        ValidationMessage info = new ValidationMessage(
+                Severity.INFO, MessageType.INVALID_FORMAT, "Boat.description");
+        ValidationMessage error = new ValidationMessage(
+                Severity.ERROR, MessageType.CANNOT_BE_BLANK, "Boat.name");
+        when(syntacticValidator.validate(null, "d")).thenReturn(List.of(error));
+        when(semanticValidator.validate(null, "d")).thenReturn(List.of(info));
+
+        ServiceResponse<Boat> result = service.createBoat(
+                new CreateBoatCommand(null, "d", PERFORMED_BY));
+
+        assertThat(result.hasErrors()).isTrue();
+        assertThat(result.messages()).containsExactlyInAnyOrder(error, info);
+        verifyNoInteractions(boatRepository, boatAuditRepository);
+    }
+
     // -- updateBoat ------------------------------------------------------
 
     /**
@@ -260,6 +304,46 @@ class BoatDomainServiceTest {
         ArgumentCaptor<BoatAudit> auditCaptor = ArgumentCaptor.forClass(BoatAudit.class);
         verify(boatAuditRepository).save(auditCaptor.capture());
         assertThat(auditCaptor.getValue().action()).isEqualTo(AuditAction.UPDATED);
+    }
+
+    /** WARNING/INFO findings on update do not block the persist + audit path. */
+    @Test
+    void updateBoat_warningOnly_persistsAndAudits() {
+        ValidationMessage warn = new ValidationMessage(
+                Severity.WARNING, MessageType.INVALID_FORMAT, "Boat.description");
+        when(syntacticValidator.validate("Argo II", "d")).thenReturn(List.of(warn));
+        when(semanticValidator.validate("Argo II", "d")).thenReturn(List.of());
+        Boat existing = boat(BOAT_ID.value(), "Argo", 3L);
+        when(boatRepository.findById(BOAT_ID.value())).thenReturn(Optional.of(existing));
+        Boat persisted = boat(BOAT_ID.value(), "Argo II", 4L);
+        when(boatRepository.save(any(Boat.class))).thenReturn(persisted);
+
+        ServiceResponse<Boat> result = service.updateBoat(
+                new UpdateBoatCommand(BOAT_ID, "Argo II", "d", 3L, PERFORMED_BY));
+
+        assertThat(result.hasErrors()).isFalse();
+        assertThat(result.data()).isSameAs(persisted);
+        assertThat(result.messages()).containsExactly(warn);
+        verify(boatRepository).save(any(Boat.class));
+        verify(boatAuditRepository).save(any(BoatAudit.class));
+    }
+
+    /** Mixed INFO + ERROR on update → failure short-circuits before the load. */
+    @Test
+    void updateBoat_infoPlusError_returnsFailureWithoutLoading() {
+        ValidationMessage info = new ValidationMessage(
+                Severity.INFO, MessageType.INVALID_FORMAT, "Boat.description");
+        ValidationMessage error = new ValidationMessage(
+                Severity.ERROR, MessageType.CANNOT_BE_BLANK, "Boat.name");
+        when(syntacticValidator.validate(null, "d")).thenReturn(List.of(error));
+        when(semanticValidator.validate(null, "d")).thenReturn(List.of(info));
+
+        ServiceResponse<Boat> result = service.updateBoat(
+                new UpdateBoatCommand(BOAT_ID, null, "d", 0L, PERFORMED_BY));
+
+        assertThat(result.hasErrors()).isTrue();
+        assertThat(result.messages()).containsExactlyInAnyOrder(error, info);
+        verifyNoInteractions(boatRepository, boatAuditRepository);
     }
 
     // -- deleteBoat ------------------------------------------------------

@@ -30,17 +30,17 @@ import java.util.UUID;
  * Pure-Java implementation of {@link ManageBoatsUseCase}.
  *
  * <p>Receives outbound-port collaborators via constructor injection (wired by
- * {@code BeanConfig} in {@code infrastructure.config}). Carries no Spring
- * annotations: ArchUnit forbids {@code @Service}, {@code @Component},
- * {@code @Transactional} in {@code domain.*}.
+ * {@code BeanConfig} in {@code infrastructure.config}). Carries no Spring or
+ * Jakarta annotations: the {@code application} Maven module is pure Java with
+ * zero Spring/Jakarta deps, enforced by Maven and by the ArchUnit rule
+ * {@code application_must_not_depend_on_spring_or_jakarta}.
  *
  * <p>Domain models are immutable records, so updates rebuild a fresh
  * {@link Boat} via its canonical constructor rather than mutating in place.
  *
  * <p>Transactional atomicity (boat mutation + audit append) is provided by
- * the bridge layer ({@code BoatApplicationService} in {@code infrastructure.service},
- * added in step 02a3); this class invokes the audit append inline so the
- * domain remains framework-free.
+ * {@code BoatTransactionalGateway} in {@code adapter.in.web}; this class
+ * invokes the audit append inline so the use-case stays framework-free.
  */
 public final class BoatDomainService implements ManageBoatsUseCase {
 
@@ -88,14 +88,14 @@ public final class BoatDomainService implements ManageBoatsUseCase {
     @Override
     public ServiceResponse<Boat> createBoat(CreateBoatCommand command) {
         List<ValidationMessage> messages = collectValidationMessages(command.name(), command.description());
-        if (!messages.isEmpty()) {
+        if (ServiceResponse.hasErrors(messages)) {
             return ServiceResponse.failure(messages);
         }
         OffsetDateTime now = OffsetDateTime.now(clock);
         Boat newBoat = new Boat(UUID.randomUUID(), command.name(), command.description(), now, null);
         Boat saved = boatRepository.save(newBoat);
         appendAudit(saved, AuditAction.CREATED, command.performedBy().value(), now);
-        return ServiceResponse.success(saved);
+        return ServiceResponse.success(saved, messages);
     }
 
     @Override
@@ -104,7 +104,7 @@ public final class BoatDomainService implements ManageBoatsUseCase {
         // reachable even when the id happens not to resolve (which would
         // otherwise short-circuit to 404 and hide the validation findings).
         List<ValidationMessage> messages = collectValidationMessages(command.name(), command.description());
-        if (!messages.isEmpty()) {
+        if (ServiceResponse.hasErrors(messages)) {
             return ServiceResponse.failure(messages);
         }
 
@@ -130,7 +130,7 @@ public final class BoatDomainService implements ManageBoatsUseCase {
         Boat saved = boatRepository.save(updated);
         OffsetDateTime now = OffsetDateTime.now(clock);
         appendAudit(saved, AuditAction.UPDATED, command.performedBy().value(), now);
-        return ServiceResponse.success(saved);
+        return ServiceResponse.success(saved, messages);
     }
 
     @Override

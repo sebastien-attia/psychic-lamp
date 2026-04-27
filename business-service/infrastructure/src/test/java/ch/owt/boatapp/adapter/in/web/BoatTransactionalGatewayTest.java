@@ -1,4 +1,4 @@
-package ch.owt.boatapp.application.service;
+package ch.owt.boatapp.adapter.in.web;
 
 import ch.owt.boatapp.application.port.in.CreateBoatCommand;
 import ch.owt.boatapp.application.port.in.DeleteBoatCommand;
@@ -31,7 +31,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Unit tests for the {@code @Transactional} bridge {@link BoatApplicationService}.
+ * Unit tests for the {@code @Transactional} gateway {@link BoatTransactionalGateway}.
  *
  * <p>Exercises the only logic this class owns: translating a domain
  * {@link ServiceResponse} into either a returned domain object (success) or
@@ -40,18 +40,18 @@ import static org.mockito.Mockito.when;
  * integration suite (this is a unit test — no Spring context).
  */
 @ExtendWith(MockitoExtension.class)
-class BoatApplicationServiceTest {
+class BoatTransactionalGatewayTest {
 
     @Mock private ManageBoatsUseCase manageBoatsUseCase;
 
-    private BoatApplicationService service;
+    private BoatTransactionalGateway gateway;
 
     private static final UserId PERFORMED_BY = new UserId(UUID.randomUUID());
     private static final BoatId BOAT_ID = new BoatId(UUID.randomUUID());
 
     @BeforeEach
     void setUp() {
-        service = new BoatApplicationService(manageBoatsUseCase);
+        gateway = new BoatTransactionalGateway(manageBoatsUseCase);
     }
 
     // -- read paths: pure delegation ------------------------------------
@@ -62,7 +62,7 @@ class BoatApplicationServiceTest {
         PageResult<Boat> page = new PageResult<>(List.of(), 0L, 0, 10, 0);
         when(manageBoatsUseCase.listBoats(query)).thenReturn(page);
 
-        assertThat(service.listBoats(query)).isSameAs(page);
+        assertThat(gateway.listBoats(query)).isSameAs(page);
     }
 
     @Test
@@ -71,22 +71,40 @@ class BoatApplicationServiceTest {
         Boat boat = sampleBoat();
         when(manageBoatsUseCase.getBoat(query)).thenReturn(boat);
 
-        assertThat(service.getBoat(query)).isSameAs(boat);
+        assertThat(gateway.getBoat(query)).isSameAs(boat);
     }
 
     // -- createBoat -----------------------------------------------------
 
-    /** Use-case returns success → bridge returns the boat unchanged. */
+    /** Use-case returns success → gateway returns the envelope (data + empty advisories). */
     @Test
-    void createBoat_success_returnsBoat() {
+    void createBoat_success_returnsEnvelope() {
         CreateBoatCommand cmd = new CreateBoatCommand("Argo", "trireme", PERFORMED_BY);
         Boat created = sampleBoat();
         when(manageBoatsUseCase.createBoat(cmd)).thenReturn(ServiceResponse.success(created));
 
-        assertThat(service.createBoat(cmd)).isSameAs(created);
+        ServiceResponse<Boat> result = gateway.createBoat(cmd);
+
+        assertThat(result.data()).isSameAs(created);
+        assertThat(result.messages()).isEmpty();
     }
 
-    /** Use-case returns failure → bridge throws {@link ValidationFailureException}. */
+    /** Success with WARNING/INFO advisories → gateway propagates them on the success envelope. */
+    @Test
+    void createBoat_successWithAdvisories_propagatesMessages() {
+        CreateBoatCommand cmd = new CreateBoatCommand("Argo", "trireme", PERFORMED_BY);
+        Boat created = sampleBoat();
+        ValidationMessage warn = new ValidationMessage(
+                Severity.WARNING, MessageType.INVALID_FORMAT, "Boat.description");
+        when(manageBoatsUseCase.createBoat(cmd)).thenReturn(ServiceResponse.success(created, List.of(warn)));
+
+        ServiceResponse<Boat> result = gateway.createBoat(cmd);
+
+        assertThat(result.data()).isSameAs(created);
+        assertThat(result.messages()).containsExactly(warn);
+    }
+
+    /** Use-case returns failure → gateway throws {@link ValidationFailureException}. */
     @Test
     void createBoat_failure_throwsValidationFailureException() {
         CreateBoatCommand cmd = new CreateBoatCommand(null, null, PERFORMED_BY);
@@ -94,7 +112,7 @@ class BoatApplicationServiceTest {
                 Severity.ERROR, MessageType.CANNOT_BE_BLANK, "Boat.name");
         when(manageBoatsUseCase.createBoat(cmd)).thenReturn(ServiceResponse.failure(List.of(err)));
 
-        assertThatThrownBy(() -> service.createBoat(cmd))
+        assertThatThrownBy(() -> gateway.createBoat(cmd))
                 .isInstanceOf(ValidationFailureException.class)
                 .satisfies(e -> {
                     ValidationFailureException vfe = (ValidationFailureException) e;
@@ -105,12 +123,29 @@ class BoatApplicationServiceTest {
     // -- updateBoat -----------------------------------------------------
 
     @Test
-    void updateBoat_success_returnsBoat() {
+    void updateBoat_success_returnsEnvelope() {
         UpdateBoatCommand cmd = new UpdateBoatCommand(BOAT_ID, "n", "d", 0L, PERFORMED_BY);
         Boat updated = sampleBoat();
         when(manageBoatsUseCase.updateBoat(cmd)).thenReturn(ServiceResponse.success(updated));
 
-        assertThat(service.updateBoat(cmd)).isSameAs(updated);
+        ServiceResponse<Boat> result = gateway.updateBoat(cmd);
+
+        assertThat(result.data()).isSameAs(updated);
+        assertThat(result.messages()).isEmpty();
+    }
+
+    @Test
+    void updateBoat_successWithAdvisories_propagatesMessages() {
+        UpdateBoatCommand cmd = new UpdateBoatCommand(BOAT_ID, "n", "d", 0L, PERFORMED_BY);
+        Boat updated = sampleBoat();
+        ValidationMessage info = new ValidationMessage(
+                Severity.INFO, MessageType.INVALID_FORMAT, "Boat.description");
+        when(manageBoatsUseCase.updateBoat(cmd)).thenReturn(ServiceResponse.success(updated, List.of(info)));
+
+        ServiceResponse<Boat> result = gateway.updateBoat(cmd);
+
+        assertThat(result.data()).isSameAs(updated);
+        assertThat(result.messages()).containsExactly(info);
     }
 
     @Test
@@ -120,7 +155,7 @@ class BoatApplicationServiceTest {
                 Severity.ERROR, MessageType.CANNOT_BE_BLANK, "Boat.name");
         when(manageBoatsUseCase.updateBoat(cmd)).thenReturn(ServiceResponse.failure(List.of(err)));
 
-        assertThatThrownBy(() -> service.updateBoat(cmd))
+        assertThatThrownBy(() -> gateway.updateBoat(cmd))
                 .isInstanceOf(ValidationFailureException.class);
     }
 
@@ -130,7 +165,7 @@ class BoatApplicationServiceTest {
     void deleteBoat_delegatesToUseCase() {
         DeleteBoatCommand cmd = new DeleteBoatCommand(BOAT_ID, PERFORMED_BY);
 
-        service.deleteBoat(cmd);
+        gateway.deleteBoat(cmd);
 
         verify(manageBoatsUseCase).deleteBoat(cmd);
     }

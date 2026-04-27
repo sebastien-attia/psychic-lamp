@@ -5,9 +5,12 @@ import ch.owt.boatapp.application.port.in.DeleteBoatCommand;
 import ch.owt.boatapp.application.port.in.GetBoatQuery;
 import ch.owt.boatapp.application.port.in.ListBoatsQuery;
 import ch.owt.boatapp.application.port.in.UpdateBoatCommand;
-import ch.owt.boatapp.application.service.BoatApplicationService;
 import ch.owt.boatapp.domain.model.Boat;
 import ch.owt.boatapp.domain.model.PageResult;
+import ch.owt.boatapp.domain.model.ServiceResponse;
+import ch.owt.boatapp.domain.model.validation.MessageType;
+import ch.owt.boatapp.domain.model.validation.Severity;
+import ch.owt.boatapp.domain.model.validation.ValidationMessage;
 import ch.owt.boatapp.infrastructure.security.SecurityHelper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,7 +49,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
  *
  * <p>Boots the controller, the global exception handler, the validation
  * pipeline and the JSON converter — but NOT the JPA layer, security filters
- * or any application services. Both {@link BoatApplicationService} and
+ * or any application services. Both {@link BoatTransactionalGateway} and
  * {@link SecurityHelper} are replaced with Mockito beans so the test is
  * isolated from persistence and from the JWT filter chain. Security filters
  * are disabled with {@code addFilters = false}; the wired-up resource server
@@ -75,7 +78,7 @@ class BoatControllerWebMvcTest {
 
     @Autowired private MockMvc mockMvc;
 
-    @MockitoBean private BoatApplicationService boatApplicationService;
+    @MockitoBean private BoatTransactionalGateway boatTransactionalGateway;
     @MockitoBean private SecurityHelper securityHelper;
 
     private static final UUID USER_ID = UUID.fromString("33333333-3333-3333-3333-333333333333");
@@ -87,7 +90,8 @@ class BoatControllerWebMvcTest {
     void post_validBody_returns201_withLocationAndEtagHeaders() throws Exception {
         when(securityHelper.getCurrentAppUserId()).thenReturn(USER_ID);
         Boat created = new Boat(BOAT_ID, "Argo", "trireme", OffsetDateTime.now(ZoneOffset.UTC), 0L);
-        when(boatApplicationService.createBoat(any(CreateBoatCommand.class))).thenReturn(created);
+        when(boatTransactionalGateway.createBoat(any(CreateBoatCommand.class)))
+                .thenReturn(ServiceResponse.success(created));
 
         MvcResult res = mockMvc.perform(post("/api/v1/boats")
                         .contentType(MediaType.APPLICATION_JSON)
@@ -100,11 +104,38 @@ class BoatControllerWebMvcTest {
                 .andExpect(jsonPath("$.version").value(0))
                 .andReturn();
 
+        // No advisories → consistent wire convention: `"messages":null`
+        // (see read-path tests). Asserted on the raw body because
+        // jsonPath("$.messages").doesNotExist() also accepts an explicit
+        // null and would let a future regression toward `[]` slip through.
+        assertThat(res.getResponse().getContentAsString())
+                .contains("\"messages\":null");
         // ETag is the bare version, weakly-quoted by Spring's MVC eTag() helper.
         String etag = res.getResponse().getHeader(HttpHeaders.ETAG);
         assertThat(etag).contains("0");
         // Location ends with the new id.
         assertThat(res.getResponse().getHeader(HttpHeaders.LOCATION)).endsWith("/" + BOAT_ID);
+    }
+
+    @Test
+    void post_validBodyWithAdvisories_returns201_responseCarriesMessages() throws Exception {
+        when(securityHelper.getCurrentAppUserId()).thenReturn(USER_ID);
+        Boat created = new Boat(BOAT_ID, "Argo", "trireme", OffsetDateTime.now(ZoneOffset.UTC), 0L);
+        ValidationMessage warn = new ValidationMessage(
+                Severity.WARNING, MessageType.INVALID_FORMAT, "description");
+        when(boatTransactionalGateway.createBoat(any(CreateBoatCommand.class)))
+                .thenReturn(ServiceResponse.success(created, List.of(warn)));
+
+        mockMvc.perform(post("/api/v1/boats")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Argo\",\"description\":\"trireme\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.id").value(BOAT_ID.toString()))
+                .andExpect(jsonPath("$.messages").isArray())
+                .andExpect(jsonPath("$.messages.length()").value(1))
+                .andExpect(jsonPath("$.messages[0].severity").value("WARNING"))
+                .andExpect(jsonPath("$.messages[0].code").value("field.format.invalid"))
+                .andExpect(jsonPath("$.messages[0].field").value("description"));
     }
 
     @Test
@@ -131,15 +162,25 @@ class BoatControllerWebMvcTest {
     // -- GET (single) ---------------------------------------------------
 
     @Test
-    void get_existing_returns200_withEtagHeader() throws Exception {
+    void get_existing_returns200_withEtagHeader_messagesNullOnReads() throws Exception {
         Boat boat = new Boat(BOAT_ID, "Argo", "trireme", OffsetDateTime.now(ZoneOffset.UTC), 4L);
-        when(boatApplicationService.getBoat(any(GetBoatQuery.class))).thenReturn(boat);
+        when(boatTransactionalGateway.getBoat(any(GetBoatQuery.class))).thenReturn(boat);
 
-        mockMvc.perform(get("/api/v1/boats/{id}", BOAT_ID))
+        MvcResult res = mockMvc.perform(get("/api/v1/boats/{id}", BOAT_ID))
                 .andExpect(status().isOk())
                 .andExpect(header().exists(HttpHeaders.ETAG))
                 .andExpect(jsonPath("$.name").value("Argo"))
-                .andExpect(jsonPath("$.version").value(4));
+                .andExpect(jsonPath("$.version").value(4))
+                .andReturn();
+        // Locks in the wire convention: read endpoints leave the optional
+        // `messages` field unset, and Jackson 3 (Spring Boot 4 default
+        // configuration, no @JsonInclude(NON_NULL)) emits it as `null`
+        // on the wire — same behaviour as the existing `description`
+        // field. Asserted on the raw body because jsonPath("$.messages")
+        // .doesNotExist() also matches an explicit `null` value, which
+        // would hide a regression toward `[]` or omission.
+        assertThat(res.getResponse().getContentAsString())
+                .contains("\"messages\":null");
     }
 
     // -- GET (list) -----------------------------------------------------
@@ -147,7 +188,7 @@ class BoatControllerWebMvcTest {
     @Test
     void list_defaultParams_returns200_withPageEnvelope() throws Exception {
         PageResult<Boat> page = new PageResult<>(List.of(), 0L, 0, 10, 0);
-        when(boatApplicationService.listBoats(any(ListBoatsQuery.class))).thenReturn(page);
+        when(boatTransactionalGateway.listBoats(any(ListBoatsQuery.class))).thenReturn(page);
 
         mockMvc.perform(get("/api/v1/boats"))
                 .andExpect(status().isOk())
@@ -155,6 +196,22 @@ class BoatControllerWebMvcTest {
                 .andExpect(jsonPath("$.first").value(true))
                 .andExpect(jsonPath("$.last").value(true))
                 .andExpect(jsonPath("$.empty").value(true));
+    }
+
+    @Test
+    void list_withItem_messagesNullOnReadPageItems() throws Exception {
+        Boat boat = new Boat(BOAT_ID, "Argo", "trireme", OffsetDateTime.now(ZoneOffset.UTC), 4L);
+        PageResult<Boat> page = new PageResult<>(List.of(boat), 1L, 0, 10, 1);
+        when(boatTransactionalGateway.listBoats(any(ListBoatsQuery.class))).thenReturn(page);
+
+        MvcResult res = mockMvc.perform(get("/api/v1/boats"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content[0].name").value("Argo"))
+                .andReturn();
+        // Same wire convention as GET single — page items must not carry
+        // populated advisories (no use case ever runs validators on a read).
+        assertThat(res.getResponse().getContentAsString())
+                .contains("\"messages\":null");
     }
 
     @Test
@@ -178,15 +235,39 @@ class BoatControllerWebMvcTest {
     void put_validBodyAndIfMatch_returns200_withRefreshedEtag() throws Exception {
         when(securityHelper.getCurrentAppUserId()).thenReturn(USER_ID);
         Boat updated = new Boat(BOAT_ID, "Argo II", "rebuilt", OffsetDateTime.now(ZoneOffset.UTC), 5L);
-        when(boatApplicationService.updateBoat(any(UpdateBoatCommand.class))).thenReturn(updated);
+        when(boatTransactionalGateway.updateBoat(any(UpdateBoatCommand.class)))
+                .thenReturn(ServiceResponse.success(updated));
+
+        MvcResult res = mockMvc.perform(put("/api/v1/boats/{id}", BOAT_ID)
+                        .header(HttpHeaders.IF_MATCH, "4")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Argo II\",\"description\":\"rebuilt\"}"))
+                .andExpect(status().isOk())
+                .andExpect(header().exists(HttpHeaders.ETAG))
+                .andExpect(jsonPath("$.version").value(5))
+                .andReturn();
+        assertThat(res.getResponse().getContentAsString())
+                .contains("\"messages\":null");
+    }
+
+    @Test
+    void put_validBodyWithAdvisories_returns200_responseCarriesMessages() throws Exception {
+        when(securityHelper.getCurrentAppUserId()).thenReturn(USER_ID);
+        Boat updated = new Boat(BOAT_ID, "Argo II", "rebuilt", OffsetDateTime.now(ZoneOffset.UTC), 5L);
+        ValidationMessage info = new ValidationMessage(
+                Severity.INFO, MessageType.INVALID_FORMAT, "description");
+        when(boatTransactionalGateway.updateBoat(any(UpdateBoatCommand.class)))
+                .thenReturn(ServiceResponse.success(updated, List.of(info)));
 
         mockMvc.perform(put("/api/v1/boats/{id}", BOAT_ID)
                         .header(HttpHeaders.IF_MATCH, "4")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"name\":\"Argo II\",\"description\":\"rebuilt\"}"))
                 .andExpect(status().isOk())
-                .andExpect(header().exists(HttpHeaders.ETAG))
-                .andExpect(jsonPath("$.version").value(5));
+                .andExpect(jsonPath("$.version").value(5))
+                .andExpect(jsonPath("$.messages.length()").value(1))
+                .andExpect(jsonPath("$.messages[0].severity").value("INFO"))
+                .andExpect(jsonPath("$.messages[0].code").value("field.format.invalid"));
     }
 
     @Test
@@ -215,7 +296,8 @@ class BoatControllerWebMvcTest {
     void put_quotedIfMatch_isAccepted() throws Exception {
         when(securityHelper.getCurrentAppUserId()).thenReturn(USER_ID);
         Boat updated = new Boat(BOAT_ID, "Argo", "x", OffsetDateTime.now(ZoneOffset.UTC), 5L);
-        when(boatApplicationService.updateBoat(any(UpdateBoatCommand.class))).thenReturn(updated);
+        when(boatTransactionalGateway.updateBoat(any(UpdateBoatCommand.class)))
+                .thenReturn(ServiceResponse.success(updated));
 
         // The contract requires a bare integer; the controller is defensive
         // and strips a surrounding pair of double quotes (RFC 7232 form).
@@ -235,6 +317,6 @@ class BoatControllerWebMvcTest {
         mockMvc.perform(delete("/api/v1/boats/{id}", BOAT_ID))
                 .andExpect(status().isNoContent());
 
-        verify(boatApplicationService).deleteBoat(any(DeleteBoatCommand.class));
+        verify(boatTransactionalGateway).deleteBoat(any(DeleteBoatCommand.class));
     }
 }

@@ -1,6 +1,6 @@
 package ch.owt.boatapp.integration;
 
-import ch.owt.boatapp.application.service.BoatApplicationService;
+import ch.owt.boatapp.adapter.in.web.BoatTransactionalGateway;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpHeaders;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -19,8 +19,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 /**
  * Verifies the 500 fallback path of {@code GlobalExceptionHandler}. Lives in
  * its own class because the {@link MockitoBean} on
- * {@link BoatApplicationService} would break every test that needs a real
- * service (CRUD, optimistic locking, etc.). The mock is configured so that
+ * {@link BoatTransactionalGateway} would break every test that needs a real
+ * gateway (CRUD, optimistic locking, etc.). The mock is configured so that
  * any call to {@code listBoats} throws, which exercises the catch-all
  * {@code @ExceptionHandler(Exception.class)}.
  */
@@ -29,15 +29,15 @@ class InternalErrorIntegrationTest extends IntegrationTestBase {
     private static final String INTERNAL_TYPE = "https://boatapp.owt.ch/problems/internal";
 
     @MockitoBean
-    private BoatApplicationService boatApplicationService;
+    private BoatTransactionalGateway boatTransactionalGateway;
 
     /**
-     * GET when the application service throws → 500 with type
+     * GET when the gateway throws → 500 with type
      * {@code .../internal} and no leaked stack-trace text in the body.
      */
     @Test
     void unhandledException_returns500_withInternalType_andNoLeakedStack() throws Exception {
-        when(boatApplicationService.listBoats(any()))
+        when(boatTransactionalGateway.listBoats(any()))
                 .thenThrow(new RuntimeException("synthetic failure for test"));
 
         MvcResult res = mockMvc.perform(get("/api/v1/boats").with(mockJwt()))

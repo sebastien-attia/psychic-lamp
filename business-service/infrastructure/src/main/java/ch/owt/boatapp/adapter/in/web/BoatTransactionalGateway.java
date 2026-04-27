@@ -1,28 +1,37 @@
-package ch.owt.boatapp.application.service;
+package ch.owt.boatapp.adapter.in.web;
 
-import ch.owt.boatapp.domain.exception.ValidationFailureException;
-import ch.owt.boatapp.domain.model.Boat;
-import ch.owt.boatapp.domain.model.PageResult;
-import ch.owt.boatapp.domain.model.ServiceResponse;
 import ch.owt.boatapp.application.port.in.CreateBoatCommand;
 import ch.owt.boatapp.application.port.in.DeleteBoatCommand;
 import ch.owt.boatapp.application.port.in.GetBoatQuery;
 import ch.owt.boatapp.application.port.in.ListBoatsQuery;
 import ch.owt.boatapp.application.port.in.ManageBoatsUseCase;
 import ch.owt.boatapp.application.port.in.UpdateBoatCommand;
+import ch.owt.boatapp.domain.exception.ValidationFailureException;
+import ch.owt.boatapp.domain.model.Boat;
+import ch.owt.boatapp.domain.model.PageResult;
+import ch.owt.boatapp.domain.model.ServiceResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.util.List;
+
 /**
- * Bridge between the inbound REST adapter and the pure-Java domain
- * {@code ManageBoatsUseCase}.
+ * Transactional gateway between the inbound REST adapter and the pure-Java
+ * {@link ManageBoatsUseCase}.
  *
- * <p>This is the only layer that owns transactions: each public method runs
- * inside a {@code @Transactional} boundary, so audit-row appends and boat
- * mutations commit (or roll back) together. The domain itself is
- * transaction-unaware.
+ * <p>Lives in the web adapter — the {@code application} Maven module is pure
+ * Java with zero Spring/Jakarta deps, so the {@code @Transactional} boundary
+ * cannot live there. The HTTP trust boundary is the natural place for it: the
+ * web adapter already owns Bean Validation, ETag/If-Match, ProblemDetail
+ * rendering, AppUser sync and JWT subject extraction; the transaction
+ * boundary plus {@link ServiceResponse} → {@link ValidationFailureException}
+ * translation are coherent extensions of that responsibility.
+ *
+ * <p>Each public method runs inside a {@code @Transactional} boundary, so
+ * audit-row appends and boat mutations commit (or roll back) together. The
+ * domain itself is transaction-unaware.
  *
  * <p>Mutation methods translate the domain's {@link ServiceResponse} envelope
  * into either a returned domain object (success) or a thrown
@@ -36,9 +45,9 @@ import org.springframework.transaction.annotation.Transactional;
  */
 @Service
 @Transactional
-public class BoatApplicationService {
+public class BoatTransactionalGateway {
 
-    private static final Logger log = LoggerFactory.getLogger(BoatApplicationService.class);
+    private static final Logger log = LoggerFactory.getLogger(BoatTransactionalGateway.class);
 
     private final ManageBoatsUseCase manageBoatsUseCase;
 
@@ -46,7 +55,7 @@ public class BoatApplicationService {
      * @param manageBoatsUseCase the pure-Java boat use-case (wired via
      *                           {@code BeanConfig}; never {@code null})
      */
-    public BoatApplicationService(ManageBoatsUseCase manageBoatsUseCase) {
+    public BoatTransactionalGateway(ManageBoatsUseCase manageBoatsUseCase) {
         this.manageBoatsUseCase = manageBoatsUseCase;
     }
 
@@ -78,13 +87,15 @@ public class BoatApplicationService {
      * Create a new boat. Validation failures from the domain become
      * {@link ValidationFailureException} so the {@code @Transactional}
      * boundary rolls back any partial work and the global handler maps the
-     * exception to HTTP 422.
+     * exception to HTTP 422. On success the full {@link ServiceResponse} is
+     * returned so non-blocking advisories (INFO/WARNING) reach the web
+     * adapter and can be surfaced on the 2xx response.
      *
      * @param command the new boat's name, description and performer
-     * @return the persisted boat (with assigned id and initial version)
+     * @return the persisted boat together with any advisory messages
      * @throws ValidationFailureException if the domain rejected the input
      */
-    public Boat createBoat(CreateBoatCommand command) {
+    public ServiceResponse<Boat> createBoat(CreateBoatCommand command) {
         ServiceResponse<Boat> response = manageBoatsUseCase.createBoat(command);
         if (response.hasErrors()) {
             log.warn("createBoat rejected: {} message(s) for performedBy={}",
@@ -92,8 +103,14 @@ public class BoatApplicationService {
             throw new ValidationFailureException(response.messages());
         }
         Boat created = response.data();
-        log.info("createBoat ok: id={} performedBy={}", created.id(), command.performedBy().value());
-        return created;
+        if (response.messages().isEmpty()) {
+            log.info("createBoat ok: id={} performedBy={}",
+                    created.id(), command.performedBy().value());
+        } else {
+            log.info("createBoat ok: id={} performedBy={} advisoryCodes={}",
+                    created.id(), command.performedBy().value(), advisoryCodes(response));
+        }
+        return response;
     }
 
     /**
@@ -104,10 +121,10 @@ public class BoatApplicationService {
      * domain.
      *
      * @param command the boat identifier, new fields, expected version and performer
-     * @return the updated boat (with bumped version)
+     * @return the updated boat together with any advisory messages
      * @throws ValidationFailureException if the domain rejected the input
      */
-    public Boat updateBoat(UpdateBoatCommand command) {
+    public ServiceResponse<Boat> updateBoat(UpdateBoatCommand command) {
         ServiceResponse<Boat> response = manageBoatsUseCase.updateBoat(command);
         if (response.hasErrors()) {
             log.warn("updateBoat rejected: {} message(s) for id={} performedBy={}",
@@ -115,9 +132,14 @@ public class BoatApplicationService {
             throw new ValidationFailureException(response.messages());
         }
         Boat updated = response.data();
-        log.info("updateBoat ok: id={} version={} performedBy={}",
-                updated.id(), updated.version(), command.performedBy().value());
-        return updated;
+        if (response.messages().isEmpty()) {
+            log.info("updateBoat ok: id={} version={} performedBy={}",
+                    updated.id(), updated.version(), command.performedBy().value());
+        } else {
+            log.info("updateBoat ok: id={} version={} performedBy={} advisoryCodes={}",
+                    updated.id(), updated.version(), command.performedBy().value(), advisoryCodes(response));
+        }
+        return response;
     }
 
     /**
@@ -131,5 +153,11 @@ public class BoatApplicationService {
         manageBoatsUseCase.deleteBoat(command);
         log.info("deleteBoat ok: id={} performedBy={}",
                 command.id().value(), command.performedBy().value());
+    }
+
+    private static List<String> advisoryCodes(ServiceResponse<Boat> response) {
+        return response.messages().stream()
+                .map(m -> m.type().applicationCode())
+                .toList();
     }
 }

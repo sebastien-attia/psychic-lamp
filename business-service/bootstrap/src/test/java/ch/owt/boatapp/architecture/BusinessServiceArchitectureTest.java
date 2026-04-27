@@ -104,16 +104,20 @@ class BusinessServiceArchitectureTest {
                     .as("@RestController classes must be suffixed Controller");
 
     /**
-     * {@code @Service}-annotated beans live only in {@code application.service}
-     * (the canonical home of use-case implementations). Adapters and
-     * infrastructure use {@code @Repository}, {@code @Component} or
-     * {@code @Configuration} instead.
+     * {@code @Service}-annotated beans live only in {@code adapter.in.web} —
+     * the transactional gateway between HTTP and the use-case port. The
+     * {@code application} module is pure Java with zero Spring deps, so its
+     * use-case implementations ({@code BoatDomainService},
+     * {@code UserDomainService}) are wired by {@code BeanConfig} and carry
+     * no stereotype. Other adapters and infrastructure use
+     * {@code @Repository}, {@code @Component} or {@code @Configuration}
+     * instead.
      */
     @ArchTest
-    static final ArchRule services_only_in_application_service =
+    static final ArchRule services_only_in_adapter_in_web =
             classes().that().areAnnotatedWith(Service.class)
-                    .should().resideInAPackage("..application.service..")
-                    .as("@Service classes must reside in ..application.service.. (use-case layer)");
+                    .should().resideInAPackage("..adapter.in.web..")
+                    .as("@Service classes must reside in ..adapter.in.web.. (transactional gateway)");
 
     /** Persistence adapters live only in {@code adapter.out.persistence}. */
     @ArchTest

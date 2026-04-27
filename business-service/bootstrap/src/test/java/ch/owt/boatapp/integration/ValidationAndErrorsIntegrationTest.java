@@ -149,7 +149,7 @@ class ValidationAndErrorsIntegrationTest extends IntegrationTestBase {
      * POST with name "FORBIDDEN" → 422 (semantic validation failure raised
      * by {@code SemanticValidator → ValidationFailureException}). Proves the
      * full {@code domain.SemanticValidator → BoatDomainService →
-     * BoatApplicationService → ValidationFailureException → HTTP 422} path.
+     * BoatTransactionalGateway → ValidationFailureException → HTTP 422} path.
      */
     @Test
     void semanticDomainFailure_returns422_withSameTypeUri() throws Exception {

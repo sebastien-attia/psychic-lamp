@@ -11,26 +11,20 @@
 	<artifactId>business-service-application</artifactId>
 	<packaging>jar</packaging>
 	<name>business-service-application</name>
-	<description>Use-case orchestration: ports (in/out), use-case implementations, transactional bridge.</description>
+	<description>Use-case orchestration: ports (in/out), pure-Java use-case implementations.</description>
 
 	<!--
-	    Application depends on the domain jar plus the narrow Spring slice
-	    needed for @Service and @Transactional. Web and JPA starters are
-	    deliberately absent — adding them is what makes a class an
-	    `infrastructure` adapter, not an application service.
+	    Application depends on the domain jar and SLF4J only — no Spring,
+	    no Jakarta. Use cases are pure-Java orchestrators wired as @Bean by
+	    BeanConfig in the infrastructure module; the @Transactional
+	    boundary lives in the adapter.in.web gateway. ArchUnit
+	    (application_must_not_depend_on_spring_or_jakarta) and the absence
+	    of Spring/Jakarta on the classpath together enforce the invariant.
 	-->
 	<dependencies>
 		<dependency>
 			<groupId>ch.owt.boatapp</groupId>
 			<artifactId>business-service-domain</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework</groupId>
-			<artifactId>spring-context</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework</groupId>
-			<artifactId>spring-tx</artifactId>
 		</dependency>
 		<dependency>
 			<groupId>org.slf4j</groupId>
