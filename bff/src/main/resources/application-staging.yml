@@ -1,6 +1,7 @@
-# BFF staging profile — Azure App Service + Azure PostgreSQL flexible server.
-# Signing key PEM is mounted from an Azure Key Vault secret-volume; only the
-# absolute path inside the container is referenced here.
+# BFF staging profile — Azure Web App for Containers + Azure PostgreSQL
+# Flexible Server. The signing key PEM is delivered as an env var resolved
+# from a Key Vault reference (App Service has no first-class file mount
+# for KV references); the BffConfig bean parses the PEM string directly.
 spring:
   datasource:
     url: jdbc:postgresql://${POSTGRES_FQDN}:5432/${BFF_DB_NAME:bff_session}?sslmode=require
@@ -27,7 +28,10 @@ spring:
 
 bff:
   signing-key:
-    path: ${BFF_SIGNING_KEY_PATH}
+    # Empty default — if the env var is unset, BffConfig surfaces a
+    # "BFF signing key not configured" error rather than choking on the
+    # literal placeholder when parsing the PEM.
+    pem: ${BFF_SIGNING_KEY_PEM:}
     id: ${BFF_SIGNING_KEY_ID}
 
 business-service:

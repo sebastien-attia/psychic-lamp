@@ -4,6 +4,8 @@ import ch.owt.boatapp.bff.adapter.out.client.generated.BusinessServiceClient;
 import com.nimbusds.jose.JWSAlgorithm;
 import com.nimbusds.jose.jwk.KeyUse;
 import com.nimbusds.jose.jwk.RSAKey;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -49,9 +51,10 @@ import java.util.Base64;
  *
  * <p>This configuration assembles four collaborating beans:
  * <ol>
- *   <li>{@link #bffSigningJwk(Path, String) bffSigningJwk} — loads the BFF's
- *       PKCS#8 PEM signing key from disk and exposes it as a Nimbus
- *       {@code RSAKey}. The same JWK (public half only) is republished by
+ *   <li>{@link #bffSigningJwk(String, String, String) bffSigningJwk} — loads
+ *       the BFF's PKCS#8 PEM signing key from either an env-var-injected
+ *       string or a file on disk and exposes it as a Nimbus {@code RSAKey}.
+ *       The same JWK (public half only) is republished by
  *       {@code JwksController} at {@code /.well-known/jwks.json} so that
  *       Keycloak can verify the BFF's {@code client_assertion}.</li>
  *   <li>{@link #codeTokenResponseClient(RSAKey)} and
@@ -83,13 +86,26 @@ import java.util.Base64;
 @Profile("!dev")
 public class BffConfig {
 
+    private static final Logger log = LoggerFactory.getLogger(BffConfig.class);
+
     private static final String CLIENT_REGISTRATION_ID = "keycloak";
 
     /**
-     * Load the BFF's signing key from {@code bff.signing-key.path} (a PKCS#8
-     * PEM file) and build the {@code RSAKey} used both to sign
-     * {@code client_assertion} JWTs and to publish at
+     * Load the BFF's signing key and build the {@code RSAKey} used both to
+     * sign {@code client_assertion} JWTs and to publish at
      * {@code /.well-known/jwks.json}.
+     *
+     * <p>Two sources are supported, in this order of precedence:
+     * <ol>
+     *   <li>{@code bff.signing-key.pem} — the PKCS#8 PEM contents passed
+     *       directly as a string. Used on Azure App Service, where the PEM
+     *       lives as a Key Vault secret injected into an app setting via
+     *       {@code @Microsoft.KeyVault} — App Service has no first-class
+     *       file mount for KV references.</li>
+     *   <li>{@code bff.signing-key.path} — filesystem path to a PKCS#8 PEM
+     *       file. Used by Docker Compose (named volume) and any other host
+     *       where the PEM is delivered as a file rather than an env var.</li>
+     * </ol>
      *
      * <p>The PEM is parsed in two steps: strip the {@code -----BEGIN/END-----}
      * armor and base64-decode the body, then derive the public key from the
@@ -97,25 +113,40 @@ public class BffConfig {
      * Nimbus {@code RSAKey} attaches the {@code kid}, {@code use=sig} and
      * {@code alg=RS256} metadata that Keycloak requires.
      *
-     * @param keyPath filesystem path to the PKCS#8 PEM private key
+     * @param keyPem  PKCS#8 PEM contents, or empty/blank if not set
+     * @param keyPath filesystem path to the PKCS#8 PEM file, or empty if not
+     *                set; consulted only when {@code keyPem} is blank
      * @param kid     stable key identifier (the {@code kid} claim used by
      *                Keycloak to look up the public half in the JWKS)
      * @return the BFF's signing key as an {@code RSAKey}
-     * @throws IllegalStateException if the file cannot be read, the key
-     *         material is malformed, or the JCE provider lacks RSA support;
-     *         the message names the offending path so deployment failures
-     *         are diagnosable without reading the bean source
+     * @throws IllegalStateException if neither source is set, the file
+     *         cannot be read, the key material is malformed, or the JCE
+     *         provider lacks RSA support
      */
     @Bean
-    public RSAKey bffSigningJwk(@Value("${bff.signing-key.path}") Path keyPath,
+    public RSAKey bffSigningJwk(@Value("${bff.signing-key.pem:}") String keyPem,
+                                @Value("${bff.signing-key.path:}") String keyPath,
                                 @Value("${bff.signing-key.id}") String kid) {
         String pem;
-        try {
-            pem = Files.readString(keyPath);
-        } catch (IOException ex) {
+        String source;
+        if (!keyPem.isBlank()) {
+            pem = keyPem;
+            source = "bff.signing-key.pem";
+        } else if (!keyPath.isBlank()) {
+            source = "bff.signing-key.path=" + keyPath;
+            try {
+                pem = Files.readString(Path.of(keyPath));
+            } catch (IOException ex) {
+                throw new IllegalStateException(
+                        "Cannot read BFF signing key at " + keyPath, ex);
+            }
+        } else {
             throw new IllegalStateException(
-                    "Cannot read BFF signing key at " + keyPath, ex);
+                    "BFF signing key not configured: set either bff.signing-key.pem"
+                    + " (PEM contents, env var BFF_SIGNING_KEY_PEM) or"
+                    + " bff.signing-key.path (env var BFF_SIGNING_KEY_PATH)");
         }
+        log.info("BFF signing key loaded from {} (kid={})", source, kid);
         String stripped = pem
                 .replaceAll("-----[A-Z ]+-----", "")
                 .replaceAll("\\s+", "");
@@ -135,10 +166,10 @@ public class BffConfig {
         } catch (NoSuchAlgorithmException | InvalidKeySpecException
                 | IllegalArgumentException | ClassCastException ex) {
             throw new IllegalStateException(
-                    "BFF signing key at " + keyPath + " is not a valid PKCS#8 RSA private key", ex);
+                    "BFF signing key from " + source + " is not a valid PKCS#8 RSA private key", ex);
         } catch (GeneralSecurityException ex) {
             throw new IllegalStateException(
-                    "JCE provider rejected BFF signing key at " + keyPath, ex);
+                    "JCE provider rejected BFF signing key from " + source, ex);
         }
     }
 

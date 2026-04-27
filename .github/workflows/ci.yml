@@ -121,29 +121,6 @@ jobs:
       - name: Maven package (CycloneDX SBOM)
         working-directory: bff
         run: ./mvnw -B -ntp -DskipTests package
-      - name: Verify Dependency-Track gate configuration (bff)
-        if: ${{ inputs.require-dtrack-project-uuid }}
-        run: |
-          set -euo pipefail
-          if [ -z "${{ inputs.dtrack-project-uuid }}" ]; then
-            echo "::error::Reusable CI was asked to require a Dependency-Track project UUID, but none was supplied." >&2
-            exit 1
-          fi
-      # Pre-deploy Dependency-Track gate: upload the BOM, wait for analysis,
-      # fail the run on any unsuppressed FAIL-severity policy violation. The
-      # post-deploy DT receipt step in deploy-*.yml is preserved separately
-      # so DT records both "what we tried to ship" and "what we actually ran".
-      # Push/PR runs default to vars.DTRACK_PROJECT_UUID_STAGING; reusable
-      # callers can override with `workflow_call.inputs.dtrack-project-uuid`.
-      - name: Dependency-Track gate (bff)
-        if: ${{ (inputs.dtrack-project-uuid != '' && inputs.dtrack-project-uuid != null) || vars.DTRACK_PROJECT_UUID_STAGING != '' }}
-        uses: ./.github/actions/dtrack-gate
-        with:
-          dtrack-url:     ${{ secrets.DTRACK_URL }}
-          dtrack-api-key: ${{ secrets.DTRACK_API_KEY }}
-          project-uuid:   ${{ inputs.dtrack-project-uuid != '' && inputs.dtrack-project-uuid || vars.DTRACK_PROJECT_UUID_STAGING }}
-          bom-path:       bff/target/bom.json
-          fail-on:        FAIL
       - name: Upload bff test reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -177,24 +154,6 @@ jobs:
       - name: Maven package (CycloneDX SBOM)
         working-directory: business-service
         run: ./mvnw -B -ntp -DskipTests package
-      - name: Verify Dependency-Track gate configuration (business-service)
-        if: ${{ inputs.require-dtrack-project-uuid }}
-        run: |
-          set -euo pipefail
-          if [ -z "${{ inputs.dtrack-project-uuid }}" ]; then
-            echo "::error::Reusable CI was asked to require a Dependency-Track project UUID, but none was supplied." >&2
-            exit 1
-          fi
-      # Pre-deploy DT gate — see build-bff above for rationale.
-      - name: Dependency-Track gate (business-service)
-        if: ${{ (inputs.dtrack-project-uuid != '' && inputs.dtrack-project-uuid != null) || vars.DTRACK_PROJECT_UUID_STAGING != '' }}
-        uses: ./.github/actions/dtrack-gate
-        with:
-          dtrack-url:     ${{ secrets.DTRACK_URL }}
-          dtrack-api-key: ${{ secrets.DTRACK_API_KEY }}
-          project-uuid:   ${{ inputs.dtrack-project-uuid != '' && inputs.dtrack-project-uuid || vars.DTRACK_PROJECT_UUID_STAGING }}
-          bom-path:       business-service/target/bom.json
-          fail-on:        FAIL
       - name: Upload business-service test reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -17,6 +17,10 @@ module "boatapp" {
   location     = "switzerlandnorth"
   project_name = "boatapp"
 
+  # Production sustains higher load than staging — keep the SKU lever in
+  # case the burstable tier becomes inadequate.
+  service_plan_sku = var.service_plan_sku
+
   # ── Sensitive (TF_VAR_*) ──────────────────────────────────────────────
   postgres_admin_password = var.postgres_admin_password
   bff_db_password         = var.bff_db_password
@@ -31,9 +35,8 @@ module "boatapp" {
   business_service_image_tag = var.business_service_image_tag
   keycloak_image_tag         = var.keycloak_image_tag
 
-  # ── Custom domains (opt-in; default "" keeps the Azure FQDN-only setup)
-  bff_custom_domain      = var.bff_custom_domain
-  keycloak_custom_domain = var.keycloak_custom_domain
+  # ── Optional firewall extras ─────────────────────────────────────────
+  additional_firewall_ips = var.additional_firewall_ips
 }
 
 # ── Variable pass-through ────────────────────────────────────────────────
@@ -88,36 +91,51 @@ variable "business_service_image_tag" {
 }
 
 variable "keycloak_image_tag" {
-  description = "Keycloak image tag (built by CI from keycloak/Dockerfile and pushed to the project's ACR). Production should pin to an immutable tag (release tag), never `latest`."
+  description = "Tag of the upstream quay.io/keycloak/keycloak image. Production pins to a specific version."
   type        = string
 }
 
-variable "bff_custom_domain" {
-  description = "Optional custom FQDN for the production BFF (e.g. app.example.com). Empty = keep the Azure FQDN only."
+variable "service_plan_sku" {
+  description = "App Service Plan SKU. P0v3 fits the three workloads; bump to P1v3 for sustained production load."
   type        = string
-  default     = ""
+  default     = "P0v3"
 }
 
-variable "keycloak_custom_domain" {
-  description = "Optional custom FQDN for the production Keycloak (e.g. auth.example.com). Empty = keep the Azure FQDN only."
-  type        = string
-  default     = ""
+variable "additional_firewall_ips" {
+  description = "Optional extra IPs allowlisted on the database (e.g. CI runner)."
+  type        = map(string)
+  default     = {}
 }
 
 # ── Re-export root outputs ────────────────────────────────────────────────
 output "bff_fqdn" {
-  description = "External FQDN of the BFF Container App."
+  description = "Public FQDN of the BFF Web App."
   value       = module.boatapp.bff_fqdn
 }
 
+output "business_service_fqdn" {
+  description = "Public FQDN of the business-service Web App."
+  value       = module.boatapp.business_service_fqdn
+}
+
 output "keycloak_fqdn" {
-  description = "External FQDN of the Keycloak Container App."
+  description = "Public FQDN of the Keycloak Web App."
   value       = module.boatapp.keycloak_fqdn
 }
 
-output "business_service_internal_fqdn" {
-  description = "Internal FQDN of the business-service Container App."
-  value       = module.boatapp.business_service_internal_fqdn
+output "bff_app_name" {
+  description = "Resource name of the BFF Web App."
+  value       = module.boatapp.bff_app_name
+}
+
+output "business_service_app_name" {
+  description = "Resource name of the business-service Web App."
+  value       = module.boatapp.business_service_app_name
+}
+
+output "keycloak_app_name" {
+  description = "Resource name of the Keycloak Web App."
+  value       = module.boatapp.keycloak_app_name
 }
 
 output "postgres_fqdn" {
@@ -135,19 +153,7 @@ output "keyvault_uri" {
   value       = module.boatapp.keyvault_uri
 }
 
-output "liquibase_job_names" {
-  description = "Map of Liquibase ACA Job names."
-  value       = module.boatapp.liquibase_job_names
-}
-
-output "bff_custom_domain_verification_id" {
-  description = "Token to publish as the value of `asuid.<bff_custom_domain>` TXT record before turning on bff_custom_domain."
-  value       = module.boatapp.bff_custom_domain_verification_id
-  sensitive   = true
-}
-
-output "keycloak_custom_domain_verification_id" {
-  description = "Token to publish as the value of `asuid.<keycloak_custom_domain>` TXT record before turning on keycloak_custom_domain."
-  value       = module.boatapp.keycloak_custom_domain_verification_id
-  sensitive   = true
+output "resource_group_name" {
+  description = "Resource group name."
+  value       = module.boatapp.resource_group_name
 }

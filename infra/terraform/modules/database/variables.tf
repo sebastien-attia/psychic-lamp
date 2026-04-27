@@ -11,7 +11,7 @@ variable "environment" {
 }
 
 variable "location" {
-  description = "Azure region — must match the VNet."
+  description = "Azure region. Must match the resource group."
   type        = string
 }
 
@@ -20,18 +20,8 @@ variable "resource_group_name" {
   type        = string
 }
 
-variable "database_subnet_id" {
-  description = "Delegated subnet for the Flexible Server VNet integration."
-  type        = string
-}
-
-variable "postgres_private_dns_zone_id" {
-  description = "Private DNS zone (privatelink.postgres.database.azure.com) used for VNet-internal name resolution of the server's FQDN."
-  type        = string
-}
-
 variable "admin_username" {
-  description = "Server-level administrator login. Used by Ansible bootstrap-db-roles only — never by the running applications."
+  description = "Server-level administrator login. Used by the db-bootstrap module to create per-DB application roles; the running apps never bind with this account."
   type        = string
 }
 
@@ -63,6 +53,12 @@ variable "backup_retention_days" {
   description = "Days of point-in-time backup retained. 7 is the minimum on Flexible Server."
   type        = number
   default     = 7
+}
+
+variable "additional_firewall_ips" {
+  description = "Optional ad-hoc IPv4 addresses (operator workstation, break-glass psql) granted database access. One firewall rule per entry. Microsoft-hosted runners and App Service Web Apps are already covered by the AllowAllAzureServicesAndResourcesWithinAzureIps rule and do NOT need to be listed here."
+  type        = map(string)
+  default     = {}
 }
 
 variable "tags" {

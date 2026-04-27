@@ -1,15 +1,25 @@
 # Database module — one PostgreSQL Flexible Server hosting three logical
 # databases (bff_session, boatapp, keycloak).
 #
-# Per-database application roles (`bff`, `business_service`, `keycloak`) are
-# NOT created here; they are bootstrapped post-apply by the Ansible
-# `bootstrap-db-roles.yml` playbook (phase 02c3) using the server-level
-# administrator_login. This split keeps Terraform out of role/grant
-# management and lets Ansible idempotently re-grant when migrations rotate.
-#
-# SSL: `require_secure_transport=ON` is the Flexible Server default on v17;
+# Network posture
+# ───────────────
+# Public access is enabled. Two firewall rules control reachability:
+#   1. AllowAllAzureServicesAndResourcesWithinAzureIps — the special
+#      0.0.0.0 → 0.0.0.0 rule that lets any Azure-hosted service reach
+#      the server. App Service Web Apps + GitHub Actions runners (which
+#      run on Microsoft-hosted Azure VMs) both benefit from this rule —
+#      no per-IP allowlisting, no for_each on a computed list of
+#      outbound IPs that shifts on every plan-tier change.
+#   2. Per-IP rules from `additional_firewall_ips` — used by operators
+#      to grant a workstation ad-hoc psql access; not wired by the
+#      deploy workflow.
+# `require_secure_transport=on` is the Flexible Server default on v17 —
 # clients must use sslmode=require, which the jdbc_urls output below
 # encodes verbatim.
+#
+# Per-database application roles (`bff`, `business_service`, `keycloak`) are
+# NOT created here; they are bootstrapped by modules/db-bootstrap which
+# runs psql against this server during `terraform apply`.
 
 locals {
   databases = ["bff_session", "boatapp", "keycloak"]
@@ -32,10 +42,7 @@ resource "azurerm_postgresql_flexible_server" "this" {
   administrator_login    = var.admin_username
   administrator_password = var.admin_password
 
-  delegated_subnet_id = var.database_subnet_id
-  private_dns_zone_id = var.postgres_private_dns_zone_id
-
-  public_network_access_enabled = false
+  public_network_access_enabled = true
 
   authentication {
     password_auth_enabled = true
@@ -73,4 +80,31 @@ resource "azurerm_postgresql_flexible_server_database" "dbs" {
   server_id = azurerm_postgresql_flexible_server.this.id
   charset   = "UTF8"
   collation = "en_US.utf8"
+}
+
+# ── Firewall rules ────────────────────────────────────────────────────────
+# Special-cased rule (start=end=0.0.0.0) that allows any Azure-hosted
+# resource to connect. Covers App Service Web Apps in this subscription as
+# well as GitHub-hosted Actions runners (which run on Azure VMs and inherit
+# Azure egress IPs). Without this rule, we would need per-IP allowlisting
+# of App Service outbound IPs — but those IPs are computed at apply time,
+# which makes a Terraform for_each impossible on first apply, AND they
+# rotate when the plan SKU changes.
+resource "azurerm_postgresql_flexible_server_firewall_rule" "azure_services" {
+  name             = "AllowAllAzureServicesAndResourcesWithinAzureIps"
+  server_id        = azurerm_postgresql_flexible_server.this.id
+  start_ip_address = "0.0.0.0"
+  end_ip_address   = "0.0.0.0"
+}
+
+# Optional ad-hoc operator IPs (workstation, break-glass psql). The deploy
+# workflow does NOT wire this — the AllowAllAzure rule above already covers
+# Microsoft-hosted runners.
+resource "azurerm_postgresql_flexible_server_firewall_rule" "extra" {
+  for_each = var.additional_firewall_ips
+
+  name             = each.key
+  server_id        = azurerm_postgresql_flexible_server.this.id
+  start_ip_address = each.value
+  end_ip_address   = each.value
 }

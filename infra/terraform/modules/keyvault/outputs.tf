@@ -1,42 +1,24 @@
 # Outputs from the keyvault module.
 #
-# Secret VALUES are intentionally never exported. The Container Apps
-# module binds secrets via `key_vault_secret_id` (which Azure resolves
-# server-side using the app's MI), and Ansible reads secrets via
-# `az keyvault secret show` over the private endpoint.
+# Secret VALUES are intentionally never exported. The app-service module
+# references secrets via @Microsoft.KeyVault(SecretUri=…) placeholders that
+# Azure resolves server-side using each Web App's MI.
 
 output "id" {
-  description = "Resource ID of the Key Vault. Used by sibling modules to scope role assignments."
+  description = "Resource ID of the Key Vault. Used by the app-service module to scope the Key Vault Secrets User role assignments."
   value       = azurerm_key_vault.this.id
 }
 
 output "vault_uri" {
-  description = "Vault URI (e.g. https://boatapp-staging-kv.vault.azure.net/). Resolves privately through the privatelink.vaultcore.azure.net zone."
+  description = "Vault URI (e.g. https://boatapp-staging-kv.vault.azure.net/). Forms the prefix of every @Microsoft.KeyVault reference embedded in app_settings."
   value       = azurerm_key_vault.this.vault_uri
 }
 
-output "secret_ids" {
-  description = "Map of secret name → versioned secret ID. Used by Terraform triggers that must react to secret rotation."
-  sensitive   = true
-  value = merge(
-    { for k, s in azurerm_key_vault_secret.passwords : k => s.id },
-    { (azurerm_key_vault_secret.bff_signing_key.name) = azurerm_key_vault_secret.bff_signing_key.id },
-  )
-}
-
-output "secret_versionless_ids" {
-  description = "Map of secret name → versionless secret ID. Azure services consume these via `key_vault_secret_id` so provider plans do not churn on learned secret versions."
-  sensitive   = true
-  value = merge(
-    { for k, s in azurerm_key_vault_secret.passwords : k => s.versionless_id },
-    { (azurerm_key_vault_secret.bff_signing_key.name) = azurerm_key_vault_secret.bff_signing_key.versionless_id },
-  )
-}
-
-output "bff_signing_key_secret_id" {
-  description = "Versioned ID of the bff-signing-key secret. Kept for rotation-sensitive Terraform triggers."
-  sensitive   = true
-  value       = azurerm_key_vault_secret.bff_signing_key.id
+output "password_secrets_versions" {
+  description = "Map of secret name → current version. Used by the db-bootstrap trigger map so role bootstrap re-runs whenever a password is rotated. Versions are GUIDs, not secret material — intentionally not marked sensitive so a `terraform plan` clearly shows which secret rotated."
+  value = {
+    for k, s in azurerm_key_vault_secret.passwords : k => s.version
+  }
 }
 
 output "bff_signing_key_versionless_secret_id" {

@@ -16,17 +16,7 @@ variable "location" {
 }
 
 variable "resource_group_name" {
-  description = "Resource group that holds the vault and its private endpoint."
-  type        = string
-}
-
-variable "keyvault_subnet_id" {
-  description = "Subnet that hosts the Key Vault private endpoint NIC. Must have private_endpoint_network_policies disabled."
-  type        = string
-}
-
-variable "keyvault_private_dns_zone_id" {
-  description = "Private DNS zone ID (privatelink.vaultcore.azure.net) bound to the private endpoint's DNS zone group."
+  description = "Resource group that holds the vault."
   type        = string
 }
 
@@ -62,12 +52,6 @@ variable "keycloak_admin_password" {
 }
 
 # ── RBAC ──────────────────────────────────────────────────────────────────
-variable "consumer_principal_ids" {
-  description = "Map of logical service name → managed-identity object ID. Each entry receives a Key Vault Secrets User role assignment (read + list, no write)."
-  type        = map(string)
-  default     = {}
-}
-
 variable "tf_apply_principal_id" {
   description = "Object ID of the Entra ID identity that runs `terraform apply` from CI. Granted Key Vault Secrets Officer so Terraform can write the secret material the apps later read."
   type        = string
