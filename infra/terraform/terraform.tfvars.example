@@ -9,9 +9,9 @@
 # - ci_push_principal_id / tf_apply_principal_id come from the one-time
 #   Entra ID app registration. See infra/terraform/README.md for the
 #   `az ad app create` + federated-credential incantation.
-# - postgres_admin_password is used by Ansible's bootstrap-db-roles
-#   playbook to provision the per-DB application roles; the apps never
-#   read it.
+# - postgres_admin_password is used by the db-bootstrap module to
+#   provision the per-DB application roles via psql local-exec; the
+#   running apps never bind with this account.
 
 environment  = "staging"
 location     = "switzerlandnorth"
@@ -33,4 +33,4 @@ tf_apply_principal_id = "<REPLACE_ME>" # typically the same value as ci_push_pri
 # ── Image tags (driven by the CI pipeline) ────────────────────────────────
 bff_image_tag              = "latest"
 business_service_image_tag = "latest"
-keycloak_image_tag         = "26.6.1"
+keycloak_image_tag         = "latest"

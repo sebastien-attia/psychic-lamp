@@ -2,37 +2,51 @@
 #
 # These outputs are consumed by:
 #   - Operators inspecting the deployment (`terraform output`).
-#   - The Ansible playbooks in 02c3 (bootstrap-db-roles, configure-keycloak,
-#     run-liquibase-jobs) which read URLs and resource names.
 #   - GitHub Actions workflows in 04 which need the ACR login server to
-#     tag-and-push images and the Container App / Job names to deploy and
-#     migrate.
+#     tag-and-push images and the Web App names to set the image tag and
+#     restart on a new release.
 #
 # Sensitive material (admin passwords, the bff-signing-key PEM) is NEVER
-# exported; it lives in Key Vault and is consumed in-cluster.
+# exported; it lives in Key Vault and is consumed in-cluster via
+# @Microsoft.KeyVault references.
 
 output "resource_group_name" {
   description = "Name of the resource group that contains every resource provisioned by this stack."
-  value       = module.networking.resource_group_name
+  value       = azurerm_resource_group.this.name
 }
 
 output "bff_fqdn" {
-  description = "External FQDN of the BFF Container App. The Vue SPA + /api/* proxy both serve from here."
-  value       = module.container_apps.bff_fqdn
+  description = "Public FQDN of the BFF Web App. The Vue SPA + /api/* proxy both serve from here."
+  value       = module.app_service.bff_fqdn
 }
 
-output "business_service_internal_fqdn" {
-  description = "Internal-only FQDN of the business-service Container App. Reachable from the BFF over the ACA Environment's private network."
-  value       = module.container_apps.business_service_internal_fqdn
+output "business_service_fqdn" {
+  description = "Public FQDN of the business-service Web App. Reached by the BFF over HTTPS, secured by JWT Bearer validation."
+  value       = module.app_service.business_service_fqdn
 }
 
 output "keycloak_fqdn" {
-  description = "External FQDN of the Keycloak Container App. Used by browsers (auth code flow) and the BFF (issuer URI / private_key_jwt audience)."
-  value       = module.container_apps.keycloak_fqdn
+  description = "Public FQDN of the Keycloak Web App. Used by browsers (auth code flow) and the BFF (issuer URI / private_key_jwt audience)."
+  value       = module.app_service.keycloak_fqdn
+}
+
+output "bff_app_name" {
+  description = "Resource name of the BFF Web App. Used by `az webapp config container set` to roll a new image tag."
+  value       = module.app_service.bff_app_name
+}
+
+output "business_service_app_name" {
+  description = "Resource name of the business-service Web App."
+  value       = module.app_service.business_service_app_name
+}
+
+output "keycloak_app_name" {
+  description = "Resource name of the Keycloak Web App."
+  value       = module.app_service.keycloak_app_name
 }
 
 output "postgres_fqdn" {
-  description = "Fully-qualified domain name of the PostgreSQL Flexible Server. Used by Ansible bootstrap-db-roles for psql admin connections."
+  description = "FQDN of the PostgreSQL Flexible Server. Used by ad-hoc psql sessions from an allowlisted IP."
   value       = module.database.fqdn
 }
 
@@ -47,21 +61,6 @@ output "acr_login_server" {
 }
 
 output "keyvault_uri" {
-  description = "Vault URI used by the Container Apps' azure_key_vault_secrets references and by `az keyvault secret show` from Ansible (over the private endpoint)."
+  description = "Vault URI used by App Service @Microsoft.KeyVault references and `az keyvault secret show` from operators."
   value       = module.keyvault.vault_uri
-}
-
-output "liquibase_job_names" {
-  description = "Map of logical service name → ACA Container App Job name. Ansible invokes these via `az containerapp job start --name <value>` after each deploy."
-  value       = module.container_apps.liquibase_job_names
-}
-
-output "bff_custom_domain_verification_id" {
-  description = "Verification token for the BFF custom domain. Use as the value of the `asuid.<bff_custom_domain>` TXT record at the DNS provider before setting `bff_custom_domain`."
-  value       = module.container_apps.bff_custom_domain_verification_id
-}
-
-output "keycloak_custom_domain_verification_id" {
-  description = "Verification token for the Keycloak custom domain. Use as the value of the `asuid.<keycloak_custom_domain>` TXT record."
-  value       = module.container_apps.keycloak_custom_domain_verification_id
 }

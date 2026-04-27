@@ -1,560 +1,294 @@
-# .github/workflows/deploy-staging.yml
-#
-# Auto-deploy to the staging environment on every push to the `staging`
-# branch. No manual approval — staging is the safety net for production.
-#
-# Pipeline order:
-#   1. Reuse ci.yml end-to-end (lint, secret-scan, container-scan, SCA,
-#      build, test, docker sanity, E2E).
-#   2. `infra-bootstrap` — targeted `terraform apply` that creates JUST the
-#      ACR (and its AcrPush role binding for the CI federated identity).
-#      Required because step 3 docker-pushes to that ACR, while the full
-#      apply (step 5) runs AFTER step 3 to pin container apps to the new
-#      image SHA tag. Without splitting, the very first deploy fails on
-#      `az acr login` with "registry not found". Idempotent: a no-op once
-#      the ACR exists in state.
-#   3. `build-push` — Authenticate to Azure via OIDC federation, run
-#      `az acr login`, build/push bff + business-service via the
-#      docker-build-push composite action (which now emits image digests),
-#      then SIGN each image (cosign keyless, digest-targeted) and produce
-#      a SLSA Build L3 provenance attestation pushed back to ACR alongside
-#      the image. Tags pushed: `staging` (rolling) and
-#      `staging-<short-sha>` (immutable for rollback / debugging).
-#   4. `plan` — `terraform init` + `terraform plan -out=tfplan.binary`,
-#      render a markdown summary, upload `tfplan-<run_id>` as an artifact
-#      so the apply job can consume the *exact* plan that was reviewed.
-#   5. `apply` — Carries `environment: staging` so any deployment-protection
-#      rule fires AFTER the plan exists. Downloads the artifact, applies it
-#      verbatim (no re-plan), runs Ansible post-deploy, smoke-tests the
-#      stack, then uploads the BOM to Dependency-Track as the post-deploy
-#      receipt (the pre-deploy DT *gate* runs in ci.yml).
-#
-# Required environment-scoped secrets (GitHub → Settings → Environments →
-# staging) — see .github/ENVIRONMENTS.md for full list:
-#   TF_VAR_postgres_admin_password
-#   TF_VAR_bff_db_password
-#   TF_VAR_business_db_password
-#   TF_VAR_keycloak_db_password
-#   TF_VAR_keycloak_admin_password
-#   DTRACK_URL
-#   DTRACK_API_KEY
+name: Deploy — staging
 
-name: Deploy to Staging
+# Trigger: any push to the `staging` branch.
+#
+# End-to-end shape (single deploy path, no infra/image fast lane):
+#   ci          — reuse .github/workflows/ci.yml (build, scan, test).
+#   build-push  — build 3 images, push to ACR with tag = staging-<sha8>.
+#   terraform   — init + apply against environments/staging.
+#                 The runner's egress IP is added to the database firewall
+#                 for the duration of the job so the in-TF db-bootstrap
+#                 module's local-exec psql call can reach the server.
+#   deploy-app  — point each Web App at the new image tag and restart it.
+#   smoke       — curl the BFF /actuator/health.
+#
+# No Ansible, no SLSA attestation, no cosign — those layers were removed
+# along with the ACA topology in the topology-simplification PR.
 
 on:
   push:
     branches: [staging]
+  workflow_dispatch: {}
 
-# Least-privilege defaults at workflow scope. Each job widens for itself.
 permissions:
+  id-token: write   # OIDC federation to Entra ID
   contents: read
 
-# azurerm provider authentication for every terraform-running job.
-# `ARM_USE_OIDC=true` switches the provider off CLI auth (which rejects
-# service principals — see the "Authenticating using the Azure CLI is
-# only supported as a User" error) and onto the GitHub-issued OIDC
-# token. The token itself is fetched at runtime by the provider via
-# ACTIONS_ID_TOKEN_REQUEST_URL/_TOKEN, both of which GHA injects when
-# `id-token: write` is granted on the job. Setting these at workflow
-# scope fixes bootstrap, plan AND apply in one place; jobs that don't
-# call terraform (ci, build-push) are unaffected.
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
 env:
+  AZURE_LOCATION: switzerlandnorth
+  PROJECT_NAME: boatapp
+  ENVIRONMENT: staging
+  TF_DIR: infra/terraform/environments/staging
+
+  # azurerm provider authentication. The provider runs in its own process,
+  # NOT through `az` — so `azure/login@v2` doesn't reach it. ARM_USE_OIDC
+  # tells the provider to fetch a GitHub-issued OIDC token at apply time;
+  # ARM_CLIENT_ID + ARM_TENANT_ID + ARM_SUBSCRIPTION_ID identify the
+  # federated identity to exchange that token for. Setting them at
+  # workflow scope means every TF-running step (`terraform init`,
+  # `output`, `apply`) picks them up without per-step duplication.
   ARM_USE_OIDC:        "true"
   ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
   ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-# Serialize staging deploys but DO NOT cancel in-flight ones — cancelling
-# a `terraform apply` mid-flight risks leaving state mid-mutation.
-concurrency:
-  group: deploy-staging
-  cancel-in-progress: false
+  # TF root variables — needed by every `terraform` invocation (even
+  # `-target` applies validate the full variable surface). Promoting to
+  # workflow scope avoids duplicating these between build-push and the
+  # full-apply job.
+  TF_VAR_postgres_admin_password:    ${{ secrets.TF_VAR_POSTGRES_ADMIN_PASSWORD }}
+  TF_VAR_bff_db_password:            ${{ secrets.TF_VAR_BFF_DB_PASSWORD }}
+  TF_VAR_business_db_password:       ${{ secrets.TF_VAR_BUSINESS_DB_PASSWORD }}
+  TF_VAR_keycloak_db_password:       ${{ secrets.TF_VAR_KEYCLOAK_DB_PASSWORD }}
+  TF_VAR_keycloak_admin_password:    ${{ secrets.TF_VAR_KEYCLOAK_ADMIN_PASSWORD }}
+  TF_VAR_ci_push_principal_id:       ${{ secrets.AZURE_CLIENT_OBJECT_ID }}
+  TF_VAR_tf_apply_principal_id:      ${{ secrets.AZURE_CLIENT_OBJECT_ID }}
 
 jobs:
   ci:
-    name: CI (reuse ci.yml)
     uses: ./.github/workflows/ci.yml
-    # Reusable workflows do NOT inherit caller secrets by default. Without
-    # this, ci.yml's DT gate, gitleaks license, and any other `secrets.*`
-    # reference would resolve to empty strings on deploy-triggered runs.
     secrets: inherit
-    # The reusable workflow's nested jobs (sca-scan, container-scan) need to
-    # upload SARIF and read action metadata. The CALLER job's permissions
-    # block is the ceiling for the called workflow's jobs — without raising
-    # it here the workflow fails to start with "is requesting
-    # security-events: write, but is only allowed security-events: none".
+    # Reusable ci.yml's nested jobs (sca-scan, container-scan) upload SARIF
+    # to code-scanning, which needs security-events: write + actions: read.
+    # Without these, GitHub rejects the calling workflow at load time with
+    # startup_failure. See commit f1d4d33 for the original incident.
     permissions:
       contents: read
       security-events: write
       actions: read
 
-  infra-bootstrap:
-    # FIRST PASS of `terraform apply`, scoped to JUST the container registry
-    # resource and its AcrPush role binding for the CI federated identity.
-    # The full apply (job `apply`) is the SECOND pass — it runs after
-    # build-push so it can pin container_apps to the freshly built image
-    # SHA tag. Without this split the very first deploy fails on
-    # `az acr login` because the ACR has not been provisioned yet.
-    #
-    # The two -target flags are scoped narrowly:
-    #   - azurerm_container_registry.this        — the registry resource.
-    #   - azurerm_role_assignment.acr_push       — AcrPush for CI's SP.
-    # NOT included: azurerm_role_assignment.acr_pull. Those have for_each
-    # over container_apps's consumer MIs, which don't exist yet — they
-    # land naturally in the second-pass apply. Targeted-apply pulls in
-    # transitive deps (RG from module.networking) automatically.
-    #
-    # Idempotent: subsequent runs see "no changes" and exit fast. No
-    # `environment: staging` claim is needed: the push-to-staging trigger
-    # already matches the `gh-staging` FIC (subject
-    # `repo:<owner>/<repo>:ref:refs/heads/staging`, see
-    # ai-scripts/00d-bootstrap-azure.sh). The deployment-protection gate
-    # for staging stays on `apply`, where the diff is reviewable —
-    # bootstrap is intentionally outside that gate so it can run on every
-    # push without operator clicks.
-    name: Bootstrap ACR (targeted terraform apply)
-    needs: [ci]
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-    env:
-      # All root-level TF_VAR_* must be set even though the targeted
-      # resources don't consume them — Terraform validates the variable
-      # surface of the entire root module before honoring -target.
-      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
-      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
-      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
-      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
-      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
-    steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-
-      - name: Azure login (OIDC, no client secret)
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
-        with:
-          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Resolve federated SP object ID
-        env:
-          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-        run: |
-          set -euo pipefail
-          PRINCIPAL_ID=$(az ad sp show --id "${AZ_CLIENT_ID}" --query id -o tsv)
-          echo "TF_VAR_ci_push_principal_id=${PRINCIPAL_ID}"  >> "$GITHUB_ENV"
-          echo "TF_VAR_tf_apply_principal_id=${PRINCIPAL_ID}" >> "$GITHUB_ENV"
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
-        with:
-          terraform_version: '1.9.8'
-          terraform_wrapper: false
-
-      - name: Terraform init + targeted plan/apply (ACR only)
-        working-directory: infra/terraform/environments/staging
-        # `-lock-timeout=5m` absorbs sub-minute blob-lease overlap with the
-        # later `apply` job (concurrency `cancel-in-progress: false` queues
-        # same-key runs, and back-to-back deploys can race the state lock).
-        # We plan-then-apply (rather than `apply -auto-approve`) so the
-        # bootstrap diff is rendered into the run summary — same audit
-        # surface as the main `apply` job, scaled down. `apply tfplan`
-        # consumes the exact plan that was just rendered.
-        run: |
-          set -euo pipefail
-          terraform init -lock-timeout=5m \
-            -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
-            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
-          terraform plan -input=false -lock-timeout=5m -out=tfplan-bootstrap.binary \
-            -target='module.boatapp.module.container_registry.azurerm_container_registry.this' \
-            -target='module.boatapp.module.container_registry.azurerm_role_assignment.acr_push'
-          {
-            echo "## ACR bootstrap plan (staging)"
-            echo '```'
-            terraform show -no-color tfplan-bootstrap.binary | head -80
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-          terraform apply -input=false -lock-timeout=5m tfplan-bootstrap.binary
-
   build-push:
-    # Build + push images, then sign with cosign (keyless OIDC) and emit
-    # a SLSA Build L3 provenance attestation.
-    name: Build, push, sign
-    needs: [ci, infra-bootstrap]
+    needs: ci
     runs-on: ubuntu-latest
-    permissions:
-      id-token: write       # OIDC for `azure/login@v2` + cosign keyless + attestations
-      contents: read
-      attestations: write   # required by actions/attest-build-provenance
     outputs:
-      image_tag_sha: ${{ steps.compute.outputs.image_tag_sha }}
-      bff_digest: ${{ steps.bff_push.outputs.digest }}
-      business_digest: ${{ steps.business_push.outputs.digest }}
-      keycloak_digest: ${{ steps.keycloak_push.outputs.digest }}
+      image_tag:        ${{ steps.tag.outputs.tag }}
+      acr_login_server: ${{ steps.tf-output.outputs.acr_login_server }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@v4
 
-      - name: Azure login (OIDC, no client secret)
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+      - name: Compute image tag
+        id: tag
+        run: echo "tag=staging-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
         with:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      # ACR name is owned by Terraform — see modules/container-registry/main.tf
-      # (`registry_name = replace("${project_name}${environment}acr","-","")`)
-      # and environments/staging/main.tf (project_name = "boatapp"). The literal
-      # below mirrors that formula for staging; production has its own workflow
-      # with its own literal. Single source of truth = TF.
-      #
-      # `loginServer` is deterministically `<name>.azurecr.io` for the public
-      # Azure cloud, so we do NOT call `az acr show --query loginServer`: that
-      # round-trip just adds latency and a failure mode (transient ARM 5xx)
-      # without information gain.
-      - name: Compute image references and tags
-        id: compute
+      - name: Ensure TF-state blob container exists
+        # `az storage container create` is idempotent — succeeds if the
+        # container already exists, creates it on a fresh storage account.
+        # backend.tf hardcodes `container_name = "tfstate"`, so the name
+        # here must match.
+        run: |
+          az storage container create \
+            --name          tfstate \
+            --account-name  "${{ secrets.TF_STATE_STORAGE_ACCOUNT }}" \
+            --auth-mode     login \
+            --public-access off \
+            --output        none
+
+      - name: Bootstrap RG + ACR (targeted terraform apply)
+        id: tf-output
+        # The `build-push` job needs an ACR to push images to. On the very
+        # first deploy of a fresh environment, nothing exists yet — the
+        # full `terraform apply` runs LATER in the workflow, so we'd be
+        # pushing to a registry that doesn't exist.
+        #
+        # Solution: a tiny targeted apply here that creates ONLY the
+        # resource group and the container registry. Idempotent — on every
+        # subsequent run, both already exist and Terraform reports "no
+        # changes". The full apply later still creates everything else.
         run: |
           set -euo pipefail
-          ACR_LOGIN="boatappstagingacr.azurecr.io"
-          SHA_TAG="staging-${GITHUB_SHA:0:8}"
-          {
-            echo "ACR_LOGIN=${ACR_LOGIN}"
-            echo "BFF_IMAGE=${ACR_LOGIN}/bff"
-            echo "BUSINESS_IMAGE=${ACR_LOGIN}/business-service"
-            echo "KEYCLOAK_IMAGE=${ACR_LOGIN}/keycloak"
-            echo "IMAGE_TAG_SHA=${SHA_TAG}"
-          } >> "$GITHUB_ENV"
-          echo "image_tag_sha=${SHA_TAG}" >> "$GITHUB_OUTPUT"
+          cd "${TF_DIR}"
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
+          terraform apply -input=false -auto-approve \
+            -target='module.boatapp.azurerm_resource_group.this' \
+            -target='module.boatapp.module.container_registry'
+          ACR=$(terraform output -json 2>/dev/null | jq -r '.acr_login_server.value // empty')
+          if [ -z "$ACR" ]; then
+            echo "::error::Targeted apply succeeded but acr_login_server output is still empty — investigate."
+            exit 1
+          fi
+          echo "acr_login_server=${ACR}" >> "$GITHUB_OUTPUT"
 
-      # OIDC-federated ACR token (no admin creds, no docker login -u/-p).
-      - name: ACR login
-        run: az acr login --name "boatappstagingacr"
+      - name: az acr login
+        run: az acr login --name "$(echo '${{ steps.tf-output.outputs.acr_login_server }}' | cut -d. -f1)"
 
-      # Cosign installer once at the top of the job — both per-image sign
-      # steps reuse the same binary.
-      - name: Install cosign
-        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
-
-      - name: Build & push bff image
-        id: bff_push
+      - name: Build & push BFF
         uses: ./.github/actions/docker-build-push
         with:
+          context:    .
           dockerfile: bff/Dockerfile
-          image: ${{ env.BFF_IMAGE }}
-          tags: |
-            staging
-            ${{ env.IMAGE_TAG_SHA }}
+          image:      ${{ steps.tf-output.outputs.acr_login_server }}/bff
+          tags:       ${{ steps.tag.outputs.tag }}
 
-      # Sign the digest, never a tag — tag-signing breaks under any tag
-      # mutation (a deliberate `latest` rewrite, a Watchtower-style retag).
-      # Keyless: the OIDC token from this workflow run identifies the
-      # signer; the certificate + signature go to the public Sigstore
-      # transparency log (Rekor).
-      - name: Cosign sign bff image
-        env:
-          IMAGE: ${{ env.BFF_IMAGE }}
-          DIGEST: ${{ steps.bff_push.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
-
-      - name: Attest SLSA provenance for bff
-        uses: actions/attest-build-provenance@7668571508540a607bdfd90a87a560489fe372eb # v2.1.0
-        with:
-          subject-name: ${{ env.BFF_IMAGE }}
-          subject-digest: ${{ steps.bff_push.outputs.digest }}
-          push-to-registry: true
-
-      - name: Build & push business-service image
-        id: business_push
+      - name: Build & push business-service
         uses: ./.github/actions/docker-build-push
         with:
+          context:    .
           dockerfile: business-service/Dockerfile
-          image: ${{ env.BUSINESS_IMAGE }}
-          tags: |
-            staging
-            ${{ env.IMAGE_TAG_SHA }}
+          image:      ${{ steps.tf-output.outputs.acr_login_server }}/business-service
+          tags:       ${{ steps.tag.outputs.tag }}
 
-      - name: Cosign sign business-service image
-        env:
-          IMAGE: ${{ env.BUSINESS_IMAGE }}
-          DIGEST: ${{ steps.business_push.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+      # Keycloak is NOT built here — App Service pulls the upstream image
+      # straight from quay.io. The keycloak_image_tag TF variable is the
+      # only knob; bump it via a TF apply when a new Keycloak release is
+      # cut.
 
-      - name: Attest SLSA provenance for business-service
-        uses: actions/attest-build-provenance@7668571508540a607bdfd90a87a560489fe372eb # v2.1.0
-        with:
-          subject-name: ${{ env.BUSINESS_IMAGE }}
-          subject-digest: ${{ steps.business_push.outputs.digest }}
-          push-to-registry: true
-
-      # Keycloak is built from keycloak/Dockerfile (NOT pulled from
-      # quay.io). The Dockerfile bakes `kc.sh build --db=postgres` into
-      # the image so the Container App can launch with `start
-      # --optimized` — without the bake the optimized launcher crashes
-      # with "Unable to find the database vendor".
-      - name: Build & push keycloak image
-        id: keycloak_push
-        uses: ./.github/actions/docker-build-push
-        with:
-          # `docker build --file` resolves relative to the workflow's
-          # cwd (repo root after actions/checkout), NOT relative to the
-          # build context. Pass a repo-rooted path here — same shape as
-          # bff/business-service above.
-          dockerfile: keycloak/Dockerfile
-          image: ${{ env.KEYCLOAK_IMAGE }}
-          tags: |
-            staging
-            ${{ env.IMAGE_TAG_SHA }}
-
-      - name: Cosign sign keycloak image
-        env:
-          IMAGE: ${{ env.KEYCLOAK_IMAGE }}
-          DIGEST: ${{ steps.keycloak_push.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
-
-      - name: Attest SLSA provenance for keycloak
-        uses: actions/attest-build-provenance@7668571508540a607bdfd90a87a560489fe372eb # v2.1.0
-        with:
-          subject-name: ${{ env.KEYCLOAK_IMAGE }}
-          subject-digest: ${{ steps.keycloak_push.outputs.digest }}
-          push-to-registry: true
-
-  plan:
-    # Run terraform plan and upload the binary as an artifact so the apply
-    # job applies the EXACT plan the reviewer saw. Carries `environment:
-    # staging` because the `TF_VAR_*` secrets used below are scoped to the
-    # staging GitHub Environment (00f-generate-db-secrets.sh writes them
-    # there, not at repo level) — without the claim they resolve to empty
-    # strings and `terraform plan` fails on the postgres admin password.
-    # Staging has no protection rule, so the claim does not introduce an
-    # operator click.
-    name: Terraform plan (staging)
-    needs: [build-push]
-    runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
-    environment: staging
-    permissions:
-      id-token: write
-      contents: read
+  terraform:
+    needs: build-push
+    runs-on: ubuntu-latest
+    outputs:
+      bff_fqdn:                  ${{ steps.outputs.outputs.bff_fqdn }}
+      business_service_fqdn:     ${{ steps.outputs.outputs.business_service_fqdn }}
+      keycloak_fqdn:             ${{ steps.outputs.outputs.keycloak_fqdn }}
+      bff_app_name:              ${{ steps.outputs.outputs.bff_app_name }}
+      business_service_app_name: ${{ steps.outputs.outputs.business_service_app_name }}
+      keycloak_app_name:         ${{ steps.outputs.outputs.keycloak_app_name }}
+      resource_group_name:       ${{ steps.outputs.outputs.resource_group_name }}
     env:
-      # `terraform plan` resolves variables, so even read-only plans need
-      # the same TF_VAR_* env vars the apply step uses.
-      TF_VAR_postgres_admin_password: ${{ secrets.TF_VAR_postgres_admin_password }}
-      TF_VAR_bff_db_password:         ${{ secrets.TF_VAR_bff_db_password }}
-      TF_VAR_business_db_password:    ${{ secrets.TF_VAR_business_db_password }}
-      TF_VAR_keycloak_db_password:    ${{ secrets.TF_VAR_keycloak_db_password }}
-      TF_VAR_keycloak_admin_password: ${{ secrets.TF_VAR_keycloak_admin_password }}
-      IMAGE_TAG_SHA: ${{ needs.build-push.outputs.image_tag_sha }}
+      # ARM_* and TF_VAR_* secrets come from workflow-scope env: block.
+      # Image tags can't be at workflow scope (they reference job outputs).
+      TF_VAR_bff_image_tag:              ${{ needs.build-push.outputs.image_tag }}
+      TF_VAR_business_service_image_tag: ${{ needs.build-push.outputs.image_tag }}
+      # Keycloak image tag is set by the TF default; no per-deploy override.
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@v4
 
-      - name: Azure login (OIDC, no client secret)
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.8
+
+      - name: Install psql client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-client
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
         with:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Resolve federated SP object ID
+      - name: Ensure TF-state blob container exists
+        run: |
+          az storage container create \
+            --name          tfstate \
+            --account-name  "${{ secrets.TF_STATE_STORAGE_ACCOUNT }}" \
+            --auth-mode     login \
+            --public-access off \
+            --output        none
+
+      # No per-run firewall poke needed: the AllowAllAzureServicesAndResourcesWithinAzureIps
+      # rule (created by the database module) covers Microsoft-hosted GitHub
+      # runners as well as the App Service Web Apps.
+
+      - name: terraform init + apply
+        run: |
+          set -euo pipefail
+          cd "${TF_DIR}"
+          terraform init -input=false \
+            -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
+          terraform apply -input=false -auto-approve
+
+      - name: Capture outputs
+        id: outputs
+        run: |
+          set -euo pipefail
+          cd "${TF_DIR}"
+          {
+            echo "bff_fqdn=$(terraform output -raw bff_fqdn)"
+            echo "business_service_fqdn=$(terraform output -raw business_service_fqdn)"
+            echo "keycloak_fqdn=$(terraform output -raw keycloak_fqdn)"
+            echo "bff_app_name=$(terraform output -raw bff_app_name)"
+            echo "business_service_app_name=$(terraform output -raw business_service_app_name)"
+            echo "keycloak_app_name=$(terraform output -raw keycloak_app_name)"
+            echo "resource_group_name=$(terraform output -raw resource_group_name)"
+          } >> "$GITHUB_OUTPUT"
+
+  deploy-app:
+    needs: [build-push, terraform]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set new image tag on bff + business-service and restart
         env:
-          AZ_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ACR_LOGIN_SERVER: ${{ needs.build-push.outputs.acr_login_server }}
+          IMAGE_TAG:        ${{ needs.build-push.outputs.image_tag }}
+          RG:               ${{ needs.terraform.outputs.resource_group_name }}
+          BFF_APP:          ${{ needs.terraform.outputs.bff_app_name }}
+          BUSINESS_APP:     ${{ needs.terraform.outputs.business_service_app_name }}
         run: |
           set -euo pipefail
-          PRINCIPAL_ID=$(az ad sp show --id "${AZ_CLIENT_ID}" --query id -o tsv)
-          echo "TF_VAR_ci_push_principal_id=${PRINCIPAL_ID}"  >> "$GITHUB_ENV"
-          echo "TF_VAR_tf_apply_principal_id=${PRINCIPAL_ID}" >> "$GITHUB_ENV"
+          # Keycloak is intentionally absent — its image is pinned in TF and
+          # changes only via TF apply. The new BFF / business-service tags
+          # need an out-of-TF nudge so the apps actually load them now.
+          for app_repo in \
+              "${BFF_APP}:bff" \
+              "${BUSINESS_APP}:business-service"; do
+            APP="${app_repo%%:*}"
+            REPO="${app_repo##*:}"
+            az webapp config container set \
+              --resource-group       "${RG}" \
+              --name                 "${APP}" \
+              --container-image-name "${ACR_LOGIN_SERVER}/${REPO}:${IMAGE_TAG}" \
+              --output none
+            az webapp restart \
+              --resource-group "${RG}" \
+              --name           "${APP}" \
+              --output none
+          done
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
-        with:
-          terraform_version: '1.9.8'
-          terraform_wrapper: false
-
-      - name: Terraform init (staging)
-        working-directory: infra/terraform/environments/staging
-        run: |
-          set -euxo pipefail
-          terraform init -lock-timeout=5m \
-            -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
-            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
-
-      - name: Terraform plan (staging)
-        working-directory: infra/terraform/environments/staging
-        # `set +e` around plan so we can capture the exit code instead of
-        # letting bash mask it. `terraform plan` without -detailed-exitcode
-        # should return 0 on success regardless of whether changes are
-        # detected; if it returns non-zero we want the number printed,
-        # the binary's existence checked, and THEN the failure propagated
-        # — so the GHA log shows what really happened at lock release.
-        run: |
-          set -uxo pipefail
-          set +e
-          terraform plan -out=tfplan.binary -input=false -lock-timeout=5m \
-            -var "bff_image_tag=${IMAGE_TAG_SHA}" \
-            -var "business_service_image_tag=${IMAGE_TAG_SHA}" \
-            -var "keycloak_image_tag=${IMAGE_TAG_SHA}"
-          rc=$?
-          set -e
-          echo "TERRAFORM_PLAN_EXIT_CODE=${rc}"
-          ls -la tfplan.binary 2>&1 || echo "tfplan.binary missing"
-          exit "${rc}"
-
-      - name: Terraform show -json (staging)
-        working-directory: infra/terraform/environments/staging
-        run: |
-          set -euxo pipefail
-          terraform show -json tfplan.binary > tfplan.json
-          ls -la tfplan.json
-
-      - name: Render plan summary
-        # `comment-on-pr` is intentionally left at its default; the
-        # composite already gates the comment step on `event_name ==
-        # 'pull_request'`, so passing 'false' would be redundant here.
-        uses: ./.github/actions/terraform-plan-summary
-        with:
-          plan-json: infra/terraform/environments/staging/tfplan.json
-
-      # Persist the binary plan AND the JSON form. The binary is what
-      # apply consumes; the JSON is for the apply-job approver to skim
-      # in the run summary, and for human auditing later.
-      - name: Upload terraform plan artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: tfplan-${{ github.run_id }}
-          path: |
-            infra/terraform/environments/staging/tfplan.binary
-            infra/terraform/environments/staging/tfplan.json
-          retention-days: 90
-          if-no-files-found: error
-
-  apply:
-    # Apply the EXACT plan from the artifact, then run post-deploy steps
-    # (Ansible, smoke health, DT receipt). Carries `environment: staging`
-    # so deployment protection rules fire AFTER the plan exists — moving
-    # the gate here is the whole point of plan-as-artifact.
-    name: Terraform apply + post-deploy (staging)
-    needs: [build-push, plan]
-    runs-on: ubuntu-latest    # public Azure storage backend; VNet-runner out of scope for 4b
-    environment: staging
-    permissions:
-      id-token: write
-      contents: read
-    # NO `env:` block — `terraform apply tfplan.binary` runs the
-    # already-resolved plan and does not re-evaluate variables, so
-    # the `TF_VAR_*_password` / `TF_VAR_*_principal_id` values that
-    # `plan` needed are dead code here. Keeping them out shrinks the
-    # secret blast radius for the post-deploy steps below.
+  smoke:
+    needs: [terraform, deploy-app]
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-
-      - name: Azure login (OIDC, no client secret)
-        uses: azure/login@a457da9ea143d694b1b9c7c869ebb04ebe844ef5 # v2
-        with:
-          client-id:       ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
-        with:
-          terraform_version: '1.9.8'
-          terraform_wrapper: false
-
-      - name: Download tfplan artifact
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: tfplan-${{ github.run_id }}
-          path: infra/terraform/environments/staging/
-
-      - name: Terraform init + apply (verbatim from artifact)
-        working-directory: infra/terraform/environments/staging
-        # `apply tfplan.binary` runs the exact plan the reviewer saw —
-        # no re-plan, no fresh variable resolution. `-lockfile=readonly`
-        # in init makes the apply explode early if the provider lockfile
-        # changed between plan and apply (rare, but Dependabot landing
-        # a provider bump during the approval window would otherwise
-        # surface inside `apply`).
+      - name: Probe BFF /actuator/health
+        env:
+          BFF_FQDN: ${{ needs.terraform.outputs.bff_fqdn }}
         run: |
           set -euo pipefail
-          terraform init -lockfile=readonly \
-            -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
-            -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
-          terraform apply -input=false -auto-approve tfplan.binary
-
-      # Ansible runs migrate (Liquibase ACA Jobs) → configure (Keycloak
-      # realm reconciliation via keycloak-config-cli) → health.
-      - name: Setup Ansible
-        run: |
-          set -euo pipefail
-          python -m pip install --upgrade 'pip==24.*'
-          pip install 'ansible-core==2.17.*'
-      - name: Ansible post-deploy
-        working-directory: infra/ansible
-        run: |
-          ansible-playbook -i inventory/staging.yml playbooks/deploy.yml \
-            --tags migrate,configure,health
-
-      - name: Smoke health-check against staging FQDN
-        working-directory: infra/terraform/environments/staging
-        # `--max-time 5` caps EACH probe so the loop count is meaningful.
-        run: |
-          set -euo pipefail
-          BFF_FQDN=$(terraform output -raw bff_fqdn)
-          echo "Polling https://${BFF_FQDN}/actuator/health"
+          # Web Apps cold-start can take 60-90s after a container swap.
           for i in $(seq 1 30); do
-            if curl -sfo /dev/null --max-time 5 "https://${BFF_FQDN}/actuator/health"; then
-              echo "  healthy after ${i} attempts"
+            if curl -fsSL "https://${BFF_FQDN}/actuator/health" | grep -q '"status":"UP"'; then
+              echo "BFF healthy after ${i} attempts."
               exit 0
             fi
-            sleep 5
+            echo "Attempt ${i}: not healthy yet, waiting 10s..."
+            sleep 10
           done
-          echo "::error::BFF at https://${BFF_FQDN} failed to become healthy after 150s"
+          echo "::error::BFF /actuator/health did not return UP within 5 min."
+          curl -i "https://${BFF_FQDN}/actuator/health" || true
           exit 1
-
-      # Post-deploy DT receipt — tags the deployed version. The pre-deploy
-      # DT *gate* already ran in ci.yml; this step gives DT a record of
-      # what's currently running, separate from "what we tried to ship".
-      - uses: ./.github/actions/setup-java
-      - name: Download bff SBOM from CI
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: bff-sbom
-          path: bff/target/
-      - name: Download business-service SBOM from CI
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: business-service-sbom
-          path: business-service/target/
-      - name: Upload bff SBOM to Dependency-Track
-        working-directory: bff
-        env:
-          DTRACK_URL:     ${{ secrets.DTRACK_URL }}
-          DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
-        run: |
-          ./mvnw -B -ntp dependency-track:upload-bom \
-            -Ddtrack.skip=false \
-            -Ddependency-track.url="${DTRACK_URL}" \
-            -Ddependency-track.apiKey="${DTRACK_API_KEY}" \
-            -Ddependency-track.projectName=boatapp-bff \
-            -Ddependency-track.projectVersion="${GITHUB_SHA}"
-      - name: Upload business-service SBOM to Dependency-Track
-        working-directory: business-service
-        env:
-          DTRACK_URL:     ${{ secrets.DTRACK_URL }}
-          DTRACK_API_KEY: ${{ secrets.DTRACK_API_KEY }}
-        run: |
-          ./mvnw -B -ntp dependency-track:upload-bom \
-            -Ddtrack.skip=false \
-            -Ddependency-track.url="${DTRACK_URL}" \
-            -Ddependency-track.apiKey="${DTRACK_API_KEY}" \
-            -Ddependency-track.projectName=boatapp-business-service \
-            -Ddependency-track.projectVersion="${GITHUB_SHA}"
-
-      - name: Failure summary
-        if: failure()
-        run: |
-          {
-            echo "## Staging deploy FAILED"
-            echo ""
-            echo "- Commit: \`${GITHUB_SHA}\`"
-            echo "- Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
-          } >> "$GITHUB_STEP_SUMMARY"

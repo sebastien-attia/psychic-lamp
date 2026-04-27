@@ -17,32 +17,15 @@ first, then come back here for the manual steps.
 
 ## Environments
 
-| Environment              | Trigger                                              | Manual approval        | Tags pushed to ACR                                | Used by                                                                                  |
-|--------------------------|------------------------------------------------------|------------------------|---------------------------------------------------|------------------------------------------------------------------------------------------|
-| `staging`                | push to the `staging` branch                         | none                   | `staging`, `staging-<short-sha>`                  | All `deploy-staging.yml` jobs that need env-scoped secrets.                              |
-| `production`             | publishing a GitHub Release on `main`                | required reviewer (1)  | `<release-tag>`, `latest`, `production`           | The `apply` job in `deploy-production.yml` ONLY (the one that mutates the live stack).   |
-| `production-bootstrap`   | publishing a GitHub Release on `main`                | **none — MUST stay unprotected** (see below) | (no push — claim is for OIDC + secret access)     | The `infra-bootstrap` and `plan` jobs in `deploy-production.yml`.                        |
+| Environment  | Trigger                                              | Manual approval | Tags pushed to ACR                                |
+|--------------|------------------------------------------------------|-----------------|---------------------------------------------------|
+| `staging`    | push to the `staging` branch                         | none            | `staging`, `staging-<short-sha>`                  |
+| `production` | publishing a GitHub Release on `main`                | required reviewer (1) | `<release-tag>`, `latest`, `production`     |
 
-All three environments are created (empty) by `00d-bootstrap-azure.sh`.
-The **production reviewer rule** must be added manually — GitHub's REST
-API does not expose required-reviewer configuration outside Enterprise,
-so the bootstrap script flags it at the end of its summary.
-
-**Why two production envs?** GitHub's deployment-protection rules fire
-*per job* that claims an environment, not once per workflow run. If the
-`infra-bootstrap`, `plan`, and `apply` jobs all claimed `production`, a
-release would block on three reviewer prompts back-to-back. Splitting
-the unprotected jobs onto a sibling environment (`production-bootstrap`)
-collapses that to one prompt, on the only job that actually mutates the
-stack. `production-bootstrap` mirrors `production`'s secret values
-(handled by `00f-generate-db-secrets.sh`'s env-group logic) so
-`secrets.TF_VAR_*` resolves identically across both envs and Terraform's
-variable-surface validation passes on the targeted bootstrap apply.
-
-**Do NOT add protection rules to `production-bootstrap`** — that
-re-introduces the triple-approval pain and defeats the purpose. If you
-need to gate the bootstrap step, gate the entire workflow via branch
-protection on the release-triggering ref instead.
+Both environments are created (empty) by `00d-bootstrap-azure.sh`. The
+**production reviewer rule** must be added manually — GitHub's REST API does
+not expose required-reviewer configuration outside Enterprise, so the
+bootstrap script flags it at the end of its summary.
 
 To set the reviewer:
 
@@ -53,71 +36,83 @@ To set the reviewer:
 
 ---
 
-## Repository-level secrets (set by `00d-bootstrap-azure.sh`)
+## Repository-level secrets
 
-| Secret                       | Source                                | Used by                                           |
-|------------------------------|---------------------------------------|---------------------------------------------------|
-| `AZURE_CLIENT_ID`            | Entra ID app `appId`                  | every workflow that calls `azure/login@v2`        |
-| `AZURE_TENANT_ID`            | Entra ID tenant                       | `azure/login@v2`                                  |
-| `AZURE_SUBSCRIPTION_ID`      | Subscription                          | `azure/login@v2`                                  |
-| `TF_STATE_RESOURCE_GROUP`    | Storage-account RG                    | `terraform init -backend-config=...`              |
-| `TF_STATE_STORAGE_ACCOUNT`   | Storage-account name                  | `terraform init -backend-config=...`              |
+All Terraform secrets live at **repository** scope so every job in
+`deploy-staging.yml` / `deploy-production.yml` can read them without
+declaring `environment:` (the production reviewer gate sits on the
+`apply` job's `environment: production`, which is about *deployment*
+gating, not secret access). The first five are produced by
+`00d-bootstrap-azure.sh`; the rest are set manually with `gh secret set`.
 
-These are at the **repository** scope (visible to every workflow run on the
-default branch). None of them carry direct access to Azure on their own —
-the federated identity has to vouch for the run via OIDC before any of
-them become useful.
+| Secret                              | Source                                                    | Used by                                                   |
+|-------------------------------------|-----------------------------------------------------------|-----------------------------------------------------------|
+| `AZURE_CLIENT_ID`                   | Entra ID app `appId`                                      | every workflow that calls `azure/login@v2`                |
+| `AZURE_TENANT_ID`                   | Entra ID tenant                                           | `azure/login@v2`                                          |
+| `AZURE_SUBSCRIPTION_ID`             | Subscription                                              | `azure/login@v2`                                          |
+| `TF_STATE_RESOURCE_GROUP`           | Storage-account RG                                        | `terraform init -backend-config=...`                      |
+| `TF_STATE_STORAGE_ACCOUNT`          | Storage-account name                                      | `terraform init -backend-config=...`                      |
+| `AZURE_CLIENT_OBJECT_ID`            | `az ad sp show --id $AZURE_CLIENT_ID --query id -o tsv`   | `TF_VAR_ci_push_principal_id` + `TF_VAR_tf_apply_principal_id` (role assignments) |
+| `TF_VAR_POSTGRES_ADMIN_PASSWORD`    | strong random; saved in your password manager             | Postgres Flexible Server administrator password           |
+| `TF_VAR_BFF_DB_PASSWORD`            | strong random                                             | per-DB password for the `bff` PostgreSQL role             |
+| `TF_VAR_BUSINESS_DB_PASSWORD`       | strong random                                             | per-DB password for the `business_service` role           |
+| `TF_VAR_KEYCLOAK_DB_PASSWORD`       | strong random                                             | per-DB password for the `keycloak` role                   |
+| `TF_VAR_KEYCLOAK_ADMIN_PASSWORD`    | strong random                                             | initial Keycloak admin password                           |
+
+None of these grant access to Azure on their own — the federated identity
+has to vouch for the run via OIDC before any of them become useful.
+
+### Setting `AZURE_CLIENT_OBJECT_ID` for the first time
+
+The Terraform module's role assignments
+(`azurerm_role_assignment.acr_push.principal_id`,
+`azurerm_role_assignment.kv_secrets_officer.principal_id`) need the
+**Service Principal Object ID**, not the Application Object ID — they
+are different values. Resolve and store it once with:
+
+```bash
+SP_OBJECT_ID=$(az ad sp show --id "$AZURE_CLIENT_ID" --query id -o tsv)
+gh secret set AZURE_CLIENT_OBJECT_ID --body "$SP_OBJECT_ID"
+```
+
+Why we don't resolve this at workflow runtime: `az ad sp show` against an
+arbitrary `appId` requires `Application.Read.All` Microsoft Graph
+permission, which the federated SP doesn't have by default — granting it
+adds a directory-level admin consent step. Storing the resolved ID once
+is the same pattern Microsoft's
+[Azure-Samples/github-terraform-oidc-ci-cd](https://github.com/Azure-Samples/github-terraform-oidc-ci-cd)
+uses.
+
+### Setting the `TF_VAR_*` passwords
+
+Generate a strong value for each, save it in your password manager, and
+store it as a repository secret:
+
+```bash
+for s in TF_VAR_POSTGRES_ADMIN_PASSWORD TF_VAR_BFF_DB_PASSWORD \
+         TF_VAR_BUSINESS_DB_PASSWORD TF_VAR_KEYCLOAK_DB_PASSWORD \
+         TF_VAR_KEYCLOAK_ADMIN_PASSWORD; do
+  gh secret set "$s"  # interactive prompt for the value
+done
+```
+
+The Terraform state is encrypted at rest in the state storage account,
+but nothing recovers these passwords if the password manager copy is
+lost.
 
 ## Repository-level variables (set by `00d-bootstrap-azure.sh`)
 
 | Variable    | Example value | Used by                              |
 |-------------|---------------|--------------------------------------|
+| `ACR_NAME`  | `boatappstagingacr` | `az acr login --name ${{ vars.ACR_NAME }}` |
 | `PROJECT`   | `boatapp`     | logging / tagging                    |
 | `LOCATION`  | `switzerlandnorth` | downstream Terraform reference  |
 
 `vars` (not `secrets`) because none of these are sensitive.
 
-The ACR name is **not** a bootstrap variable. Terraform owns it via
-`modules/container-registry/main.tf` (formula:
-`replace("${project_name}${environment}acr","-","")`); each deploy workflow
-re-derives it as a literal mirroring that formula
-(`boatappstagingacr` / `boatappproductionacr`). Pinning the name in two places
-caused a drift bug — see git history of `00d-bootstrap-azure.sh` for the fix.
-
 ---
 
-## Environment-scoped secrets (set by `00f-generate-db-secrets.sh`)
-
-These secrets exist **per environment** because their values differ between
-staging and production. They are written by
-[`ai-scripts/00f-generate-db-secrets.sh`](../ai-scripts/00f-generate-db-secrets.sh)
-— a sibling to `00d-bootstrap-azure.sh` that generates 256-bit URL-safe
-values (`openssl rand -hex 32`) and writes them to both environments via
-`gh secret set --env <env>`. Run it once after `00d` succeeds:
-
-```bash
-./ai-scripts/00f-generate-db-secrets.sh --repo <owner>/<repo>
-```
-
-### Terraform sensitive inputs
-
-The Terraform module declares them as `sensitive = true`; passing them as
-`TF_VAR_*` env vars (rather than `-var` flags) keeps the values out of the
-run logs.
-
-| Secret                              | Purpose                                                       |
-|-------------------------------------|---------------------------------------------------------------|
-| `TF_VAR_postgres_admin_password`    | PostgreSQL Flexible Server administrator (provisioning only). |
-| `TF_VAR_bff_db_password`            | Per-DB password for the `bff` PostgreSQL role.                |
-| `TF_VAR_business_db_password`       | Per-DB password for the `business_service` role.              |
-| `TF_VAR_keycloak_db_password`       | Per-DB password for the `keycloak` role.                      |
-| `TF_VAR_keycloak_admin_password`    | Initial Keycloak admin password.                              |
-
-The Terraform state is encrypted at rest in the state storage account, and
-Azure Key Vault holds the canonical copy after the first `terraform apply`
-— but nothing recovers these specific GitHub-environment values once
-overwritten, so capture `00f`'s output if you need them out-of-band.
-Re-running `00f` rotates every secret in one shot.
+## Environment-scoped secrets (must be set MANUALLY)
 
 ### Dependency-Track governance
 
@@ -154,8 +149,7 @@ principal with the following federated credentials:
 | `repo:<owner>/<repo>:ref:refs/heads/staging`            | `deploy-staging.yml`                        |
 | `repo:<owner>/<repo>:pull_request`                      | `terraform-plan.yml`                        |
 | `repo:<owner>/<repo>:environment:staging`               | `deploy-staging.yml` job that uses `environment: staging`     |
-| `repo:<owner>/<repo>:environment:production`            | `deploy-production.yml` `apply` job (the one mutating the live stack) |
-| `repo:<owner>/<repo>:environment:production-bootstrap`  | `deploy-production.yml` `infra-bootstrap` and `plan` jobs (unprotected sibling env) |
+| `repo:<owner>/<repo>:environment:production`            | `deploy-production.yml` job that uses `environment: production` |
 
 The same script grants the SP these role assignments:
 
@@ -179,9 +173,8 @@ The same script grants the SP these role assignments:
   because the ACR doesn't exist yet. This is expected.
 
 The `ci_push_principal_id` and `tf_apply_principal_id` Terraform inputs
-are resolved at workflow time via `az ad sp show --id $AZURE_CLIENT_ID
---query id`, so you do not need to store the SP object ID as a separate
-secret.
+are sourced from the `AZURE_CLIENT_OBJECT_ID` repository secret — see
+*Setting `AZURE_CLIENT_OBJECT_ID` for the first time* above.
 
 ---
 
@@ -215,19 +208,18 @@ in ACR.
 
 To verify a deployed image locally (replace `<digest>` with the
 `sha256:…` value from `docker inspect ${ACR}.azurecr.io/bff:staging` or
-the deploy run summary, and `${ACR}` with the env-specific registry —
-`boatappstagingacr` for staging, `boatappproductionacr` for production):
+the deploy run summary):
 
 ```bash
 cosign verify \
   --certificate-identity-regexp 'https://github\.com/<org>/<repo>/\.github/workflows/deploy-(staging|production)\.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  ${ACR}.azurecr.io/bff@<digest>
+  ${ACR_NAME}.azurecr.io/bff@<digest>
 ```
 
 Replace `bff` with `business-service` for the other image. To list every
 attached artifact (signature, provenance, SBOM if any), use
-`cosign tree ${ACR}.azurecr.io/bff:staging`.
+`cosign tree ${ACR_NAME}.azurecr.io/bff:staging`.
 
 > **Storage cost.** cosign signatures + SLSA provenance are stored as
 > additional OCI artifacts in ACR (~5–10 KB per image). They do not

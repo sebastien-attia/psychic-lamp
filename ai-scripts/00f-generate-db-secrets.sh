@@ -1,28 +1,24 @@
 #!/usr/bin/env bash
-# Generate fresh random secrets for the staging, production, and
-# production-bootstrap GitHub environments. Run ONCE per repo, then
-# re-run only when rotating.
+# Generate fresh random database secrets and store them as REPOSITORY
+# secrets on the GitHub repo. Run ONCE during initial setup, then re-run
+# only when rotating.
 #
 # Each invocation overwrites the existing values — the script is
 # destructive in the sense that previously stored secrets cannot be
-# recovered. Re-run on a rotation cadence; the next `terraform apply`
-# in each environment will pick up the new values.
+# recovered. After rotation, the next `terraform apply` will pick up
+# the new values.
 #
-# Secrets created (per environment, in `staging`, `production`, and
-# `production-bootstrap`):
-#   TF_VAR_postgres_admin_password
-#   TF_VAR_bff_db_password
-#   TF_VAR_business_db_password
-#   TF_VAR_keycloak_db_password
-#   TF_VAR_keycloak_admin_password
+# Secrets created (repository scope — visible to every workflow run):
+#   TF_VAR_POSTGRES_ADMIN_PASSWORD
+#   TF_VAR_BFF_DB_PASSWORD
+#   TF_VAR_BUSINESS_DB_PASSWORD
+#   TF_VAR_KEYCLOAK_DB_PASSWORD
+#   TF_VAR_KEYCLOAK_ADMIN_PASSWORD
 #
-# `production-bootstrap` mirrors `production`'s VALUES (same secret in
-# both envs) — it's the unprotected sibling environment that the
-# infra-bootstrap and plan jobs in deploy-production.yml claim, so the
-# Required-Reviewer rule on `production` fires only on the `apply` job.
-# Mirroring is necessary because env-scoped secrets cannot be shared
-# across envs and Terraform validates the variable surface even on a
-# targeted apply, so all `TF_VAR_*` must resolve in every job.
+# Repository scope (not environment scope) is the chosen layout because
+# the deploy workflows have jobs that need TF_VAR_* but cannot declare
+# `environment:` (build-push pre-pushes images BEFORE the production
+# reviewer gate). See .github/ENVIRONMENTS.md for the rationale.
 #
 # Usage:
 #   ./ai-scripts/00f-generate-db-secrets.sh --repo <owner>/<repo> [--dry-run]
@@ -39,22 +35,11 @@ set -euo pipefail
 # ─── Argument parsing ──────────────────────────────────────────────────
 REPO=""
 DRY_RUN=0
-# Each entry is `<primary>:<mirror1>[ <mirror2>...]`. The primary env
-# gets a freshly generated value; every mirror in the same group gets
-# the SAME value written to it, so the bootstrap and apply jobs see
-# identical secrets. Keep `production` and `production-bootstrap` in
-# the same group — diverging the values would break the bootstrap job
-# the moment Terraform tries to plan against the full root module
-# (validation reads vars before honoring -target).
-ENV_GROUPS=(
-  "staging:"
-  "production:production-bootstrap"
-)
 
-# Print the script's header comment (lines 2-25) as usage, then exit.
+# Print the script's header comment (lines 2-30) as usage, then exit.
 # Arg $1: exit code (default 1).
 usage() {
-  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
   exit "${1:-1}"
 }
 
@@ -81,80 +66,47 @@ gh auth status >/dev/null 2>&1 || { echo "Run \`gh auth login\` first." >&2; exi
 gh api "repos/${REPO}" >/dev/null 2>&1 \
   || { echo "Cannot read ${REPO}: missing token scope or repo not found." >&2; exit 2; }
 
-# Flatten ENV_GROUPS into the full list of envs that must exist
-# before any `gh secret set` runs. `00d-bootstrap-azure.sh` creates
-# `staging`, `production`, and `production-bootstrap` — running 00f
-# against a fresh repo without 00d would otherwise 404 mid-loop and
-# leave the secret store half-populated.
-ALL_ENVS=()
-for group in "${ENV_GROUPS[@]}"; do
-  primary="${group%%:*}"
-  mirrors="${group#*:}"
-  ALL_ENVS+=("${primary}")
-  IFS=' ' read -ra mirror_arr <<<"${mirrors}"
-  for m in "${mirror_arr[@]}"; do
-    [[ -n "${m}" ]] && ALL_ENVS+=("${m}")
-  done
-done
-for env in "${ALL_ENVS[@]}"; do
-  gh api "repos/${REPO}/environments/${env}" >/dev/null 2>&1 \
-    || { echo "Environment '${env}' does not exist on ${REPO}. Run 00d-bootstrap-azure.sh first." >&2; exit 2; }
-done
-
 # ─── Secret generation ─────────────────────────────────────────────────
 SECRETS=(
-  TF_VAR_postgres_admin_password
-  TF_VAR_bff_db_password
-  TF_VAR_business_db_password
-  TF_VAR_keycloak_db_password
-  TF_VAR_keycloak_admin_password
+  TF_VAR_POSTGRES_ADMIN_PASSWORD
+  TF_VAR_BFF_DB_PASSWORD
+  TF_VAR_BUSINESS_DB_PASSWORD
+  TF_VAR_KEYCLOAK_DB_PASSWORD
+  TF_VAR_KEYCLOAK_ADMIN_PASSWORD
 )
 
-echo "▸ repo         : ${REPO}"
-echo "▸ env groups   : ${ENV_GROUPS[*]}"
-echo "▸ secrets      :"
+echo "▸ repo    : ${REPO}"
+echo "▸ scope   : repository (no --env)"
+echo "▸ secrets :"
 printf '    - %s\n' "${SECRETS[@]}"
-[[ "${DRY_RUN}" == "1" ]] && echo "▸ mode         : dry-run (no secrets will be written)"
+[[ "${DRY_RUN}" == "1" ]] && echo "▸ mode    : dry-run (no secrets will be written)"
 echo
 
-for group in "${ENV_GROUPS[@]}"; do
-  primary="${group%%:*}"
-  mirrors="${group#*:}"
-  group_envs=("${primary}")
-  IFS=' ' read -ra mirror_arr <<<"${mirrors}"
-  for m in "${mirror_arr[@]}"; do
-    [[ -n "${m}" ]] && group_envs+=("${m}")
-  done
-  echo "▸ env group: ${group_envs[*]}  (one shared value per secret)"
-  for name in "${SECRETS[@]}"; do
-    if [[ "${DRY_RUN}" == "1" ]]; then
-      echo "  [dry-run] would set ${name} in: ${group_envs[*]}"
-      continue
-    fi
-    # Generate the value ONCE per secret per group, then write the
-    # same value to every env in the group. Splitting envs to a
-    # mid-loop call (rather than rerunning `openssl rand` per env)
-    # is what keeps `production` and `production-bootstrap` in lockstep.
-    #
-    # `openssl rand -hex 32` gives 256 bits of entropy in a URL-safe
-    # alphabet (no `+`, `/`, `=`). These secrets land in JDBC URLs
-    # (`spring.datasource.url`) and Keycloak DB env vars where `+` is
-    # decoded to space and `/` is a path separator — base64 would
-    # break ~25% of generated values intermittently.
-    val=$(openssl rand -hex 32)
-    for env in "${group_envs[@]}"; do
-      # `gh secret set` reads from stdin when --body is omitted.
-      # Do NOT use `--body -` — that stores the literal string "-".
-      printf '%s' "${val}" \
-        | gh secret set "${name}" --env "${env}" --repo "${REPO}"
-    done
-    echo "  ✓ ${name}"
-  done
+for name in "${SECRETS[@]}"; do
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    echo "  [dry-run] would set ${name}"
+    continue
+  fi
+  # `gh secret set` reads from stdin when --body is omitted.
+  # Do NOT use `--body -` — that stores the literal string "-".
+  #
+  # `openssl rand -hex 32` gives 256 bits of entropy in a URL-safe
+  # alphabet (no `+`, `/`, `=`). These secrets land in JDBC URLs
+  # (`spring.datasource.url`) and Keycloak DB env vars where `+` is
+  # decoded to space and `/` is a path separator — base64 would
+  # break ~25% of generated values intermittently.
+  openssl rand -hex 32 \
+    | gh secret set "${name}" --repo "${REPO}"
+  echo "  ✓ ${name}"
 done
 
 echo
 if [[ "${DRY_RUN}" == "1" ]]; then
   echo "✓ Dry-run complete. No secrets were written."
 else
-  echo "✓ Done. ${#SECRETS[@]} secrets written to ${#ALL_ENVS[@]} environments."
+  echo "✓ Done. ${#SECRETS[@]} secrets written to ${REPO}."
+  echo
+  echo "Reminder: also set AZURE_CLIENT_OBJECT_ID once (not handled by this script):"
+  echo "  SP_OBJECT_ID=\$(az ad sp show --id \"\$AZURE_CLIENT_ID\" --query id -o tsv)"
+  echo "  gh secret set AZURE_CLIENT_OBJECT_ID --body \"\$SP_OBJECT_ID\" --repo ${REPO}"
 fi
