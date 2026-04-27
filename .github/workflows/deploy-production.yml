@@ -29,6 +29,11 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
     secrets: inherit
+    # See deploy-staging.yml for the rationale.
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
 
   build-push:
     needs: ci
