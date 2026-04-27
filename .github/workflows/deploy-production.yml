@@ -37,6 +37,12 @@ env:
   ENVIRONMENT: production
   TF_DIR: infra/terraform/environments/production
 
+  # azurerm provider OIDC auth — see deploy-staging.yml for the rationale.
+  ARM_USE_OIDC:        "true"
+  ARM_CLIENT_ID:       ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
@@ -90,9 +96,7 @@ jobs:
 
       - name: Discover ACR login server (from TF state)
         id: tf-output
-        env:
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          ARM_USE_OIDC:        "true"
+        # ARM_* env vars come from the workflow-scope env: block.
         run: |
           set -euo pipefail
           cd "${TF_DIR}"
@@ -133,8 +137,7 @@ jobs:
     needs: build-push
     runs-on: ubuntu-latest
     env:
-      ARM_SUBSCRIPTION_ID:               ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      ARM_USE_OIDC:                      "true"
+      # ARM_* come from workflow-scope env: block.
       TF_VAR_postgres_admin_password:    ${{ secrets.TF_VAR_POSTGRES_ADMIN_PASSWORD }}
       TF_VAR_bff_db_password:            ${{ secrets.TF_VAR_BFF_DB_PASSWORD }}
       TF_VAR_business_db_password:       ${{ secrets.TF_VAR_BUSINESS_DB_PASSWORD }}
@@ -203,8 +206,7 @@ jobs:
     # bypass the saved tfplan if the artifact is lost (e.g. by re-running
     # this job manually with `terraform apply -auto-approve`).
     env:
-      ARM_SUBSCRIPTION_ID:               ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-      ARM_USE_OIDC:                      "true"
+      # ARM_* come from workflow-scope env: block.
       TF_VAR_postgres_admin_password:    ${{ secrets.TF_VAR_POSTGRES_ADMIN_PASSWORD }}
       TF_VAR_bff_db_password:            ${{ secrets.TF_VAR_BFF_DB_PASSWORD }}
       TF_VAR_business_db_password:       ${{ secrets.TF_VAR_BUSINESS_DB_PASSWORD }}
