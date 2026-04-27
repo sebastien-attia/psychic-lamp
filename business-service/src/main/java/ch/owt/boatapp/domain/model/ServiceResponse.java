@@ -3,7 +3,6 @@ package ch.owt.boatapp.domain.model;
 import ch.owt.boatapp.domain.model.validation.Severity;
 import ch.owt.boatapp.domain.model.validation.ValidationMessage;
 
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -27,7 +26,10 @@ public final class ServiceResponse<T> {
 
     private ServiceResponse(T data, List<ValidationMessage> messages) {
         this.data = data;
-        this.messages = Collections.unmodifiableList(messages);
+        // List.copyOf gives a truly unmodifiable, defensively-copied list and
+        // fast-fails on null elements, so callers cannot mutate the envelope's
+        // messages by retaining a reference to the original list.
+        this.messages = List.copyOf(messages);
     }
 
     /**
@@ -39,6 +41,36 @@ public final class ServiceResponse<T> {
      */
     public static <T> ServiceResponse<T> success(T data) {
         return new ServiceResponse<>(data, List.of());
+    }
+
+    /**
+     * Build a successful response carrying {@code data} and a list of
+     * non-blocking advisory messages (severity {@link Severity#WARNING} or
+     * {@link Severity#INFO}). Use this overload when validation produced
+     * findings that did not block persistence — e.g. soft warnings that the
+     * caller may want to surface in the 2xx response body.
+     *
+     * <p>The factory enforces the success-envelope invariant defensively:
+     * it rejects any list containing an {@link Severity#ERROR ERROR}-severity
+     * entry, so a "success" envelope can never silently report
+     * {@link #hasErrors()}{@code  == true}. Domain code is the sole intended
+     * caller and is expected to short-circuit on ERROR before reaching here.
+     *
+     * @param data     the result value (may be {@code null} if the operation
+     *                 produced none)
+     * @param messages advisory messages to carry alongside the result; never
+     *                 {@code null}, may be empty
+     * @param <T>      the result type
+     * @return a success response carrying {@code data} and the supplied messages
+     * @throws IllegalArgumentException if {@code messages} contains any
+     *         {@link Severity#ERROR ERROR}-severity entry
+     */
+    public static <T> ServiceResponse<T> success(T data, List<ValidationMessage> messages) {
+        if (messages.stream().anyMatch(m -> m.severity() == Severity.ERROR)) {
+            throw new IllegalArgumentException(
+                    "ServiceResponse.success() messages must not contain ERROR-severity entries");
+        }
+        return new ServiceResponse<>(data, messages);
     }
 
     /**

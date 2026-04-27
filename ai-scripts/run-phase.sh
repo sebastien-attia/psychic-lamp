@@ -224,7 +224,7 @@ print_phase_intro() {
       source="ai-scripts/02c3-ansible.md"
       artefacts=(
         "deploy.yml: bootstrap-db-roles → app-config → build/push → update Apps → migrations → keycloak → health"
-        "configure-keycloak.yml: adorsys/keycloak-config-cli:latest-26.6.1 applies infra/keycloak/realm.yaml"
+        "configure-keycloak.yml: adorsys/keycloak-config-cli:latest-26.5.4 applies infra/keycloak/realm.yaml"
         "run-migrations.yml: az containerapp job start (Liquibase Jobs from 02c2), polls terminal status"
         "Inventories: staging.yml, production.yml"
       )

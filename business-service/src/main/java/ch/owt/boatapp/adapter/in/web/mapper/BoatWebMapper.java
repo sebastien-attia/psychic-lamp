@@ -34,6 +34,37 @@ public final class BoatWebMapper {
     }
 
     /**
+     * Map a domain {@link Boat} to its wire response DTO, attaching a list
+     * of advisory ({@code WARNING} / {@code INFO}) validation messages on
+     * the response body. Used by the create/update success path so the
+     * caller can render soft hints alongside the persisted boat.
+     *
+     * <p>Severity filtering is the bridge layer's responsibility: by the
+     * time control reaches this mapper the {@code ERROR}-bearing path has
+     * already short-circuited via {@code ValidationFailureException}, so
+     * every entry in {@code messages} is expected to be advisory. The
+     * mapper does not re-filter — it just formats.
+     *
+     * @param boat          the domain boat (never {@code null})
+     * @param messages      the advisory findings to attach (never
+     *                      {@code null}; may be empty)
+     * @param messageSource Spring's i18n message source
+     * @param locale        the resolved request locale
+     * @return the response DTO with both the boat fields and the formatted
+     *         advisory messages set
+     */
+    public static BoatResponse toResponse(Boat boat,
+                                          List<ValidationMessage> messages,
+                                          MessageSource messageSource,
+                                          Locale locale) {
+        BoatResponse response = toResponse(boat);
+        if (!messages.isEmpty()) {
+            response.setMessages(toWire(messages, messageSource, locale));
+        }
+        return response;
+    }
+
+    /**
      * Map a domain {@link PageResult} of {@link Boat} into the paginated wire
      * DTO. Computes {@code first}/{@code last}/{@code empty} flags from the
      * page coordinates (the domain page envelope keeps only the essential

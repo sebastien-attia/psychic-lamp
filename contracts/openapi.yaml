@@ -533,6 +533,18 @@ components:
             Optimistic-locking version. Echoed in the `ETag` response
             header; clients send it back via `If-Match` on PUT.
           example: 3
+        messages:
+          type: array
+          description: |
+            Non-blocking advisory findings (severity `WARNING` or `INFO`)
+            emitted by the create/update validators. Persistence has
+            already succeeded — these messages exist so the caller can
+            surface soft hints in the UI. `ERROR`-severity findings are
+            never returned here; they surface as a 422 `ProblemDetail`
+            instead. Absent or empty when no advisory messages were
+            produced (e.g. on `GET` responses).
+          items:
+            $ref: '#/components/schemas/ValidationMessageResponse'
 
     BoatCreateRequest:
       type: object

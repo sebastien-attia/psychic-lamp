@@ -41,6 +41,11 @@ business-service:
   url: ${BUSINESS_SERVICE_URL}
 
 server:
+  # Honour X-Forwarded-* headers set by the Azure App Service front door.
+  # Without this, Spring builds redirect URIs (and OAuth2 redirect_uri) from
+  # the internal Host header (`localhost:8080`), so a browser hitting the
+  # public URL gets redirected to localhost after Keycloak login.
+  forward-headers-strategy: framework
   servlet:
     session:
       cookie:
