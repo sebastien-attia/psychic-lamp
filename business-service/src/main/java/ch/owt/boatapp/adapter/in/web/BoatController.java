@@ -9,14 +9,18 @@ import ch.owt.boatapp.adapter.in.web.mapper.BoatCommandMapper;
 import ch.owt.boatapp.adapter.in.web.mapper.BoatWebMapper;
 import ch.owt.boatapp.domain.model.Boat;
 import ch.owt.boatapp.domain.model.PageResult;
+import ch.owt.boatapp.domain.model.ServiceResponse;
 import ch.owt.boatapp.infrastructure.security.SecurityHelper;
 import ch.owt.boatapp.infrastructure.service.BoatApplicationService;
+import org.springframework.context.MessageSource;
+import org.springframework.context.i18n.LocaleContextHolder;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 
 import java.net.URI;
+import java.util.Locale;
 import java.util.UUID;
 
 /**
@@ -40,14 +44,21 @@ public class BoatController implements BusinessServiceApi {
 
     private final BoatApplicationService boatApplicationService;
     private final SecurityHelper securityHelper;
+    private final MessageSource messageSource;
 
     /**
      * @param boatApplicationService transactional bridge to the boat use-case
      * @param securityHelper         resolves the current authenticated user
+     * @param messageSource          i18n source used to localize advisory
+     *                               validation messages on create/update
+     *                               success responses
      */
-    public BoatController(BoatApplicationService boatApplicationService, SecurityHelper securityHelper) {
+    public BoatController(BoatApplicationService boatApplicationService,
+                          SecurityHelper securityHelper,
+                          MessageSource messageSource) {
         this.boatApplicationService = boatApplicationService;
         this.securityHelper = securityHelper;
+        this.messageSource = messageSource;
     }
 
     /**
@@ -84,19 +95,24 @@ public class BoatController implements BusinessServiceApi {
      *
      * <p>Returns 201 Created with a {@code Location} header pointing at the
      * new resource and an {@code ETag} header carrying the initial version.
+     * Any advisory ({@code WARNING} / {@code INFO}) validation messages
+     * emitted by the domain ride along on the response body's
+     * {@code messages} field.
      */
     @Override
     public ResponseEntity<BoatResponse> createBoat(BoatCreateRequest boatCreateRequest) {
         UUID userId = securityHelper.getCurrentAppUserId();
-        Boat boat = boatApplicationService.createBoat(
+        ServiceResponse<Boat> result = boatApplicationService.createBoat(
                 BoatCommandMapper.toCreateCommand(boatCreateRequest, userId));
+        Boat boat = result.data();
         URI location = ServletUriComponentsBuilder.fromCurrentRequest()
                 .path("/{id}")
                 .buildAndExpand(boat.id())
                 .toUri();
+        Locale locale = LocaleContextHolder.getLocale();
         return ResponseEntity.created(location)
                 .eTag(String.valueOf(boat.version()))
-                .body(BoatWebMapper.toResponse(boat));
+                .body(BoatWebMapper.toResponse(boat, result.messages(), messageSource, locale));
     }
 
     /**
@@ -106,17 +122,21 @@ public class BoatController implements BusinessServiceApi {
      * header. The {@code If-Match} header is parsed as a bare {@code Long}
      * (per {@code contracts/openapi.yaml}); a malformed value surfaces as
      * a 400 via the global handler. A version mismatch surfaces as 409;
-     * a missing {@code If-Match} as 428.
+     * a missing {@code If-Match} as 428. Any advisory ({@code WARNING} /
+     * {@code INFO}) validation messages emitted by the domain ride along
+     * on the response body's {@code messages} field.
      */
     @Override
     public ResponseEntity<BoatResponse> updateBoat(UUID id, String ifMatch, BoatUpdateRequest boatUpdateRequest) {
         Long expectedVersion = parseIfMatch(ifMatch);
         UUID userId = securityHelper.getCurrentAppUserId();
-        Boat boat = boatApplicationService.updateBoat(
+        ServiceResponse<Boat> result = boatApplicationService.updateBoat(
                 BoatCommandMapper.toUpdateCommand(id, expectedVersion, boatUpdateRequest, userId));
+        Boat boat = result.data();
+        Locale locale = LocaleContextHolder.getLocale();
         return ResponseEntity.ok()
                 .eTag(String.valueOf(boat.version()))
-                .body(BoatWebMapper.toResponse(boat));
+                .body(BoatWebMapper.toResponse(boat, result.messages(), messageSource, locale));
     }
 
     /**

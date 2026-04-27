@@ -7,6 +7,7 @@ import ch.owt.boatapp.domain.model.Boat;
 import ch.owt.boatapp.domain.model.BoatAudit;
 import ch.owt.boatapp.domain.model.PageResult;
 import ch.owt.boatapp.domain.model.ServiceResponse;
+import ch.owt.boatapp.domain.model.validation.Severity;
 import ch.owt.boatapp.domain.model.validation.ValidationMessage;
 import ch.owt.boatapp.domain.port.in.CreateBoatCommand;
 import ch.owt.boatapp.domain.port.in.DeleteBoatCommand;
@@ -41,6 +42,14 @@ import java.util.UUID;
  * the bridge layer ({@code BoatApplicationService} in {@code infrastructure.service},
  * added in step 02a3); this class invokes the audit append inline so the
  * domain remains framework-free.
+ *
+ * <p><b>Severity-aware persistence:</b> create/update fail (return a
+ * {@link ServiceResponse#failure(List) failure} envelope, no persistence)
+ * only when validation produced at least one {@link Severity#ERROR ERROR}
+ * message. {@link Severity#WARNING WARNING} and {@link Severity#INFO INFO}
+ * messages are advisory: the boat is persisted and the messages ride along
+ * in the {@link ServiceResponse#success(Object, List) success} envelope so
+ * the caller can surface them in a 2xx response body.
  */
 public final class BoatDomainService implements ManageBoatsUseCase {
 
@@ -88,14 +97,14 @@ public final class BoatDomainService implements ManageBoatsUseCase {
     @Override
     public ServiceResponse<Boat> createBoat(CreateBoatCommand command) {
         List<ValidationMessage> messages = collectValidationMessages(command.name(), command.description());
-        if (!messages.isEmpty()) {
+        if (hasError(messages)) {
             return ServiceResponse.failure(messages);
         }
         OffsetDateTime now = OffsetDateTime.now(clock);
         Boat newBoat = new Boat(UUID.randomUUID(), command.name(), command.description(), now, null);
         Boat saved = boatRepository.save(newBoat);
         appendAudit(saved, AuditAction.CREATED, command.performedBy().value(), now);
-        return ServiceResponse.success(saved);
+        return ServiceResponse.success(saved, messages);
     }
 
     @Override
@@ -104,7 +113,7 @@ public final class BoatDomainService implements ManageBoatsUseCase {
         // reachable even when the id happens not to resolve (which would
         // otherwise short-circuit to 404 and hide the validation findings).
         List<ValidationMessage> messages = collectValidationMessages(command.name(), command.description());
-        if (!messages.isEmpty()) {
+        if (hasError(messages)) {
             return ServiceResponse.failure(messages);
         }
 
@@ -130,7 +139,7 @@ public final class BoatDomainService implements ManageBoatsUseCase {
         Boat saved = boatRepository.save(updated);
         OffsetDateTime now = OffsetDateTime.now(clock);
         appendAudit(saved, AuditAction.UPDATED, command.performedBy().value(), now);
-        return ServiceResponse.success(saved);
+        return ServiceResponse.success(saved, messages);
     }
 
     @Override
@@ -147,6 +156,13 @@ public final class BoatDomainService implements ManageBoatsUseCase {
         messages.addAll(syntacticValidator.validate(name, description));
         messages.addAll(semanticValidator.validate(name, description));
         return messages;
+    }
+
+    private static boolean hasError(List<ValidationMessage> messages) {
+        // Persistence is gated on ERROR severity only — WARNING and INFO are
+        // advisory and ride along with the success envelope so the caller can
+        // surface them in a 2xx response body.
+        return messages.stream().anyMatch(m -> m.severity() == Severity.ERROR);
     }
 
     private void appendAudit(Boat boat, AuditAction action, UUID performedByUserId, OffsetDateTime performedAt) {
