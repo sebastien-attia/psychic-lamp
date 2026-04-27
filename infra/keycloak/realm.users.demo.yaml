@@ -1,0 +1,34 @@
+# infra/keycloak/realm.users.demo.yaml
+#
+# Demo seed user (`demo`) imported alongside realm.yaml in EVERY
+# environment (local-intg, staging, production) by the keycloak-config-cli
+# step in docker-compose.yml and in
+# .github/workflows/deploy-{staging,production}.yml.
+#
+# SECURITY NOTE: this exposes a known username/password pair on every
+# public Keycloak instance. Kept this way at the project owner's explicit
+# request so reviewers/demo recipients can log in without an out-of-band
+# step. When that requirement goes away, delete this file and remove its
+# entry from IMPORT_FILES_LOCATIONS in the three call sites above.
+#
+# DEMO_PASSWORD is resolved from the importer's env at apply time
+# (default `demo123` everywhere; the workflows pin the literal).
+realm: boat-app
+users:
+  - username: demo
+    enabled: true
+    # Profile fields are populated up-front so Keycloak's default
+    # `VERIFY_PROFILE` required action does not interrupt the
+    # authorization-code flow on first login. Without these, the SPA
+    # gets bounced to `/login-actions/required-action?execution=VERIFY_PROFILE`
+    # after credential entry and the E2E tests time out waiting for the
+    # `/boats` redirect.
+    firstName: Demo
+    lastName: User
+    email: demo@example.invalid
+    emailVerified: true
+    credentials:
+      - type: password
+        value: "${DEMO_PASSWORD}"
+        temporary: false
+    realmRoles: [user]

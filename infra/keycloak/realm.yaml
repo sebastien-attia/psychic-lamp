@@ -6,10 +6,11 @@
 #   - staging    : Ansible docker task (see ai-scripts/02c3-ansible.md)
 #   - prod       : Ansible docker task (same task, different inventory)
 #
-# Env-specific seed users live in SEPARATE overlay files imported alongside
-# this one (e.g. infra/keycloak/realm.users.local-intg.yaml). Staging/prod
-# Ansible tasks import THIS file only — never an overlay containing seed
-# users — to avoid shipping a known username into a public realm.
+# A demo seed user lives in a SEPARATE overlay (realm.users.demo.yaml)
+# that is imported alongside this file in EVERY environment — including
+# staging and production — at the project owner's explicit request. See
+# the SECURITY NOTE at the top of that overlay before relying on its
+# absence.
 #
 # Env-specific values (BFF base URL, JWKS URL) are resolved at import time
 # from environment variables — see infra/keycloak/env/*.env.
@@ -51,7 +52,6 @@ roles:
   realm:
     - name: user
       description: Standard boat-app user
-# NOTE: no `users:` block in the base file. Seed users (e.g. `demo`) are
-# defined per-environment in overlay files like
-# infra/keycloak/realm.users.local-intg.yaml so they NEVER reach
-# staging/prod even by accident.
+# NOTE: no `users:` block in the base file. The `demo` seed user is in
+# infra/keycloak/realm.users.demo.yaml, imported alongside this file in
+# every environment.
