@@ -47,3 +47,14 @@ server:
     session:
       cookie:
         secure: true
+
+# Mirror Spring's stdout to a file under /home/LogFiles — App Service for
+# Containers does not capture container stdout in the platform docker.log,
+# so a startup crash (e.g. Liquibase BeanCreationException) is invisible to
+# `az webapp log download` without this file sink. /home/LogFiles is the
+# platform-recognised root (siblings of *_docker.log) and is included by
+# both `az webapp log download` and Kudu vfs. An explicit `name:` pins the
+# file so it cannot collide with the platform's docker.log naming.
+logging:
+  file:
+    name: /home/LogFiles/bff-spring.log

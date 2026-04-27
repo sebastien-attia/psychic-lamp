@@ -19,6 +19,10 @@
 --   :"role"  → the value, quoted as a SQL identifier
 -- format(... %I ...) double-quotes the identifier safely when needed.
 
+-- Hash-bump 2026-04-27: force re-apply of all role bootstraps so the BFF
+-- role/password is re-set from TF_VAR_BFF_DB_PASSWORD (the same secret KV
+-- serves to the running BFF). Prior applies refreshed state without
+-- re-running because triggers were unchanged.
 \set ON_ERROR_STOP on
 
 -- Pull the password from the environment into psql variable `pw` so it
