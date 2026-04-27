@@ -1,22 +1,34 @@
 name: Deploy — production
 
-# Trigger: push to `main` (typically a merge of staging → main).
+# Trigger: a GitHub Release is published (the release tag — e.g. v1.0.0 —
+# becomes the immutable image tag). Pushes to `main` do NOT auto-deploy:
+# operators cut a Release after staging soak, and that is what fires this
+# workflow. workflow_dispatch is kept for ad-hoc reruns; when invoked that
+# way, the caller MUST supply a `tag` input (a git ref that will be
+# checked out and used as the image tag).
 #
 # Manual gate: the `apply` job runs in the GitHub Environment "production",
 # which has Required Reviewers configured. The `plan` job runs without a
 # gate so reviewers see the diff they're approving inside the run summary.
 
 on:
-  push:
-    branches: [main]
-  workflow_dispatch: {}
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Git tag to deploy (e.g. v1.0.0). Must already exist on the remote.'
+        required: true
+        type: string
 
 permissions:
   id-token: write
   contents: read
 
 concurrency:
-  group: deploy-production-${{ github.sha }}
+  # One in-flight production deploy per release tag. Same-tag re-runs queue;
+  # different tags can run in parallel (rare but legal during a hotfix).
+  group: deploy-production-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
 
 env:
@@ -40,14 +52,30 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_tag:        ${{ steps.tag.outputs.tag }}
+      release_ref:      ${{ steps.tag.outputs.ref }}
       acr_login_server: ${{ steps.tf-output.outputs.acr_login_server }}
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Compute image tag
+      - name: Resolve release ref + image tag
         id: tag
-        # Production tag = main-<sha8>. Immutable per commit.
-        run: echo "tag=main-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+        env:
+          RELEASE_TAG_FROM_EVENT: ${{ github.event.release.tag_name }}
+          DISPATCH_TAG_INPUT: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          REF="${RELEASE_TAG_FROM_EVENT:-${DISPATCH_TAG_INPUT}}"
+          if [ -z "$REF" ]; then
+            echo "::error::No release tag available — neither release.tag_name nor inputs.tag was set." >&2
+            exit 1
+          fi
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          # Production tag = the release tag verbatim (e.g. v1.0.0).
+          # Immutable per release.
+          echo "tag=${REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.ref }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -118,7 +146,10 @@ jobs:
       TF_VAR_business_service_image_tag: ${{ needs.build-push.outputs.image_tag }}
       # Keycloak image tag is pinned in TF (default 26.6.1); no per-deploy override.
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-push.outputs.release_ref }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -184,7 +215,10 @@ jobs:
       TF_VAR_bff_image_tag:              ${{ needs.build-push.outputs.image_tag }}
       TF_VAR_business_service_image_tag: ${{ needs.build-push.outputs.image_tag }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.build-push.outputs.release_ref }}
 
       - uses: hashicorp/setup-terraform@v3
         with:
