@@ -43,9 +43,9 @@ defineProps<{
    */
   confirmLabel?: string
   /**
-   * Visual tone of the confirm button. `danger` (red) is the default
+   * Visual tone of the confirm button. `danger` (Brique) is the default
    * because every current call site is destructive; switch to
-   * `primary` (nautical-blue) for benign confirmations.
+   * `primary` (Bleu) for benign confirmations.
    */
   tone?: 'danger' | 'primary'
 }>()
@@ -66,9 +66,9 @@ const { t } = useI18n()
  */
 function resolveConfirmClasses(tone: 'danger' | 'primary' | undefined): string {
   if (tone === 'primary') {
-    return 'bg-nautical-600 hover:bg-nautical-700 focus-visible:outline-nautical-600'
+    return 'bg-bleu-600 hover:bg-bleu-700 focus-visible:outline-bleu-600'
   }
-  return 'bg-red-600 hover:bg-red-700 focus-visible:outline-red-600'
+  return 'bg-brique-600 hover:bg-brique-700 focus-visible:outline-brique-600'
 }
 </script>
 

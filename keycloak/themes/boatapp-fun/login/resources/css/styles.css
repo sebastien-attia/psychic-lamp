@@ -1,0 +1,263 @@
+/*
+ * Boat App custom Keycloak login styles.
+ *
+ * The visual centerpiece is a fullscreen diagonal colour split driven
+ * by four CSS custom properties — `--split-c1`, `--split-c2`,
+ * `--split-angle`, `--split-pos` — set by `js/shuffle.js` on load and
+ * on every Shuffle-button click. The login form sits in a centered
+ * white card over the split, mobile-first (full width below 640 px,
+ * `max-width: 420px` above).
+ *
+ * Brand palette:
+ *   --c1 Bleu   #0038B8   primary CTA, focus rings, links
+ *   --c2 Brique #B82200   error / destructive
+ *   --c3 Olive  #94B800   accent / success
+ */
+
+:root {
+  --c1: #0038B8;
+  --c2: #B82200;
+  --c3: #94B800;
+  --split-c1: var(--c1);
+  --split-c2: var(--c3);
+  --split-angle: 120deg;
+  --split-pos: 55%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: #0f172a;
+  background: #ffffff;
+}
+
+.boatapp-split-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background: linear-gradient(
+    var(--split-angle),
+    var(--split-c1) 0%,
+    var(--split-c1) var(--split-pos),
+    var(--split-c2) var(--split-pos),
+    var(--split-c2) 100%
+  );
+  transition: background 350ms ease-out;
+}
+
+.boatapp-stage {
+  position: relative;
+  z-index: 1;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.login-card {
+  background: #ffffff;
+  border-radius: 14px;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.22);
+  padding: 1.5rem;
+  width: 100%;
+  max-width: 420px;
+}
+
+@media (min-width: 640px) {
+  .login-card {
+    padding: 2rem;
+  }
+}
+
+.login-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.login-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #001a55;
+}
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}
+
+.form-row label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: #334155;
+}
+
+.form-row-checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+
+.form-row-checkbox label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-weight: 400;
+  color: #475569;
+}
+
+.form-row-secondary {
+  margin-top: -0.25rem;
+  margin-bottom: 0;
+  text-align: right;
+}
+
+.form-row-secondary a {
+  color: var(--c1);
+  font-size: 0.875rem;
+  text-decoration: none;
+}
+
+.form-row-secondary a:hover,
+.form-row-secondary a:focus-visible {
+  text-decoration: underline;
+}
+
+.kc-input {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.55rem 0.75rem;
+  font-size: 1rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #0f172a;
+}
+
+.kc-input:focus {
+  outline: 2px solid var(--c1);
+  outline-offset: 1px;
+  border-color: var(--c1);
+}
+
+.kc-input[aria-invalid='true'] {
+  border-color: var(--c2);
+}
+
+.kc-feedback-error {
+  display: block;
+  margin-top: 0.25rem;
+  font-size: 0.875rem;
+  color: var(--c2);
+}
+
+.kc-button-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 44px;
+  padding: 0.7rem 1rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #ffffff;
+  background: var(--c1);
+  border: 0;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.kc-button-primary:hover {
+  background: #002e96;
+}
+
+.kc-button-primary:focus-visible {
+  outline: 3px solid var(--c3);
+  outline-offset: 2px;
+}
+
+.alert {
+  margin-bottom: 1rem;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  border-left: 4px solid;
+  font-size: 0.875rem;
+}
+
+.alert-error,
+.alert-warning {
+  background: #fbeae6;
+  border-left-color: var(--c2);
+  color: #6f1500;
+}
+
+.alert-success,
+.alert-info {
+  background: #f3f9e1;
+  border-left-color: var(--c3);
+  color: #587000;
+}
+
+.shuffle-btn {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 2;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 0;
+  cursor: pointer;
+  font-size: 1.25rem;
+  line-height: 1;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  transition: transform 150ms ease-out;
+}
+
+.shuffle-btn:hover {
+  transform: rotate(20deg);
+}
+
+.shuffle-btn:focus-visible {
+  outline: 3px solid var(--c1);
+  outline-offset: 2px;
+}
+
+.login-info {
+  margin-top: 1.25rem;
+  font-size: 0.875rem;
+  color: #475569;
+  text-align: center;
+}
+
+.login-info a {
+  color: var(--c1);
+  text-decoration: none;
+}
+
+.login-info a:hover,
+.login-info a:focus-visible {
+  text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .boatapp-split-bg,
+  .shuffle-btn {
+    transition: none;
+  }
+}

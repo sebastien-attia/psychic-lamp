@@ -25,18 +25,32 @@ Thin proxy with session-based OAuth2. No domain logic, no JPA.
 - `infrastructure.security` — SecurityConfig (OAuth2 session, CSRF), BffSecurityHelper.
 
 ### Business Service (business-service/)
-Pure hexagonal service. Validates JWT Bearer tokens.
-- `domain.model` — pure Java domain objects (Boat, AppUser, BoatAudit). NO Spring annotations.
-- `domain.port.in` — inbound port interfaces (use cases). Pure Java.
-- `domain.port.out` — outbound port interfaces (repository contracts). Pure Java.
-- `domain.service` — use case implementations. Pure Java. Only depends on domain.model + ports.
-- `adapter.in.web` — Spring @RestController (REST adapter IN). JWT resource server.
-- `adapter.out.persistence` — Spring Data JPA (adapter OUT). Implements domain.port.out.
-- `infrastructure.config` — BeanConfig (wires pure-Java domain beans).
-- `infrastructure.security` — ResourceServerSecurityConfig (JWT), DevSecurityConfig (dev bypass).
-- `infrastructure.service` — BoatApplicationService (@Service @Transactional, bridge layer).
+Pure hexagonal service, packaged as a four-module Maven reactor (canonical
+Hombergs School A package names + School C physical Maven enforcement).
+The Maven graph itself prevents domain or application from leaking into
+adapters, beyond what ArchUnit can check.
 
-**Rule: domain.* packages must have ZERO Spring/Jakarta imports. ArchUnit enforces this.**
+```
+business-service/                  ← parent POM (packaging=pom)
+├── domain/                        ← business-service-domain — pure Java, ZERO Spring/Jakarta deps
+├── application/                   ← business-service-application — depends on domain only (pure Java, ZERO Spring/Jakarta)
+├── infrastructure/                ← business-service-infrastructure — depends on application + Spring web/JPA/security
+└── bootstrap/                     ← business-service-bootstrap — @SpringBootApplication, runnable jar
+```
+
+Java packages (FQNs are stable across the multi-module split):
+- `domain.model` — pure Java domain objects (Boat, AppUser, BoatAudit). NO Spring annotations.
+- `domain.exception` — domain exceptions (BoatNotFoundException, …).
+- `domain.service.validation` — pure-Java validators (SyntacticValidator, SemanticValidator).
+- `application.port.in` — inbound port interfaces (use cases) and Command/Query records.
+- `application.port.out` — outbound port interfaces (repository contracts).
+- `application.service` — use-case implementations. `BoatDomainService` and `UserDomainService` (pure-Java orchestration, wired by BeanConfig). NO Spring/Jakarta annotations.
+- `adapter.in.web` — Spring @RestController (REST adapter IN), JWT resource server, plus `BoatTransactionalGateway` (@Service @Transactional) which owns the transaction boundary and translates `ServiceResponse` → `ValidationFailureException`.
+- `adapter.out.persistence` — Spring Data JPA (adapter OUT). Implements application.port.out.
+- `infrastructure.config` — BeanConfig (wires pure-Java application services as beans).
+- `infrastructure.security` — ResourceServerSecurityConfig (JWT), DevSecurityConfig (dev bypass).
+
+**Rule: `domain.*` and the entire `application.*` module must have ZERO Spring/Jakarta imports.** The Maven dependency graph enforces this for both: neither the domain jar nor the application jar has Spring or Jakarta on its classpath, so the import would not compile. ArchUnit (`application_must_not_depend_on_spring_or_jakarta`) is belt-and-braces and adds annotation-placement rules Maven cannot check (e.g. @Service only in adapter.in.web, @Repository only in adapter.out.persistence, @SpringBootApplication only at the ch.owt.boatapp root).
 
 ## Environments
 

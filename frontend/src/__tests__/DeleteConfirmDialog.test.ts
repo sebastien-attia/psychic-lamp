@@ -5,13 +5,13 @@ import DeleteConfirmDialog from '../components/DeleteConfirmDialog.vue'
 /**
  * Locate the destructive-action button inside the Headless UI Dialog
  * (rendered into `document.body` via teleport). The danger tone gives
- * the button the unique `bg-red-600` Tailwind class, so we filter on
+ * the button the unique `bg-brique-600` Tailwind class, so we filter on
  * that rather than visible text — that keeps the test stable across
  * locale changes and translation edits.
  */
 function findConfirmButton(): HTMLButtonElement | null {
   return Array.from(
-    document.querySelectorAll<HTMLButtonElement>('button.bg-red-600'),
+    document.querySelectorAll<HTMLButtonElement>('button.bg-brique-600'),
   )[0] ?? null
 }
 

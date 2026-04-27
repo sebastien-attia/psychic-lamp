@@ -11,7 +11,7 @@ export interface ToastEntry {
   /** Monotonically increasing id used as the `<TransitionGroup>` key. */
   id: number
   /** Severity hint that drives the colour scheme in `Toast.vue`. */
-  kind: 'info' | 'error'
+  kind: 'info' | 'success' | 'error'
   /** Already-localized text shown to the user. */
   message: string
 }
@@ -54,17 +54,16 @@ export function useToast(): {
 }
 
 /**
- * Convenience wrapper around {@link pushToast} for success / info
- * notifications. Uses `kind: 'info'` because the toast palette only
- * distinguishes neutral from error — a green-themed success variant
- * would require a renderer change first.
+ * Convenience wrapper around {@link pushToast} for success
+ * notifications. Renders with the Olive accent stripe in `Toast.vue`,
+ * distinguishing positive outcomes from neutral info messages.
  *
  * @param message already-localized text shown to the user.
  * @param ttlMs   optional override for the auto-dismiss delay.
  * @returns the assigned toast id.
  */
 export function showSuccess(message: string, ttlMs?: number): number {
-  return pushToast({ kind: 'info', message }, ttlMs)
+  return pushToast({ kind: 'success', message }, ttlMs)
 }
 
 /**

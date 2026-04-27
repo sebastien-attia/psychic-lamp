@@ -28,10 +28,20 @@ for svc in bff business-service; do
     fail "${svc}: Java version drift (expected 25)"
   fi
 
-  if grep -q '<packaging>jar</packaging>' "${pom}" || ! grep -q '<packaging>' "${pom}"; then
-    pass "${svc}: jar packaging (or default)"
+  # business-service is a multi-module reactor (packaging=pom on the
+  # parent, jar on each submodule). BFF stays single-module (packaging=jar).
+  if [ "${svc}" = "business-service" ]; then
+    if grep -q '<packaging>pom</packaging>' "${pom}"; then
+      pass "${svc}: parent uses packaging=pom (multi-module reactor)"
+    else
+      fail "${svc}: parent must declare <packaging>pom</packaging>"
+    fi
   else
-    fail "${svc}: packaging is not jar"
+    if grep -q '<packaging>jar</packaging>' "${pom}" || ! grep -q '<packaging>' "${pom}"; then
+      pass "${svc}: jar packaging (or default)"
+    else
+      fail "${svc}: packaging is not jar"
+    fi
   fi
 
   if [ -x "${svc}/mvnw" ]; then
@@ -40,12 +50,18 @@ for svc in bff business-service; do
     fail "${svc}: mvnw missing or not executable"
   fi
 
-  if [ -f "${svc}/src/main/resources/application.yml" ]; then
+  # application.yml lives under bootstrap submodule for business-service.
+  if [ "${svc}" = "business-service" ]; then
+    config_root="business-service/bootstrap/src/main/resources"
+  else
+    config_root="${svc}/src/main/resources"
+  fi
+  if [ -f "${config_root}/application.yml" ]; then
     pass "${svc}: application.yml present (YAML)"
-  elif [ -f "${svc}/src/main/resources/application.properties" ]; then
+  elif [ -f "${config_root}/application.properties" ]; then
     fail "${svc}: application.properties found — convert to application.yml"
   else
-    fail "${svc}: no application config"
+    fail "${svc}: no application config at ${config_root}/"
   fi
 done
 
@@ -58,16 +74,21 @@ if [ -f bff/pom.xml ]; then
   done
 fi
 if [ -f business-service/pom.xml ]; then
+  # business-service is a multi-module reactor: starters live in submodule
+  # poms (mostly infrastructure), not the parent. Grep across all of them.
+  bs_poms=(business-service/pom.xml business-service/*/pom.xml)
   for starter in spring-boot-starter-web spring-boot-starter-data-jpa spring-boot-starter-oauth2-resource-server spring-boot-starter-actuator; do
-    grep -q "${starter}" business-service/pom.xml \
-      && pass "business-service: ${starter}" \
-      || warn "business-service: ${starter} missing (expected from Initializr)"
+    if grep -lq "${starter}" "${bs_poms[@]}" 2>/dev/null; then
+      pass "business-service: ${starter}"
+    else
+      warn "business-service: ${starter} missing (expected from Initializr)"
+    fi
   done
 fi
 
 # Security: no secrets in pom or application.yml at this point
 for f in bff/pom.xml business-service/pom.xml \
-         bff/src/main/resources/application*.yml business-service/src/main/resources/application*.yml; do
+         bff/src/main/resources/application*.yml business-service/bootstrap/src/main/resources/application*.yml; do
   [ -f "${f}" ] || continue
   if grep -qE 'client[-_]secret:[[:space:]]*[A-Za-z0-9]{8,}' "${f}"; then
     fail "${f}: client_secret literal found"

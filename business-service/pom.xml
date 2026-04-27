@@ -6,32 +6,39 @@
 		<groupId>org.springframework.boot</groupId>
 		<artifactId>spring-boot-starter-parent</artifactId>
 		<version>4.0.6</version>
-		<relativePath/> <!-- lookup parent from repository -->
+		<relativePath/>
 	</parent>
 	<groupId>ch.owt.boatapp</groupId>
-	<artifactId>business-service</artifactId>
+	<artifactId>business-service-parent</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
-	<name>business-service</name>
-	<description/>
-	<url/>
-	<licenses>
-		<license/>
-	</licenses>
-	<developers>
-		<developer/>
-	</developers>
-	<scm>
-		<connection/>
-		<developerConnection/>
-		<tag/>
-		<url/>
-	</scm>
+	<packaging>pom</packaging>
+	<name>business-service-parent</name>
+	<description>Parent POM for the four-module hexagonal Business Service.</description>
+
+	<!--
+	    Hexagonal multi-module layout (School A package naming + School C
+	    physical enforcement). Modules are added incrementally during the
+	    refactor; the leaf-first order (domain → application → infrastructure
+	    → bootstrap) reflects the dependency direction.
+	-->
+	<modules>
+		<module>domain</module>
+		<module>application</module>
+		<module>infrastructure</module>
+		<module>bootstrap</module>
+	</modules>
+
 	<properties>
 		<java.version>25</java.version>
 		<archunit.version>1.4.1</archunit.version>
 		<springdoc.version>2.8.13</springdoc.version>
 		<openapi-generator.version>7.11.0</openapi-generator.version>
 		<jacoco.version>0.8.13</jacoco.version>
+		<spotbugs-maven-plugin.version>4.9.8.3</spotbugs-maven-plugin.version>
+		<findsecbugs-plugin.version>1.14.0</findsecbugs-plugin.version>
+		<cyclonedx-maven-plugin.version>2.9.1</cyclonedx-maven-plugin.version>
+		<dependency-track-maven-plugin.version>1.11.0</dependency-track-maven-plugin.version>
+		<exec-maven-plugin.version>3.5.0</exec-maven-plugin.version>
 		<!--
 		    Dependency-Track upload — defaults to a no-op for local builds.
 		    CI overrides via -Ddtrack.skip=false -Ddependency-track.url=...
@@ -41,345 +48,240 @@
 		<dependency-track.url>https://dtrack.example.invalid</dependency-track.url>
 		<dependency-track.apiKey>unset</dependency-track.apiKey>
 	</properties>
-	<dependencies>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-actuator</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-data-jpa</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-liquibase</artifactId>
-		</dependency>
-		<!-- Explicit liquibase-core (already pulled transitively) so the
-		     phase-02a2 verification gate can grep for it directly. -->
-		<dependency>
-			<groupId>org.liquibase</groupId>
-			<artifactId>liquibase-core</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-security</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-security-oauth2-resource-server</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-validation</artifactId>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-webmvc</artifactId>
-		</dependency>
 
-		<dependency>
-			<groupId>org.postgresql</groupId>
-			<artifactId>postgresql</artifactId>
-			<scope>runtime</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.projectlombok</groupId>
-			<artifactId>lombok</artifactId>
-			<optional>true</optional>
-		</dependency>
+	<dependencyManagement>
+		<dependencies>
+			<!-- In-repo modules (versions pinned to project version) -->
+			<dependency>
+				<groupId>ch.owt.boatapp</groupId>
+				<artifactId>business-service-domain</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>ch.owt.boatapp</groupId>
+				<artifactId>business-service-application</artifactId>
+				<version>${project.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>ch.owt.boatapp</groupId>
+				<artifactId>business-service-infrastructure</artifactId>
+				<version>${project.version}</version>
+			</dependency>
 
-		<!-- Extras (not provided by Initializr) -->
-
-		<!-- OpenAPI / Swagger UI served at /swagger-ui.html -->
-		<dependency>
-			<groupId>org.springdoc</groupId>
-			<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
-			<version>${springdoc.version}</version>
-		</dependency>
-
-		<!-- ArchUnit (test) — hexagonal-boundary tests for the Business Service -->
-		<dependency>
-			<groupId>com.tngtech.archunit</groupId>
-			<artifactId>archunit-junit5</artifactId>
-			<version>${archunit.version}</version>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-actuator-test</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-data-jpa-test</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-liquibase-test</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-security-oauth2-resource-server-test</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-security-test</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-validation-test</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-starter-webmvc-test</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.springframework.boot</groupId>
-			<artifactId>spring-boot-testcontainers</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.testcontainers</groupId>
-			<artifactId>testcontainers-junit-jupiter</artifactId>
-			<scope>test</scope>
-		</dependency>
-		<dependency>
-			<groupId>org.testcontainers</groupId>
-			<artifactId>testcontainers-postgresql</artifactId>
-			<scope>test</scope>
-		</dependency>
-	</dependencies>
+			<!-- Extras not provided by Boot's BOM -->
+			<dependency>
+				<groupId>org.springdoc</groupId>
+				<artifactId>springdoc-openapi-starter-webmvc-ui</artifactId>
+				<version>${springdoc.version}</version>
+			</dependency>
+			<dependency>
+				<groupId>com.tngtech.archunit</groupId>
+				<artifactId>archunit-junit5</artifactId>
+				<version>${archunit.version}</version>
+				<scope>test</scope>
+			</dependency>
+		</dependencies>
+	</dependencyManagement>
 
 	<build>
-		<plugins>
-			<!--
-			    OpenAPI Generator — produces the BusinessService server interface
-			    (BusinessServiceApi) and request/response DTOs from
-			    contracts/openapi.yaml. The hand-written BoatController will
-			    `implements BusinessServiceApi` so any contract drift becomes a
-			    compile error. Only the BusinessService tag is generated; the
-			    User tag (/api/me) is BFF-only.
-			-->
-			<plugin>
-				<groupId>org.openapitools</groupId>
-				<artifactId>openapi-generator-maven-plugin</artifactId>
-				<version>${openapi-generator.version}</version>
-				<executions>
-					<execution>
-						<id>generate-business-service-api</id>
-						<goals><goal>generate</goal></goals>
-						<configuration>
-							<inputSpec>${project.basedir}/../contracts/openapi.yaml</inputSpec>
-							<generatorName>spring</generatorName>
-							<apiPackage>ch.owt.boatapp.adapter.in.web.generated</apiPackage>
-							<modelPackage>ch.owt.boatapp.adapter.in.web.dto.generated</modelPackage>
-							<configOptions>
-								<interfaceOnly>true</interfaceOnly>
-								<!--
-								    Suppress the default method bodies (which try to render the
-								    OpenAPI `example` payload via ApiUtil). Our hand-written
-								    BoatController implements every method explicitly, so the
-								    defaults are dead weight — and removing them lets us also
-								    drop the ApiUtil supporting file.
-								-->
-								<skipDefaultInterface>true</skipDefaultInterface>
-								<useSpringBoot3>true</useSpringBoot3>
-								<useBeanValidation>true</useBeanValidation>
-								<useResponseEntity>true</useResponseEntity>
-								<dateLibrary>java8</dateLibrary>
-								<openApiNullable>false</openApiNullable>
-								<useOptional>false</useOptional>
-								<generatedAnnotation>true</generatedAnnotation>
-								<documentationProvider>none</documentationProvider>
-								<hideGenerationTimestamp>true</hideGenerationTimestamp>
-								<useTags>true</useTags>
-							</configOptions>
-							<globalProperties>
-								<apis>BusinessService</apis>
-								<models/>
-								<supportingFiles>false</supportingFiles>
-							</globalProperties>
-							<generateApiTests>false</generateApiTests>
-							<generateModelTests>false</generateModelTests>
-							<generateApiDocumentation>false</generateApiDocumentation>
-							<generateModelDocumentation>false</generateModelDocumentation>
-						</configuration>
-					</execution>
-				</executions>
-			</plugin>
+		<pluginManagement>
+			<plugins>
+				<!--
+				    OpenAPI Generator — produces the BusinessService server interface
+				    (BusinessServiceApi) and request/response DTOs from
+				    contracts/openapi.yaml. Declared in pluginManagement here; the
+				    `infrastructure` submodule activates it by GAV reference.
+				    The input-spec path uses ${maven.multiModuleProjectDirectory}
+				    so it resolves the same way regardless of which submodule
+				    invokes the plugin.
+				-->
+				<plugin>
+					<groupId>org.openapitools</groupId>
+					<artifactId>openapi-generator-maven-plugin</artifactId>
+					<version>${openapi-generator.version}</version>
+					<executions>
+						<execution>
+							<id>generate-business-service-api</id>
+							<goals><goal>generate</goal></goals>
+							<configuration>
+								<inputSpec>${maven.multiModuleProjectDirectory}/../contracts/openapi.yaml</inputSpec>
+								<generatorName>spring</generatorName>
+								<apiPackage>ch.owt.boatapp.adapter.in.web.generated</apiPackage>
+								<modelPackage>ch.owt.boatapp.adapter.in.web.dto.generated</modelPackage>
+								<configOptions>
+									<interfaceOnly>true</interfaceOnly>
+									<!--
+									    Suppress default method bodies (which try to render the
+									    OpenAPI `example` payload via ApiUtil). Our hand-written
+									    BoatController implements every method explicitly, so the
+									    defaults are dead weight — and removing them lets us also
+									    drop the ApiUtil supporting file.
+									-->
+									<skipDefaultInterface>true</skipDefaultInterface>
+									<useSpringBoot3>true</useSpringBoot3>
+									<useBeanValidation>true</useBeanValidation>
+									<useResponseEntity>true</useResponseEntity>
+									<dateLibrary>java8</dateLibrary>
+									<openApiNullable>false</openApiNullable>
+									<useOptional>false</useOptional>
+									<generatedAnnotation>true</generatedAnnotation>
+									<documentationProvider>none</documentationProvider>
+									<hideGenerationTimestamp>true</hideGenerationTimestamp>
+									<useTags>true</useTags>
+								</configOptions>
+								<globalProperties>
+									<apis>BusinessService</apis>
+									<models/>
+									<supportingFiles>false</supportingFiles>
+								</globalProperties>
+								<generateApiTests>false</generateApiTests>
+								<generateModelTests>false</generateModelTests>
+								<generateApiDocumentation>false</generateApiDocumentation>
+								<generateModelDocumentation>false</generateModelDocumentation>
+							</configuration>
+						</execution>
+					</executions>
+				</plugin>
 
-			<plugin>
-				<groupId>org.springframework.boot</groupId>
-				<artifactId>spring-boot-maven-plugin</artifactId>
-				<configuration>
-					<excludes>
-						<exclude>
-							<groupId>org.projectlombok</groupId>
-							<artifactId>lombok</artifactId>
-						</exclude>
-					</excludes>
-				</configuration>
-			</plugin>
-			<plugin>
-				<groupId>org.apache.maven.plugins</groupId>
-				<artifactId>maven-compiler-plugin</artifactId>
-				<executions>
-					<execution>
-						<id>default-compile</id>
-						<phase>compile</phase>
-						<goals>
-							<goal>compile</goal>
-						</goals>
-						<configuration>
-							<annotationProcessorPaths>
-								<path>
-									<groupId>org.projectlombok</groupId>
-									<artifactId>lombok</artifactId>
-								</path>
-							</annotationProcessorPaths>
-						</configuration>
-					</execution>
-					<execution>
-						<id>default-testCompile</id>
-						<phase>test-compile</phase>
-						<goals>
-							<goal>testCompile</goal>
-						</goals>
-						<configuration>
-							<annotationProcessorPaths>
-								<path>
-									<groupId>org.projectlombok</groupId>
-									<artifactId>lombok</artifactId>
-								</path>
-							</annotationProcessorPaths>
-						</configuration>
-					</execution>
-				</executions>
-			</plugin>
+				<plugin>
+					<groupId>org.springframework.boot</groupId>
+					<artifactId>spring-boot-maven-plugin</artifactId>
+					<configuration>
+						<excludes>
+							<exclude>
+								<groupId>org.projectlombok</groupId>
+								<artifactId>lombok</artifactId>
+							</exclude>
+						</excludes>
+					</configuration>
+				</plugin>
 
-			<!--
-			    JaCoCo — code coverage agent + report. Attached to `verify` so
-			    `./mvnw verify` produces target/site/jacoco/index.html.
-			    No coverage thresholds enforced in this phase; the gate only
-			    checks the plugin is declared.
-			-->
-			<plugin>
-				<groupId>org.jacoco</groupId>
-				<artifactId>jacoco-maven-plugin</artifactId>
-				<version>${jacoco.version}</version>
-				<executions>
-					<execution>
-						<id>prepare-agent</id>
-						<goals><goal>prepare-agent</goal></goals>
-					</execution>
-					<execution>
-						<id>report</id>
-						<phase>verify</phase>
-						<goals><goal>report</goal></goals>
-					</execution>
-				</executions>
-			</plugin>
+				<!--
+				    Lombok APT is NOT declared at parent level on purpose: the
+				    `domain` submodule must remain Lombok-free so an accidental
+				    @Getter / @Slf4j inside the domain package becomes a compile
+				    error. Each non-domain submodule declares maven-compiler-plugin
+				    in its own <build><plugins> and registers Lombok as an APT path.
+				-->
 
-			<!--
-			    SpotBugs + FindSecBugs — SAST gate.
-			    Bound to `verify` (goal: check). Only the SECURITY category is
-			    surfaced (see spotbugs-security-include.xml); OpenAPI-generated
-			    classes are excluded from analysis (spotbugs-exclude-generated.xml).
-			    failOnError=true means findings fail the build.
-			-->
-			<plugin>
-				<groupId>com.github.spotbugs</groupId>
-				<artifactId>spotbugs-maven-plugin</artifactId>
-				<version>4.9.8.3</version>
-				<configuration>
-					<effort>Max</effort>
-					<threshold>Low</threshold>
-					<failOnError>true</failOnError>
-					<includeFilterFile>spotbugs-security-include.xml</includeFilterFile>
-					<excludeFilterFile>spotbugs-exclude-generated.xml</excludeFilterFile>
-					<plugins>
-						<plugin>
-							<groupId>com.h3xstream.findsecbugs</groupId>
-							<artifactId>findsecbugs-plugin</artifactId>
-							<version>1.14.0</version>
-						</plugin>
-					</plugins>
-				</configuration>
-				<executions>
-					<execution>
-						<id>spotbugs-check</id>
-						<phase>verify</phase>
-						<goals><goal>check</goal></goals>
-					</execution>
-				</executions>
-			</plugin>
+				<!--
+				    JaCoCo — code coverage agent + report. Bound to verify so
+				    each submodule produces target/site/jacoco/index.html.
+				-->
+				<plugin>
+					<groupId>org.jacoco</groupId>
+					<artifactId>jacoco-maven-plugin</artifactId>
+					<version>${jacoco.version}</version>
+					<executions>
+						<execution>
+							<id>prepare-agent</id>
+							<goals><goal>prepare-agent</goal></goals>
+						</execution>
+						<execution>
+							<id>report</id>
+							<phase>verify</phase>
+							<goals><goal>report</goal></goals>
+						</execution>
+					</executions>
+				</plugin>
 
-			<!--
-			    CycloneDX — Software Bill of Materials.
-			    Emits target/bom.json + target/bom.xml on `package` so every
-			    artifact can be traced back to its dependency graph.
-			-->
-			<plugin>
-				<groupId>org.cyclonedx</groupId>
-				<artifactId>cyclonedx-maven-plugin</artifactId>
-				<version>2.9.1</version>
-				<configuration>
-					<outputFormat>all</outputFormat>
-					<outputName>bom</outputName>
-					<schemaVersion>1.5</schemaVersion>
-					<includeBomSerialNumber>true</includeBomSerialNumber>
-					<includeLicenseText>false</includeLicenseText>
-				</configuration>
-				<executions>
-					<execution>
-						<id>make-sbom</id>
-						<phase>package</phase>
-						<goals><goal>makeAggregateBom</goal></goals>
-					</execution>
-				</executions>
-			</plugin>
+				<!--
+				    SpotBugs + FindSecBugs — SAST gate, bound to verify (goal=check).
+				    Only the SECURITY category is surfaced; OpenAPI-generated classes
+				    are excluded. failOnError=true means findings fail the build.
+				    Filter file paths use ${maven.multiModuleProjectDirectory} so they
+				    resolve from the parent regardless of which submodule runs.
+				-->
+				<plugin>
+					<groupId>com.github.spotbugs</groupId>
+					<artifactId>spotbugs-maven-plugin</artifactId>
+					<version>${spotbugs-maven-plugin.version}</version>
+					<configuration>
+						<effort>Max</effort>
+						<threshold>Low</threshold>
+						<failOnError>true</failOnError>
+						<includeFilterFile>${maven.multiModuleProjectDirectory}/spotbugs-security-include.xml</includeFilterFile>
+						<excludeFilterFile>${maven.multiModuleProjectDirectory}/spotbugs-exclude-generated.xml</excludeFilterFile>
+						<plugins>
+							<plugin>
+								<groupId>com.h3xstream.findsecbugs</groupId>
+								<artifactId>findsecbugs-plugin</artifactId>
+								<version>${findsecbugs-plugin.version}</version>
+							</plugin>
+						</plugins>
+					</configuration>
+					<executions>
+						<execution>
+							<id>spotbugs-check</id>
+							<phase>verify</phase>
+							<goals><goal>check</goal></goals>
+						</execution>
+					</executions>
+				</plugin>
 
-			<!--
-			    Dependency-Track upload — supply-chain governance.
-			    Skipped by default (dtrack.skip=true) so local `mvn deploy`
-			    does not try to contact a server. CI overrides the property
-			    plus dependency-track.url / apiKey via -D flags.
-			-->
-			<plugin>
-				<groupId>io.github.pmckeown</groupId>
-				<artifactId>dependency-track-maven-plugin</artifactId>
-				<version>1.11.0</version>
-				<configuration>
-					<dependencyTrackBaseUrl>${dependency-track.url}</dependencyTrackBaseUrl>
-					<apiKey>${dependency-track.apiKey}</apiKey>
-					<projectName>${project.artifactId}</projectName>
-					<projectVersion>${project.version}</projectVersion>
-					<bomLocation>${project.build.directory}/bom.xml</bomLocation>
-					<updateParent>true</updateParent>
-					<skip>${dtrack.skip}</skip>
-					<failOnError>true</failOnError>
-				</configuration>
-				<executions>
-					<execution>
-						<id>dtrack-upload</id>
-						<phase>deploy</phase>
-						<goals><goal>upload-bom</goal></goals>
-					</execution>
-				</executions>
-			</plugin>
-		</plugins>
+				<!--
+				    CycloneDX — Software Bill of Materials. The aggregate goal
+				    walks the entire reactor, so it is only declared in the
+				    bootstrap submodule (one runtime artifact = one SBOM).
+				-->
+				<plugin>
+					<groupId>org.cyclonedx</groupId>
+					<artifactId>cyclonedx-maven-plugin</artifactId>
+					<version>${cyclonedx-maven-plugin.version}</version>
+					<configuration>
+						<outputFormat>all</outputFormat>
+						<outputName>bom</outputName>
+						<schemaVersion>1.5</schemaVersion>
+						<includeBomSerialNumber>true</includeBomSerialNumber>
+						<includeLicenseText>false</includeLicenseText>
+					</configuration>
+					<executions>
+						<execution>
+							<id>make-sbom</id>
+							<phase>package</phase>
+							<goals><goal>makeAggregateBom</goal></goals>
+						</execution>
+					</executions>
+				</plugin>
+
+				<!--
+				    Dependency-Track upload — supply-chain governance.
+				    Skipped by default (dtrack.skip=true) so local `mvn deploy`
+				    cannot reach a server. CI overrides the property plus
+				    dependency-track.url / apiKey via -D flags. Reads the
+				    aggregate BOM produced by cyclonedx in the bootstrap module.
+				-->
+				<plugin>
+					<groupId>io.github.pmckeown</groupId>
+					<artifactId>dependency-track-maven-plugin</artifactId>
+					<version>${dependency-track-maven-plugin.version}</version>
+					<configuration>
+						<dependencyTrackBaseUrl>${dependency-track.url}</dependencyTrackBaseUrl>
+						<apiKey>${dependency-track.apiKey}</apiKey>
+						<projectName>${project.artifactId}</projectName>
+						<projectVersion>${project.version}</projectVersion>
+						<bomLocation>${project.build.directory}/bom.xml</bomLocation>
+						<updateParent>true</updateParent>
+						<skip>${dtrack.skip}</skip>
+						<failOnError>true</failOnError>
+					</configuration>
+					<executions>
+						<execution>
+							<id>dtrack-upload</id>
+							<phase>deploy</phase>
+							<goals><goal>upload-bom</goal></goals>
+						</execution>
+					</executions>
+				</plugin>
+			</plugins>
+		</pluginManagement>
 	</build>
 
 	<!--
 	    Local-only SCA convenience profile: `./mvnw -Posv verify` invokes
 	    the OSV-Scanner CLI (must be on PATH) and fails on HIGH-severity
 	    findings. Primary SCA still runs in CI via google/osv-scanner-action.
+	    Bound at parent so a single invocation scans the whole reactor tree.
 	-->
 	<profiles>
 		<profile>
@@ -389,7 +291,7 @@
 					<plugin>
 						<groupId>org.codehaus.mojo</groupId>
 						<artifactId>exec-maven-plugin</artifactId>
-						<version>3.5.0</version>
+						<version>${exec-maven-plugin.version}</version>
 						<executions>
 							<execution>
 								<id>osv-scan</id>
@@ -401,7 +303,7 @@
 										<argument>scan</argument>
 										<argument>source</argument>
 										<argument>--fail-on-vuln=HIGH</argument>
-										<argument>${project.basedir}</argument>
+										<argument>${maven.multiModuleProjectDirectory}</argument>
 									</arguments>
 								</configuration>
 							</execution>

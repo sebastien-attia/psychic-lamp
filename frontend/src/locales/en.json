@@ -107,5 +107,16 @@
     "confirm": "Confirm",
     "dismiss": "Dismiss",
     "back": "Back"
+  },
+  "shortcuts": {
+    "title": "Keyboard shortcuts",
+    "subtitle": "Move around without leaving the keyboard.",
+    "openLabel": "Keyboard shortcuts",
+    "rows": {
+      "focusSearch": "Focus the search box",
+      "newBoat": "Add a new boat",
+      "clearSearch": "Clear the search (when focused)",
+      "openCheatsheet": "Show this cheatsheet"
+    }
   }
 }

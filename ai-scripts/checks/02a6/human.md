@@ -1,7 +1,7 @@
 # Human checks — Phase 02a6 Backend Security Gates
-□ Open `bff/target/spotbugsXml.xml` and `business-service/target/spotbugsXml.xml` — every raised bug is in the SECURITY category (no STYLE/PERFORMANCE noise).
+□ Open `bff/target/spotbugsXml.xml` and the submodule reports under `business-service/*/target/spotbugsXml.xml` (one per Maven submodule that compiles sources) — every raised bug is in the SECURITY category (no STYLE/PERFORMANCE noise).
 □ Any false positives from SpotBugs are either suppressed with targeted `@SuppressFBWarnings` (never module-wide) or documented in the phase 02a6 commit.
-□ Open `target/bom.json` on both services — verify Spring Boot 4.0.6, Hibernate, Keycloak client, Lombok appear at the versions you expect. (No MapStruct: persistence mappers are hand-written, no annotation processor.)
+□ Open `bff/target/bom.json` and `business-service/bootstrap/target/bom.json` — the business-service aggregate SBOM lives in the bootstrap submodule (cyclonedx makeAggregateBom runs only there). Verify Spring Boot 4.0.6, Hibernate, Keycloak client, Lombok appear at the versions you expect. (No MapStruct: persistence mappers are hand-written, no annotation processor.)
 □ DTRACK_URL and DTRACK_API_KEY in `.env.example` are clearly flagged `# staging/prod only` and are NOT committed as real values.
-□ CLAUDE.md "Security build gates" paragraph matches the plugin coordinates actually present in `pom.xml` (no version drift between docs and build).
-□ `./mvnw -Posv verify` works on your workstation if the `osv-scanner` binary is installed (optional — CI is the authoritative gate).
+□ CLAUDE.md "Security build gates" paragraph matches the plugin coordinates actually present in `pom.xml` (no version drift between docs and build). For business-service the security plugins are declared in the parent `business-service/pom.xml` `<pluginManagement>` and inherited by every submodule.
+□ `./mvnw -Posv verify` works on your workstation if the `osv-scanner` binary is installed (optional — CI is the authoritative gate). The `osv` profile is declared at the business-service parent level, so a single invocation scans the whole reactor tree.

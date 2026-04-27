@@ -263,8 +263,8 @@
         - openapi-generator output paths
           (`bff/src/main/java/.../adapter/in/web/dto/generated/`,
            `bff/src/main/java/.../adapter/out/client/generated/`,
-           `business-service/src/main/java/.../adapter/in/web/generated/`,
-           `business-service/src/main/java/.../adapter/in/web/dto/generated/`,
+           `business-service/infrastructure/src/main/java/.../adapter/in/web/generated/`,
+           `business-service/infrastructure/src/main/java/.../adapter/in/web/dto/generated/`,
            `frontend/src/services/api-client/generated/`)
 
       GitHub native push-protection covers known token formats (AWS, GCP,

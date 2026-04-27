@@ -91,9 +91,8 @@ variable "business_service_image_tag" {
 }
 
 variable "keycloak_image_tag" {
-  description = "Tag of the upstream quay.io/keycloak/keycloak image. Production pins to a specific version."
+  description = "Keycloak image tag to deploy (pulled from the project's ACR; built from keycloak/Dockerfile). Production should pin to an immutable tag (release tag), never `latest`."
   type        = string
-  default     = "26.6.1"
 }
 
 variable "service_plan_sku" {

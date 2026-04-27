@@ -60,7 +60,7 @@ Phase 5    ./ai-scripts/run-phase.sh 5            docs → 🎉
 | CI/CD prod | **GitHub Release** on main (manual, requires reviewer approval) |
 | Claude Code | **Plan Mode** (`--permission-mode plan`) on every step |
 | Human checkpoints | Every phase runs `ai-scripts/checks/<phase>/run.sh` + displays `checks/<phase>/human.md`. A `fail` line aborts unless `FORCE=1`. |
-| Keycloak version | **`quay.io/keycloak/keycloak:26.6.1`** (Quarkus distribution) in compose, Testcontainers, and Terraform. Prod Container App runs `start --optimized` with `KC_HOSTNAME` / `KC_PROXY_HEADERS` / `KC_HEALTH_ENABLED` / `KC_METRICS_ENABLED`. |
+| Keycloak version | **`quay.io/keycloak/keycloak:26.6.1`** (Quarkus distribution) in compose and Testcontainers. Staging/prod App Service pulls a **custom image built from `keycloak/Dockerfile`** that bakes `kc.sh build --db=postgres` and the `boatapp-fun` login theme on top of the same upstream tag. The `KEYCLOAK_VERSION` ARG in the Dockerfile is the single source of truth (also referenced by `docker-compose.yml`). Web App runs `start --optimized` with `KC_HOSTNAME` / `KC_PROXY_HEADERS` set at runtime; `KC_DB` / `KC_HEALTH_ENABLED` / `KC_METRICS_ENABLED` are baked at build time. |
 | Keycloak config | **Single YAML** at `infra/keycloak/realm.yaml` (keycloak-config-cli format, env placeholders). Applied by `adorsys/keycloak-config-cli:latest-26.6.1` in all envs: compose sidecar locally, Ansible `docker_container` task in staging/prod. No `community.general.keycloak_*` modules, no `--import-realm`. |
 | Security build gates | **SAST**: `spotbugs-maven-plugin:4.9.8.3` + `findsecbugs-plugin:1.14.0` on `verify` (SECURITY-only filter, excludes generated code). **SBOM**: `cyclonedx-maven-plugin:2.9.1` on `package` → `target/bom.json`+`bom.xml`. **SCA (CI)**: `google/osv-scanner-action@v2.3.5`, fail on HIGH+CRITICAL. **SCA (local)**: `osv` Maven profile via `exec-maven-plugin` — PATH-resolved (`./mvnw -Posv verify` runs whatever `osv-scanner` is on PATH; not version-pinned). **Governance**: `dependency-track-maven-plugin:1.11.0` uploads BOM on `deploy` (skip=true by default; CI overrides `-Ddtrack.skip=false`). |
 | Pipeline hardening (phase 4b) | **SLSA Build L3 provenance** + **cosign keyless signing** (Sigstore Rekor) on every BFF/BS image. **Trivy** image scan blocks on HIGH+CRITICAL with fix available (`ignore-unfixed=true`). **CodeQL** (`java-kotlin` + `javascript-typescript`) weekly + on PR; **Semgrep OSS fallback** for private-without-GHAS. **gitleaks** secret scan on every push/PR with `.gitleaks.toml` allowlist. **Terraform plan-as-artifact**: `plan` job uploads `tfplan.binary`; `apply` job downloads + applies verbatim across the environment-approval gate (no re-plan in `apply`). **Dependency-Track is a gate**, not just a receipt — pre-deploy poll on FAIL-severity violations via `.github/actions/dtrack-gate/`. **All `uses:` SHA-pinned** with trailing tag comment so Dependabot can still bump them. **Concurrency groups** on deploy workflows (`cancel-in-progress=false` — never cancel a half-applied terraform). **Branch protection** declared in `.github/settings.yml`, applied idempotently by `apply_branch_protection()` in `00d-bootstrap-azure.sh`. **Dependabot** on github-actions + `bff/` Maven + `business-service/` Maven + `frontend/` npm. |
@@ -83,30 +83,59 @@ bff/
     └── config/                    BeanConfig (RestClient with Bearer interceptor)
 ```
 
-### Business Service (`business-service/src/main/java/ch/owt/boatapp/`)
+### Business Service — four-module Maven reactor
+
+`business-service/` is a parent POM (packaging=pom) with four submodules.
+The Maven graph physically prevents domain from depending on Spring/Jakarta
+(those JARs aren't on the domain jar's classpath). Java packages are stable
+across the split — only the jar boundary changes.
 
 ```
-business-service/
-├── domain/                        ← PURE JAVA (ArchUnit enforced: NO Spring/Jakarta)
-│   ├── model/                     Boat, AppUser, BoatAudit, BoatId, UserId, PageResult
-│   ├── port/
-│   │   ├── in/                    ManageBoatsUseCase, GetUserUseCase + Command/Query records
-│   │   └── out/                   BoatRepositoryPort, AppUserRepositoryPort, ...
-│   └── service/                   BoatDomainService, UserDomainService
-├── adapter/
-│   ├── in/web/                    ← Spring @RestController — JWT resource server
-│   │   ├── BoatController         (implements BusinessServiceApi)
-│   │   ├── generated/             (BusinessServiceApi interface, openapi-generator output)
-│   │   ├── dto/generated/         (DTOs, openapi-generator output — do not edit)
-│   │   └── mapper/                (web ↔ domain)
-│   └── out/persistence/           ← Spring Data JPA (implements domain.port.out)
-│       ├── entity/                JPA @Entity (separate from domain model)
-│       ├── mapper/                (JPA entity ↔ domain record — hand-written @Component)
-│       └── repository/            JpaRepository + RepositoryAdapter
-└── infrastructure/
-    ├── config/                    BeanConfig (wires pure-Java domain beans)
-    ├── security/                  ResourceServerSecurityConfig (JWT), DevSecurityConfig (permitAll)
-    └── service/                   BoatApplicationService (@Service @Transactional bridge layer)
+business-service/                  ← parent POM (packaging=pom)
+│
+├── domain/                        ← business-service-domain (pure Java jar, ZERO Spring deps)
+│   └── src/main/java/ch/owt/boatapp/domain/
+│       ├── model/                 Boat, AppUser, BoatAudit, BoatId, UserId, PageResult
+│       ├── exception/             BoatNotFoundException, ConcurrentModificationException, ValidationFailureException
+│       └── service/validation/    SyntacticValidator, SemanticValidator (pure Java)
+│
+├── application/                   ← business-service-application (depends on domain + spring-context + spring-tx)
+│   └── src/main/java/ch/owt/boatapp/application/
+│       ├── port/in/               ManageBoatsUseCase, GetUserUseCase + Command/Query records
+│       ├── port/out/              BoatRepositoryPort, AppUserRepositoryPort, BoatAuditRepositoryPort
+│       └── service/               BoatApplicationService (@Service @Transactional bridge),
+│                                  BoatDomainService, UserDomainService (pure Java, wired by BeanConfig)
+│
+├── infrastructure/                ← business-service-infrastructure (Spring web/JPA/security)
+│   └── src/main/
+│       ├── java/ch/owt/boatapp/
+│       │   ├── adapter/in/web/    Spring @RestController — JWT resource server
+│       │   │   ├── BoatController              (implements BusinessServiceApi)
+│       │   │   ├── generated/                  (openapi-generator output)
+│       │   │   ├── dto/generated/              (DTOs, openapi-generator output — do not edit)
+│       │   │   └── mapper/                     (web ↔ domain)
+│       │   ├── adapter/out/persistence/        Spring Data JPA (implements application.port.out)
+│       │   │   ├── entity/                     JPA @Entity (separate from domain model)
+│       │   │   ├── mapper/                     (JPA entity ↔ domain record — hand-written @Component)
+│       │   │   └── repository/                 JpaRepository + RepositoryAdapter
+│       │   └── infrastructure/
+│       │       ├── config/                     BeanConfig (wires pure-Java application services as beans)
+│       │       └── security/                   ResourceServerSecurityConfig (JWT), DevSecurityConfig
+│       └── resources/
+│           ├── db/changelog/                   Liquibase migrations
+│           └── messages.properties             i18n source
+│
+└── bootstrap/                     ← business-service-bootstrap (runnable jar, finalName=business-service)
+    └── src/
+        ├── main/
+        │   ├── java/ch/owt/boatapp/BusinessServiceApplication.java   @SpringBootApplication(scanBasePackages = "ch.owt.boatapp")
+        │   └── resources/application*.yml      shared + per-profile config
+        └── test/
+            ├── java/ch/owt/boatapp/
+            │   ├── architecture/               ArchUnit tests (whole-graph view)
+            │   ├── integration/                @SpringBootTest + Testcontainers
+            │   └── support/                    JwtTestSupport, TestcontainersConfiguration
+            └── resources/application.yml       test-profile config
 ```
 
 ## 4 Environments

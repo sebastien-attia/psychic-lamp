@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { XMarkIcon } from '@heroicons/vue/24/outline'
 import { useI18n } from 'vue-i18n'
-import { useToast } from '../composables/useToast'
+import { useToast, type ToastEntry } from '../composables/useToast'
 
 /**
  * Fixed top-right toast stack rendering every entry from the
@@ -13,6 +13,22 @@ import { useToast } from '../composables/useToast'
  */
 const { toasts, dismissToast } = useToast()
 const { t } = useI18n()
+
+/**
+ * Resolve the per-kind class set: a 4 px left border in the brand
+ * accent colour (Brique for errors, Olive for success, Bleu for info)
+ * over neutral surface colours so the message text stays readable in
+ * both light and dark mode.
+ */
+function classesFor(kind: ToastEntry['kind']): string {
+  if (kind === 'error') {
+    return 'border-l-4 border-brique-500 bg-brique-50 text-brique-900 ring-brique-200 dark:bg-brique-900/40 dark:text-brique-100 dark:ring-brique-800'
+  }
+  if (kind === 'success') {
+    return 'border-l-4 border-olive-500 bg-white text-slate-900 ring-olive-200 dark:bg-slate-800 dark:text-slate-100 dark:ring-olive-800/60'
+  }
+  return 'border-l-4 border-bleu-500 bg-white text-slate-900 ring-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700'
+}
 </script>
 
 <template>
@@ -32,17 +48,14 @@ const { t } = useI18n()
         v-for="toast in toasts"
         :key="toast.id"
         :class="[
-          'pointer-events-auto flex w-full max-w-sm items-start gap-3 rounded-md px-4 py-3 text-sm shadow-lg ring-1',
-          toast.kind === 'error'
-            ? 'bg-red-50 text-red-900 ring-red-200 dark:bg-red-900/40 dark:text-red-100 dark:ring-red-800'
-            : 'bg-white text-slate-900 ring-slate-200 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700',
+          'pointer-events-auto flex w-[calc(100vw-2rem)] max-w-sm items-start gap-3 rounded-md px-4 py-3 text-sm shadow-lg ring-1',
+          classesFor(toast.kind),
         ]"
-        role="status"
       >
         <p class="flex-1">{{ toast.message }}</p>
         <button
           type="button"
-          class="-m-1 rounded p-1 text-slate-500 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-nautical-500 dark:text-slate-300 dark:hover:text-slate-100"
+          class="-m-1 rounded p-1 text-slate-500 hover:text-slate-700 focus:outline-none focus:ring-2 focus:ring-bleu-500 dark:text-slate-300 dark:hover:text-slate-100"
           :aria-label="t('actions.dismiss')"
           @click="dismissToast(toast.id)"
         >

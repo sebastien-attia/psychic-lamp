@@ -91,7 +91,7 @@ async function confirmDelete(): Promise<void> {
     </h1>
     <RouterLink
       to="/boats"
-      class="mt-4 inline-block text-nautical-600 hover:underline dark:text-nautical-300"
+      class="mt-4 inline-block text-bleu-600 hover:underline dark:text-bleu-300"
     >
       {{ t('nav.boats') }}
     </RouterLink>
@@ -104,7 +104,7 @@ async function confirmDelete(): Promise<void> {
     >
       <RouterLink
         to="/boats"
-        class="hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-nautical-500"
+        class="hover:underline focus:outline-none focus-visible:ring-2 focus-visible:ring-bleu-500"
       >
         {{ t('nav.boats') }}
       </RouterLink>
@@ -136,13 +136,13 @@ async function confirmDelete(): Promise<void> {
         <div class="flex flex-col gap-2 sm:flex-row">
           <RouterLink
             :to="{ name: 'boats.edit', params: { id: boat.id } }"
-            class="inline-flex w-full items-center justify-center rounded-md bg-nautical-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-nautical-700 sm:w-auto"
+            class="inline-flex min-h-[44px] w-full items-center justify-center rounded-md bg-bleu-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-bleu-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bleu-600 sm:w-auto"
           >
             {{ t('boats.detail.edit') }}
           </RouterLink>
           <button
             type="button"
-            class="inline-flex w-full items-center justify-center rounded-md border border-red-300 px-4 py-2.5 text-sm font-medium text-red-700 hover:bg-red-50 sm:w-auto dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30"
+            class="inline-flex min-h-[44px] w-full items-center justify-center rounded-md border border-brique-300 px-4 py-2.5 text-sm font-medium text-brique-700 hover:bg-brique-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brique-500 sm:w-auto dark:border-brique-700 dark:text-brique-300 dark:hover:bg-brique-900/30"
             @click="dialogOpen = true"
           >
             {{ t('boats.detail.delete') }}

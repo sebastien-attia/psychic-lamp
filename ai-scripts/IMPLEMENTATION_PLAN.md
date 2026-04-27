@@ -115,10 +115,10 @@ Local-intg (full stack):
 > appears (`fail` aborts unless `FORCE=1`). Both lists are surfaced in the
 > yellow checkpoint box `run-phase.sh` prints after each phase.
 
-- **02a2**: `grep -r "org.springframework" business-service/src/main/java/ch/owt/boatapp/domain/` returns NOTHING
-- **02a5 Business Service**: `cd business-service && ./mvnw verify` — all green, jwt() auth, no Keycloak container
+- **02a2**: `grep -r "org.springframework" business-service/domain/src/main/java/ch/owt/boatapp/domain/` returns NOTHING (Maven graph also makes the import a compile error — domain.jar has no Spring deps on its classpath)
+- **02a5 Business Service**: `cd business-service && ./mvnw verify` — reactor builds 4 submodules (domain → application → infrastructure → bootstrap), all green, jwt() auth, no Keycloak container
 - **02a5 BFF**: `cd bff && ./mvnw verify` — all green, Keycloak + WireMock containers
-- **02a6 Security gates**: `cd bff && ./mvnw verify` runs SpotBugs+FindSecBugs (SECURITY category only) to green; `cd bff && ./mvnw package` emits `target/bom.json` (CycloneDX). Same for `business-service`. Dependency-Track upload skipped locally (`dtrack.skip=true`); enabled in staging/prod CI only.
+- **02a6 Security gates**: `cd bff && ./mvnw verify` runs SpotBugs+FindSecBugs (SECURITY category only) to green; `cd bff && ./mvnw package` emits `target/bom.json` (CycloneDX). Same for `business-service`, but the aggregate BOM lives at `business-service/bootstrap/target/bom.json` (cyclonedx makeAggregateBom runs only in the bootstrap submodule). Dependency-Track upload skipped locally (`dtrack.skip=true`); enabled in staging/prod CI only.
 - **02a4**: `docker compose -f docker-compose.dev.yml up && curl http://localhost:8081/api/v1/boats` → 200 without auth
 - **3**: `docker compose up` → login demo/demo123 → BFF → Business Service → CRUD works; `npx playwright test` ALL green
 - **4b Image signatures**: `cosign verify --certificate-identity-regexp 'https://github\.com/<org>/<repo>/\.github/workflows/deploy-staging\.yml@.*' --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' ${ACR}.azurecr.io/bff@sha256:<digest>` → "Verified OK" + Rekor entry

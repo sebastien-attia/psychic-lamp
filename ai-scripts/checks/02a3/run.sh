@@ -15,7 +15,7 @@ for svc in bff business-service; do
 done
 
 # ── Controllers implement generated API interfaces ──────────────────────────
-if grep -rq 'implements BusinessServiceApi' business-service/src/main/java/ 2>/dev/null; then
+if grep -rq 'implements BusinessServiceApi' business-service/*/src/main/java/ 2>/dev/null; then
   pass "business-service controller implements BusinessServiceApi (generated)"
 else
   fail "business-service controller does NOT implement BusinessServiceApi — signatures may drift from spec"
@@ -30,8 +30,8 @@ else
 fi
 
 # No hand-written dto package in business-service (should be generated)
-if [ -d business-service/src/main/java ]; then
-  hand_dto="$(find business-service/src/main/java -type d -path '*/adapter/in/web/dto' -not -path '*generated*' 2>/dev/null)"
+if [ -d business-service/*/src/main/java ]; then
+  hand_dto="$(find business-service/*/src/main/java -type d -path '*/adapter/in/web/dto' -not -path '*generated*' 2>/dev/null)"
   if [ -n "${hand_dto}" ]; then
     warn "hand-written dto/ package in ${hand_dto} — prefer dto.generated/ exclusively"
   else
@@ -40,19 +40,19 @@ if [ -d business-service/src/main/java ]; then
 fi
 
 # ── ETag + 409 Conflict + audit logic present ──────────────────────────────
-if grep -rqE '[Ee][Tt]ag|If-Match' business-service/src/main/java/ 2>/dev/null; then
+if grep -rqE '[Ee][Tt]ag|If-Match' business-service/*/src/main/java/ 2>/dev/null; then
   pass "business-service references ETag / If-Match in code"
 else
   fail "business-service has no ETag / If-Match handling"
 fi
 
-if grep -rqE 'HttpStatus\.CONFLICT|409' business-service/src/main/java/ 2>/dev/null; then
+if grep -rqE 'HttpStatus\.CONFLICT|409' business-service/*/src/main/java/ 2>/dev/null; then
   pass "business-service references 409 Conflict"
 else
   fail "business-service does not handle 409 Conflict"
 fi
 
-if grep -rqE 'BoatAudit|audit' business-service/src/main/java/ 2>/dev/null; then
+if grep -rqE 'BoatAudit|audit' business-service/*/src/main/java/ 2>/dev/null; then
   pass "business-service references audit logic"
 else
   fail "business-service does not reference audit logic"
@@ -88,18 +88,30 @@ done
 # handlers, ProblemTypes URI registry, JakartaCodeTranslator, messages.properties,
 # and use Spring's ProblemDetail with populated type + instance.
 for svc in business-service bff; do
-  SRC="${svc}/src/main/java"
-  [ -d "${SRC}" ] || { warn "${svc}: src/main/java missing — skipping validation checks"; continue; }
+  # Multi-module business-service: source is split across the four submodules.
+  if [ "${svc}" = "business-service" ]; then
+    src_roots=(business-service/*/src/main/java)
+    messages_path="business-service/infrastructure/src/main/resources/messages.properties"
+  else
+    src_roots=("${svc}/src/main/java")
+    messages_path="${svc}/src/main/resources/messages.properties"
+  fi
+  filtered=()
+  for r in "${src_roots[@]}"; do [ -d "${r}" ] && filtered+=("${r}"); done
+  if [ ${#filtered[@]} -eq 0 ]; then
+    warn "${svc}: no src/main/java roots — skipping validation checks"
+    continue
+  fi
 
   # @Valid in at least one controller
-  if grep -rqE '@Valid\b' "${SRC}" 2>/dev/null; then
+  if grep -rqE '@Valid\b' "${filtered[@]}" 2>/dev/null; then
     pass "${svc}: @Valid present in controllers (syntactic validation at REST adapter)"
   else
     fail "${svc}: no @Valid found — Bean Validation is not wired; syntactic errors will not produce 400"
   fi
 
   # @Validated on at least one controller (for @PathVariable / @RequestParam)
-  if grep -rqE '@Validated\b' "${SRC}" 2>/dev/null; then
+  if grep -rqE '@Validated\b' "${filtered[@]}" 2>/dev/null; then
     pass "${svc}: @Validated present (path/query param constraints)"
   else
     warn "${svc}: no @Validated found — path/query-param constraints will silently not fire"
@@ -107,7 +119,7 @@ for svc in business-service bff; do
 
   # Handlers for Bean Validation exceptions
   for exc in MethodArgumentNotValidException ConstraintViolationException HttpMessageNotReadableException; do
-    if grep -rq "${exc}" "${SRC}" 2>/dev/null; then
+    if grep -rq "${exc}" "${filtered[@]}" 2>/dev/null; then
       pass "${svc}: GlobalExceptionHandler references ${exc}"
     else
       fail "${svc}: ${exc} handler missing — RFC 9457 400 responses will not be emitted"
@@ -115,46 +127,46 @@ for svc in business-service bff; do
   done
 
   # ProblemTypes URI constants + JakartaCodeTranslator
-  if grep -rq 'class ProblemTypes' "${SRC}" 2>/dev/null; then
+  if grep -rq 'class ProblemTypes' "${filtered[@]}" 2>/dev/null; then
     pass "${svc}: ProblemTypes URI constants class present"
   else
     fail "${svc}: ProblemTypes.java missing — handlers must reference registry URIs, not hand-written strings"
   fi
-  if grep -rq 'JakartaCodeTranslator' "${SRC}" 2>/dev/null; then
+  if grep -rq 'JakartaCodeTranslator' "${filtered[@]}" 2>/dev/null; then
     pass "${svc}: JakartaCodeTranslator present (no Jakarta constraint names on the wire)"
   else
     fail "${svc}: JakartaCodeTranslator.java missing — Jakarta constraint names will leak as error codes"
   fi
 
   # Handlers populate RFC 9457 type + instance (Spring ProblemDetail setters)
-  if grep -rqE '\.setType\s*\(' "${SRC}" 2>/dev/null; then
+  if grep -rqE '\.setType\s*\(' "${filtered[@]}" 2>/dev/null; then
     pass "${svc}: handlers call .setType(...) (RFC 9457 type URI)"
   else
     fail "${svc}: no .setType(...) calls — ProblemDetail.type will fall back to about:blank"
   fi
-  if grep -rqE '\.setInstance\s*\(' "${SRC}" 2>/dev/null; then
+  if grep -rqE '\.setInstance\s*\(' "${filtered[@]}" 2>/dev/null; then
     pass "${svc}: handlers call .setInstance(...) (RFC 9457 instance URI)"
   else
     fail "${svc}: no .setInstance(...) calls — ProblemDetail.instance will be empty"
   fi
 
   # about:blank must NOT appear in handler source (dead giveaway of a missed setType)
-  if grep -rqE '"about:blank"' "${SRC}" 2>/dev/null; then
+  if grep -rqE '"about:blank"' "${filtered[@]}" 2>/dev/null; then
     fail "${svc}: about:blank literal in source — must always be a registry URI"
   else
     pass "${svc}: no about:blank literal in source"
   fi
 
-  # messages.properties present
-  if [ -f "${svc}/src/main/resources/messages.properties" ]; then
+  # messages.properties present (in infrastructure submodule for business-service)
+  if [ -f "${messages_path}" ]; then
     pass "${svc}: messages.properties present (i18n source)"
   else
-    fail "${svc}: messages.properties missing — handlers have no localizable message source"
+    fail "${svc}: messages.properties missing at ${messages_path}"
   fi
 done
 
 # ── ValidationErrorResponse must be gone (unified ProblemDetail shape) ──────
-if grep -rq 'ValidationErrorResponse' bff/src/main/java business-service/src/main/java 2>/dev/null; then
+if grep -rq 'ValidationErrorResponse' bff/src/main/java business-service/*/src/main/java 2>/dev/null; then
   fail "ValidationErrorResponse still referenced in hand-written code — RFC 9457 replaces it with ProblemDetail.messages"
 else
   pass "ValidationErrorResponse not referenced in hand-written code (unified shape)"

@@ -4,6 +4,11 @@ import { RouterLink } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { PencilSquareIcon, TrashIcon } from '@heroicons/vue/24/outline'
 import { useNow } from '../../composables/useNow'
+import {
+  classesFor as monogramClasses,
+  colorFor as monogramColor,
+  initials as monogramInitials,
+} from '../../utils/monogram'
 import type { BoatResponse } from '../../services/api-client/generated/models'
 
 /**
@@ -75,13 +80,36 @@ const relativeCreatedAt = computed(() => {
 
   return t('boats.card.createdRelative', { relative })
 })
+
+/**
+ * One- or two-letter uppercase monogram derived from the boat name.
+ * Empty for blank/whitespace-only names — the template hides the
+ * avatar when the string is empty so we never render an empty pill.
+ */
+const initials = computed(() => monogramInitials(props.boat.name))
+
+/**
+ * Tailwind class set for the monogram tile, picked deterministically
+ * from the brand ramps so reloads don't change a boat's avatar colour.
+ */
+const monogramClass = computed(() => monogramClasses(monogramColor(props.boat.name)))
 </script>
 
 <template>
   <article
-    class="relative flex flex-col rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-nautical-300 hover:shadow-md focus-within:ring-2 focus-within:ring-nautical-500 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-nautical-400"
+    class="relative flex flex-col rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-bleu-300 hover:shadow-md focus-within:ring-2 focus-within:ring-bleu-500 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-bleu-400"
   >
-    <div class="flex items-start justify-between gap-2">
+    <div class="flex items-start gap-3">
+      <span
+        v-if="initials"
+        :class="[
+          'inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md text-sm font-semibold tracking-wide shadow-sm',
+          monogramClass,
+        ]"
+        aria-hidden="true"
+      >
+        {{ initials }}
+      </span>
       <h2 class="min-w-0 flex-1 text-lg font-semibold text-slate-900 dark:text-slate-100">
         <RouterLink
           :to="{ name: 'boats.detail', params: { id: boat.id } }"
@@ -95,7 +123,7 @@ const relativeCreatedAt = computed(() => {
         <button
           type="button"
           :aria-label="t('boats.card.edit')"
-          class="rounded-md p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-nautical-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-nautical-500 dark:hover:bg-slate-700 dark:hover:text-nautical-300"
+          class="inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-bleu-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bleu-500 dark:hover:bg-slate-700 dark:hover:text-bleu-300"
           @click="$emit('edit', boat)"
         >
           <PencilSquareIcon class="h-5 w-5" aria-hidden="true" />
@@ -103,7 +131,7 @@ const relativeCreatedAt = computed(() => {
         <button
           type="button"
           :aria-label="t('boats.card.delete')"
-          class="rounded-md p-1.5 text-slate-400 transition hover:bg-red-50 hover:text-red-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-500 dark:hover:bg-red-900/40 dark:hover:text-red-300"
+          class="inline-flex h-11 w-11 items-center justify-center rounded-md text-slate-400 transition hover:bg-brique-50 hover:text-brique-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brique-500 dark:hover:bg-brique-900/40 dark:hover:text-brique-300"
           @click="$emit('delete', boat)"
         >
           <TrashIcon class="h-5 w-5" aria-hidden="true" />

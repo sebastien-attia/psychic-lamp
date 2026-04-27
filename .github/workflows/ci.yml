@@ -20,7 +20,10 @@
 #                           + WireMock + SpotBugs+FindSecBugs SAST), then
 #                           `./mvnw package` to emit target/bom.{json,xml}.
 #   build-business-service  Same shape for business-service (Testcontainers
-#                           Postgres + ArchUnit + SAST + SBOM).
+#                           Postgres + ArchUnit + SAST + SBOM). The reactor
+#                           is split across four submodules; the aggregate
+#                           CycloneDX BOM is emitted by the `bootstrap`
+#                           submodule only (one runtime artifact = one SBOM).
 #   build-frontend          `npm run type-check && npm run test && npm run
 #                           build`. Vitest + vue-tsc.
 #   docker-build            Sanity-build both Dockerfiles end-to-end on the
@@ -148,19 +151,26 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: business-service-test-reports
+          # Multi-module reactor: each submodule (domain/application/
+          # infrastructure/bootstrap) writes its own target/. The parent
+          # POM has packaging=pom and emits no target/, so we glob across
+          # submodules.
           path: |
-            business-service/target/surefire-reports/
-            business-service/target/failsafe-reports/
-            business-service/target/site/jacoco/
-            business-service/target/spotbugsXml.xml
+            business-service/*/target/surefire-reports/
+            business-service/*/target/failsafe-reports/
+            business-service/*/target/site/jacoco/
+            business-service/*/target/spotbugsXml.xml
           if-no-files-found: ignore
       - name: Upload business-service CycloneDX SBOM
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: business-service-sbom
+          # CycloneDX makeAggregateBom runs only in the bootstrap submodule
+          # (one runtime artifact = one aggregate SBOM covering the whole
+          # reactor). Parent POM has packaging=pom — no target/ there.
           path: |
-            business-service/target/bom.json
-            business-service/target/bom.xml
+            business-service/bootstrap/target/bom.json
+            business-service/bootstrap/target/bom.xml
           if-no-files-found: error
 
   build-frontend:

@@ -346,7 +346,7 @@
       skips discovery, and generate an ephemeral RSA key in the test itself so
       `BffConfig.bffSigningJwk()` can read a real PEM.
 
-      **Create `business-service/src/test/resources/application.yml`**:
+      **Create `business-service/bootstrap/src/test/resources/application.yml`**:
       ```yaml
       spring:
         security:
@@ -449,7 +449,7 @@
         - BFF: user logs in via oauth2Login → session cookie set → access_token stored in session
         - BFF calls Business Service: attaches Bearer access_token header via RestClient interceptor
         - Business Service: validates JWT → extracts sub claim → syncs AppUser → processes request
-      Both flows go through the same domain.port.in interfaces in Business Service.
+      Both flows go through the same application.port.in interfaces in Business Service.
     </step>
 
     <step order="10">

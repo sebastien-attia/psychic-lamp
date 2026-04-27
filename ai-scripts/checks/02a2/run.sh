@@ -15,39 +15,48 @@ for svc in bff business-service; do
 done
 
 # ── Security of architecture: domain must be pure Java ──────────────────────
-domain_dir="business-service/src/main/java"
-if [ -d "${domain_dir}" ]; then
-  # Check domain.model and domain.port.* for no Spring/Jakarta/JPA imports
+# Multi-module: domain code is in business-service/domain/, application
+# port interfaces are in business-service/application/port/{in,out}/,
+# adapters are in business-service/infrastructure/.
+domain_module_src="business-service/domain/src/main/java"
+application_module_src="business-service/application/src/main/java"
+infrastructure_module_src="business-service/infrastructure/src/main/java"
+if [ -d "${domain_module_src}" ]; then
+  # The Maven graph already prevents Spring/Jakarta on domain's classpath;
+  # this grep is defense-in-depth against in-progress edits before `mvn compile`.
   violations="$(grep -rEn 'import (org\.springframework|jakarta\.persistence|jakarta\.validation)' \
-                  "${domain_dir}"/ch*/*/domain/model \
-                  "${domain_dir}"/ch*/*/domain/port \
+                  "${domain_module_src}" \
+                  "${application_module_src}/ch/owt/boatapp/application/port" \
                   2>/dev/null || true)"
   if [ -z "${violations}" ]; then
-    pass "business-service domain is pure Java (no Spring/Jakarta imports)"
+    pass "business-service domain + application.port are pure Java (no Spring/Jakarta imports)"
   else
-    fail "business-service domain has Spring/Jakarta imports:"
+    fail "business-service domain/application.port has Spring/Jakarta imports:"
     printf '%s\n' "${violations}" | sed 's/^/      /'
   fi
 
-  # JPA entities must live in adapter.out.persistence, NOT domain.model
-  if grep -rq '@Entity' "${domain_dir}"/ch*/*/domain/model 2>/dev/null; then
+  # JPA entities must live in adapter.out.persistence (infrastructure module),
+  # NEVER in domain.model.
+  if grep -rq '@Entity' "${domain_module_src}"/ch/owt/boatapp/domain/model 2>/dev/null; then
     fail "@Entity annotation found in domain.model — must live in adapter.out.persistence"
   else
     pass "@Entity not in domain.model"
   fi
-  if find "${domain_dir}" -type d -path '*/adapter/out/persistence*' 2>/dev/null | grep -q .; then
-    if grep -rq '@Entity' "${domain_dir}"/ch*/*/adapter/out/persistence 2>/dev/null; then
+  if find "${infrastructure_module_src}" -type d -path '*/adapter/out/persistence*' 2>/dev/null | grep -q .; then
+    if grep -rq '@Entity' "${infrastructure_module_src}"/ch/owt/boatapp/adapter/out/persistence 2>/dev/null; then
       pass "JPA @Entity classes in adapter.out.persistence"
     else
       warn "adapter.out.persistence exists but no @Entity classes found"
     fi
   fi
 else
-  fail "business-service/src/main/java not found"
+  fail "${domain_module_src} not found"
 fi
 
 # ── Liquibase migrations ────────────────────────────────────────────────────
-cl_dir="business-service/src/main/resources/db/changelog"
+# After the multi-module split the changelog rides with the JPA adapter
+# (infrastructure submodule).
+cl_dir="business-service/infrastructure/src/main/resources/db/changelog"
 if [ -d "${cl_dir}" ]; then
   pass "liquibase changelog directory present"
   master=""
@@ -80,10 +89,12 @@ else
 fi
 
 # ── Liquibase dependency in pom ─────────────────────────────────────────────
-if grep -q 'liquibase-core' business-service/pom.xml 2>/dev/null; then
-  pass "liquibase-core declared in business-service/pom.xml"
+# Business Service: liquibase-core lives in the infrastructure submodule pom
+# (alongside the JPA adapter). BFF: still single-module.
+if grep -q 'liquibase-core' business-service/infrastructure/pom.xml 2>/dev/null; then
+  pass "liquibase-core declared in business-service/infrastructure/pom.xml"
 else
-  fail "liquibase-core dependency missing in business-service/pom.xml"
+  fail "liquibase-core dependency missing in business-service/infrastructure/pom.xml"
 fi
 if grep -q 'liquibase-core' bff/pom.xml 2>/dev/null; then
   pass "liquibase-core declared in bff/pom.xml"
@@ -114,7 +125,7 @@ else
 fi
 
 # ── SPRING_SESSION must NOT live under business-service (ownership moved) ───
-if grep -riq 'spring_session' business-service/src/main/resources/db/changelog 2>/dev/null; then
+if grep -riq 'spring_session' "${cl_dir}" 2>/dev/null; then
   fail "SPRING_SESSION tables found in business-service changelog — must live in BFF (bff_session DB)"
 else
   pass "business-service changelog does not contain SPRING_SESSION (correct: BFF-owned)"

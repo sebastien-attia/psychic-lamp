@@ -20,8 +20,15 @@ for svc in bff business-service; do
 done
 
 # ── ArchUnit tests exist ────────────────────────────────────────────────────
+# BFF stays single-module; business-service is multi-module (4 submodules)
+# and the ArchUnit test lives in the bootstrap submodule (whole-graph view).
 for svc in bff business-service; do
-  if find "${svc}/src/test/java" -name '*ArchitectureTest.java' 2>/dev/null | grep -q .; then
+  if [ "${svc}" = "business-service" ]; then
+    test_dirs=(business-service/*/src/test/java)
+  else
+    test_dirs=("${svc}/src/test/java")
+  fi
+  if find "${test_dirs[@]}" -name '*ArchitectureTest.java' 2>/dev/null | grep -q .; then
     pass "${svc}: ArchUnit test present"
   else
     fail "${svc}: no *ArchitectureTest.java found"
@@ -30,14 +37,14 @@ done
 
 # ── Testcontainers usage ───────────────────────────────────────────────────
 if grep -rq '@Testcontainers\|PostgreSQLContainer\|KeycloakContainer' \
-     business-service/src/test/java bff/src/test/java 2>/dev/null; then
+     business-service/*/src/test/java bff/src/test/java 2>/dev/null; then
   pass "Testcontainers used for integration tests"
 else
   warn "no Testcontainers references in test sources"
 fi
 
 # Business-service tests should use jwt() post-processor (no real Keycloak)
-if grep -rq 'jwt()' business-service/src/test/java 2>/dev/null; then
+if grep -rq 'jwt()' business-service/*/src/test/java 2>/dev/null; then
   pass "business-service tests use jwt() post-processor (no real Keycloak needed)"
 else
   warn "business-service tests may start real Keycloak — prefer jwt() post-processor"
@@ -53,7 +60,7 @@ fi
 # ── Observability: testcontainer cleanup (heuristic) ────────────────────────
 # Check there's no testcontainers.reuse=true leaking long-lived containers unintentionally
 # This is a soft heuristic; we just info it.
-if grep -rq 'withReuse(true)' business-service/src/test/java bff/src/test/java 2>/dev/null; then
+if grep -rq 'withReuse(true)' business-service/*/src/test/java bff/src/test/java 2>/dev/null; then
   info "Testcontainers reuse enabled — make sure TC_REUSABLE is set in .testcontainers.properties for dev"
 fi
 
@@ -67,13 +74,24 @@ for svc in bff business-service; do
 done
 
 # ── RFC 9457 / unified validation test coverage ─────────────────────────────
+# Multi-module: business-service tests are split across 4 submodules; BFF
+# stays single-module. Use a bash array of search roots in both cases.
 for svc in bff business-service; do
-  TST="${svc}/src/test/java"
-  [ -d "${TST}" ] || continue
+  if [ "${svc}" = "business-service" ]; then
+    tst_roots=(business-service/*/src/test/java)
+  else
+    tst_roots=("${svc}/src/test/java")
+  fi
+  # Drop any non-existent roots so grep -r doesn't print warnings.
+  filtered=()
+  for r in "${tst_roots[@]}"; do
+    [ -d "${r}" ] && filtered+=("${r}")
+  done
+  [ ${#filtered[@]} -eq 0 ] && continue
 
   # ArchUnit rule blocking jakarta.validation in domain (business-service only; BFF has no domain)
   if [ "${svc}" = "business-service" ]; then
-    if grep -rqE 'domain_must_not_import_jakarta_validation|jakarta\.validation\.\.' "${TST}" 2>/dev/null; then
+    if grep -rqE 'domain_must_not_import_jakarta_validation|jakarta\.validation\.\.' "${filtered[@]}" 2>/dev/null; then
       pass "${svc}: ArchUnit rule forbids jakarta.validation in domain"
     else
       fail "${svc}: missing ArchUnit rule forbidding jakarta.validation in domain"
@@ -81,17 +99,17 @@ for svc in bff business-service; do
   fi
 
   # Tests must assert the RFC 9457 envelope (populated type + Content-Language)
-  if grep -rqE 'application/problem\+json' "${TST}" 2>/dev/null; then
+  if grep -rqE 'application/problem\+json' "${filtered[@]}" 2>/dev/null; then
     pass "${svc}: tests assert application/problem+json"
   else
     fail "${svc}: no test asserts application/problem+json — RFC 9457 envelope unverified"
   fi
-  if grep -rqE '[Cc]ontent-[Ll]anguage' "${TST}" 2>/dev/null; then
+  if grep -rqE '[Cc]ontent-[Ll]anguage' "${filtered[@]}" 2>/dev/null; then
     pass "${svc}: tests assert Content-Language header"
   else
     fail "${svc}: no test asserts Content-Language header"
   fi
-  if grep -rqE 'boatapp\.owt\.ch/problems/validation' "${TST}" 2>/dev/null; then
+  if grep -rqE 'boatapp\.owt\.ch/problems/validation' "${filtered[@]}" 2>/dev/null; then
     pass "${svc}: tests assert problem-type URI (registry, not about:blank)"
   else
     fail "${svc}: no test asserts the problem-type URI from the registry"
@@ -99,7 +117,7 @@ for svc in bff business-service; do
 
   # Assert the three new 400 paths are exercised
   for token in 'field.required' 'field.size.invalid' 'request.body.malformed'; do
-    if grep -rqF "${token}" "${TST}" 2>/dev/null; then
+    if grep -rqF "${token}" "${filtered[@]}" 2>/dev/null; then
       pass "${svc}: test covers application code '${token}'"
     else
       fail "${svc}: no test references application code '${token}'"

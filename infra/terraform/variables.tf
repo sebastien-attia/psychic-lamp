@@ -116,9 +116,9 @@ variable "business_service_image_tag" {
 }
 
 variable "keycloak_image_tag" {
-  description = "Tag of the upstream quay.io/keycloak/keycloak image. The Keycloak Web App pulls this image directly from quay.io — no custom build, no ACR push."
+  description = "Tag of the Keycloak image to deploy (pulled from the project's ACR). The image is built from keycloak/Dockerfile and pushed by the deploy workflow alongside bff and business-service. The upstream Keycloak version is pinned in the Dockerfile's KEYCLOAK_VERSION ARG."
   type        = string
-  default     = "26.6.1"
+  default     = "latest"
 }
 
 # ── Database firewall (extra IPs) ─────────────────────────────────────────

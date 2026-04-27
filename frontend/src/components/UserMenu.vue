@@ -31,7 +31,7 @@ const fullName = computed(() => {
 <template>
   <Menu as="div" class="relative inline-block text-left">
     <MenuButton
-      class="inline-flex items-center gap-x-2 rounded-md px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-nautical-500"
+      class="inline-flex min-h-[44px] items-center gap-x-2 rounded-md px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-800 focus:outline-none focus:ring-2 focus:ring-bleu-500"
       :aria-label="t('nav.menu')"
     >
       <UserCircleIcon class="h-6 w-6" />
