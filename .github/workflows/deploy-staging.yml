@@ -38,6 +38,14 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
     secrets: inherit
+    # Reusable ci.yml's nested jobs (sca-scan, container-scan) upload SARIF
+    # to code-scanning, which needs security-events: write + actions: read.
+    # Without these, GitHub rejects the calling workflow at load time with
+    # startup_failure. See commit f1d4d33 for the original incident.
+    permissions:
+      contents: read
+      security-events: write
+      actions: read
 
   build-push:
     needs: ci
