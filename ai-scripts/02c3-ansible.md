@@ -1,3 +1,11 @@
+<!--
+  SUPERSEDED 2026-04-27: Ansible was removed from the deploy. The Keycloak
+  realm is now applied directly by the `keycloak-config` job in
+  .github/workflows/deploy-{staging,production}.yml. The `demo` seed user
+  IS imported in every environment (overriding the local-intg-only stance
+  described below) — see infra/keycloak/realm.users.demo.yaml SECURITY
+  NOTE for the rationale.
+-->
 <task>
   <project_conventions>
     Before declaring this phase done, you MUST:

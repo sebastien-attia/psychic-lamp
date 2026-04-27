@@ -24,11 +24,14 @@ import org.springframework.transaction.annotation.Transactional;
  * mutations commit (or roll back) together. The domain itself is
  * transaction-unaware.
  *
- * <p>Mutation methods translate the domain's {@link ServiceResponse} envelope
- * into either a returned domain object (success) or a thrown
- * {@link ValidationFailureException} (failure). The exception is a
- * {@link RuntimeException}, so Spring's default rollback behaviour rolls
- * back the audit row alongside the rejected boat write.
+ * <p>Mutation methods inspect the domain's {@link ServiceResponse} envelope:
+ * if it carries any {@link ch.owt.boatapp.domain.model.validation.Severity#ERROR
+ * ERROR}-severity messages they are translated into a thrown
+ * {@link ValidationFailureException}; otherwise the envelope is returned
+ * as-is so any advisory ({@code WARNING} / {@code INFO}) messages reach
+ * the controller and can be rendered on the 2xx response body. The
+ * exception is a {@link RuntimeException}, so Spring's default rollback
+ * behaviour rolls back the audit row alongside the rejected boat write.
  *
  * <p>Domain exceptions ({@code BoatNotFoundException},
  * {@code ConcurrentModificationException}) propagate as-is to the
@@ -75,16 +78,20 @@ public class BoatApplicationService {
     }
 
     /**
-     * Create a new boat. Validation failures from the domain become
-     * {@link ValidationFailureException} so the {@code @Transactional}
+     * Create a new boat. ERROR-severity validation findings from the domain
+     * become {@link ValidationFailureException} so the {@code @Transactional}
      * boundary rolls back any partial work and the global handler maps the
-     * exception to HTTP 422.
+     * exception to HTTP 422. Advisory ({@code WARNING} / {@code INFO})
+     * findings are returned as part of the success envelope so the
+     * controller can surface them in the 2xx response body.
      *
      * @param command the new boat's name, description and performer
-     * @return the persisted boat (with assigned id and initial version)
-     * @throws ValidationFailureException if the domain rejected the input
+     * @return the success envelope carrying the persisted boat plus any
+     *         advisory messages emitted by the validators
+     * @throws ValidationFailureException if the domain emitted at least one
+     *         {@code ERROR}-severity message
      */
-    public Boat createBoat(CreateBoatCommand command) {
+    public ServiceResponse<Boat> createBoat(CreateBoatCommand command) {
         ServiceResponse<Boat> response = manageBoatsUseCase.createBoat(command);
         if (response.hasErrors()) {
             log.warn("createBoat rejected: {} message(s) for performedBy={}",
@@ -92,8 +99,9 @@ public class BoatApplicationService {
             throw new ValidationFailureException(response.messages());
         }
         Boat created = response.data();
-        log.info("createBoat ok: id={} performedBy={}", created.id(), command.performedBy().value());
-        return created;
+        log.info("createBoat ok: id={} performedBy={} advisory={}",
+                created.id(), command.performedBy().value(), response.messages().size());
+        return response;
     }
 
     /**
@@ -104,10 +112,12 @@ public class BoatApplicationService {
      * domain.
      *
      * @param command the boat identifier, new fields, expected version and performer
-     * @return the updated boat (with bumped version)
-     * @throws ValidationFailureException if the domain rejected the input
+     * @return the success envelope carrying the updated boat plus any
+     *         advisory messages emitted by the validators
+     * @throws ValidationFailureException if the domain emitted at least one
+     *         {@code ERROR}-severity message
      */
-    public Boat updateBoat(UpdateBoatCommand command) {
+    public ServiceResponse<Boat> updateBoat(UpdateBoatCommand command) {
         ServiceResponse<Boat> response = manageBoatsUseCase.updateBoat(command);
         if (response.hasErrors()) {
             log.warn("updateBoat rejected: {} message(s) for id={} performedBy={}",
@@ -115,9 +125,9 @@ public class BoatApplicationService {
             throw new ValidationFailureException(response.messages());
         }
         Boat updated = response.data();
-        log.info("updateBoat ok: id={} version={} performedBy={}",
-                updated.id(), updated.version(), command.performedBy().value());
-        return updated;
+        log.info("updateBoat ok: id={} version={} performedBy={} advisory={}",
+                updated.id(), updated.version(), command.performedBy().value(), response.messages().size());
+        return response;
     }
 
     /**

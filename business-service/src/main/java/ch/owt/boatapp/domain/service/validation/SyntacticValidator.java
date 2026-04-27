@@ -28,6 +28,14 @@ public class SyntacticValidator {
     /** Maximum allowed length of {@code Boat.description}. */
     public static final int DESCRIPTION_MAX_LENGTH = 256;
 
+    /**
+     * Threshold below which a non-blank {@code Boat.name} is flagged with a
+     * {@code WARNING} (advisory, not blocking). Names of fewer than this many
+     * non-whitespace characters are persisted but accompanied by a
+     * {@link MessageType#NAME_TOO_SHORT} message.
+     */
+    public static final int NAME_SHORT_THRESHOLD = 3;
+
     private static final String FIELD_NAME = "Boat.name";
     private static final String FIELD_DESCRIPTION = "Boat.description";
 
@@ -38,12 +46,16 @@ public class SyntacticValidator {
      * <p>Rules:
      * <ul>
      *   <li>{@code name} must not be {@code null} or whitespace-only
-     *       ({@link MessageType#CANNOT_BE_BLANK}).</li>
+     *       ({@link MessageType#CANNOT_BE_BLANK}, ERROR).</li>
      *   <li>{@code name} must be at most {@value #NAME_MAX_LENGTH} characters
-     *       ({@link MessageType#SIZE_EXCEEDED}).</li>
+     *       ({@link MessageType#SIZE_EXCEEDED}, ERROR).</li>
+     *   <li>{@code name}, if non-blank and shorter than
+     *       {@value #NAME_SHORT_THRESHOLD} non-whitespace characters, is
+     *       flagged with {@link MessageType#NAME_TOO_SHORT} (WARNING). The
+     *       boat is still persisted; this is advisory.</li>
      *   <li>{@code description} (if non-null) must be at most
      *       {@value #DESCRIPTION_MAX_LENGTH} characters
-     *       ({@link MessageType#SIZE_EXCEEDED}).</li>
+     *       ({@link MessageType#SIZE_EXCEEDED}, ERROR).</li>
      * </ul>
      *
      * @param name        the proposed name
@@ -56,6 +68,10 @@ public class SyntacticValidator {
             messages.add(new ValidationMessage(Severity.ERROR, MessageType.CANNOT_BE_BLANK, FIELD_NAME));
         } else if (name.length() > NAME_MAX_LENGTH) {
             messages.add(new ValidationMessage(Severity.ERROR, MessageType.SIZE_EXCEEDED, FIELD_NAME));
+        } else if (name.trim().length() < NAME_SHORT_THRESHOLD) {
+            // Advisory: persisted with a warning so the caller can surface it
+            // as a soft hint without rejecting the request.
+            messages.add(new ValidationMessage(Severity.WARNING, MessageType.NAME_TOO_SHORT, FIELD_NAME));
         }
         if (description != null && description.length() > DESCRIPTION_MAX_LENGTH) {
             messages.add(new ValidationMessage(Severity.ERROR, MessageType.SIZE_EXCEEDED, FIELD_DESCRIPTION));

@@ -220,8 +220,14 @@ resource "azurerm_linux_web_app" "keycloak" {
     # any host header that doesn't match KC_HOSTNAME unless this is off.
     KC_HOSTNAME_STRICT = "false"
 
-    KEYCLOAK_ADMIN          = var.keycloak_admin_username
-    KEYCLOAK_ADMIN_PASSWORD = "@Microsoft.KeyVault(SecretUri=${var.keyvault_uri}secrets/keycloak-admin-password)"
+    # Bootstrap admin env keys: Keycloak 26.3+ ignores the legacy
+    # KEYCLOAK_ADMIN / KEYCLOAK_ADMIN_PASSWORD pair (silently, no warning).
+    # Use KC_BOOTSTRAP_ADMIN_USERNAME / KC_BOOTSTRAP_ADMIN_PASSWORD on every
+    # supported version. The pair is honoured only on first boot against an
+    # empty DB; on an existing DB use `bin/kc.sh bootstrap-admin user` from
+    # an SSH session into the running container.
+    KC_BOOTSTRAP_ADMIN_USERNAME = var.keycloak_admin_username
+    KC_BOOTSTRAP_ADMIN_PASSWORD = "@Microsoft.KeyVault(SecretUri=${var.keyvault_uri}secrets/keycloak-admin-password)"
   }
 
   tags = var.tags
@@ -243,7 +249,7 @@ resource "azurerm_role_assignment" "acr_pull" {
 
 # Key Vault Secrets User on the vault — required for App Service to resolve
 # @Microsoft.KeyVault references in `app_settings`. All three apps need this
-# (Keycloak pulls KC_DB_PASSWORD + KEYCLOAK_ADMIN_PASSWORD from KV).
+# (Keycloak pulls KC_DB_PASSWORD + KC_BOOTSTRAP_ADMIN_PASSWORD from KV).
 resource "azurerm_role_assignment" "kv_secrets_user" {
   for_each = {
     bff      = azurerm_linux_web_app.bff.identity[0].principal_id

@@ -116,6 +116,90 @@ class BoatControllerIntegrationTest extends IntegrationTestBase {
                 .andExpect(jsonPath("$.content.length()").value(5));
     }
 
+    /**
+     * POST with a 2-character {@code name} → 201 Created plus an advisory
+     * {@code WARNING} message (code {@code boat.name.short}) on the
+     * response body. Persistence still happened: a follow-up GET returns
+     * the boat unchanged.
+     */
+    @Test
+    void create_withShortName_returns201_andWarningMessage() throws Exception {
+        MvcResult res = mockMvc.perform(post("/api/v1/boats")
+                        .with(mockJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"AB\",\"description\":\"A trireme\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(header().exists(HttpHeaders.LOCATION))
+                .andExpect(header().exists(HttpHeaders.ETAG))
+                .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.name").value("AB"))
+                .andExpect(jsonPath("$.messages").isArray())
+                .andExpect(jsonPath("$.messages.length()").value(1))
+                .andExpect(jsonPath("$.messages[0].severity").value("WARNING"))
+                .andExpect(jsonPath("$.messages[0].code").value("boat.name.short"))
+                .andExpect(jsonPath("$.messages[0].field").value("Boat.name"))
+                .andReturn();
+        String location = res.getResponse().getHeader(HttpHeaders.LOCATION);
+        assertThat(location).isNotNull();
+        String id = location.substring(location.lastIndexOf('/') + 1);
+
+        mockMvc.perform(get("/api/v1/boats/" + id).with(mockJwt()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("AB"));
+    }
+
+    /**
+     * POST with no {@code description} → 201 Created plus an advisory
+     * {@code INFO} message (code {@code boat.description.missing}) on the
+     * response body. Persistence still happened.
+     */
+    @Test
+    void create_withoutDescription_returns201_andInfoMessage() throws Exception {
+        mockMvc.perform(post("/api/v1/boats")
+                        .with(mockJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Sailboat\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value("Sailboat"))
+                .andExpect(jsonPath("$.messages").isArray())
+                .andExpect(jsonPath("$.messages.length()").value(1))
+                .andExpect(jsonPath("$.messages[0].severity").value("INFO"))
+                .andExpect(jsonPath("$.messages[0].code").value("boat.description.missing"))
+                .andExpect(jsonPath("$.messages[0].field").value("Boat.description"));
+    }
+
+    /**
+     * PUT clearing the description field → 200 OK plus an advisory
+     * {@code INFO} message; the version is bumped and the new state
+     * persists.
+     */
+    @Test
+    void update_clearingDescription_returns200_andInfoMessage() throws Exception {
+        MvcResult created = mockMvc.perform(post("/api/v1/boats")
+                        .with(mockJwt())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Schooner\",\"description\":\"Two masts\"}"))
+                .andExpect(status().isCreated())
+                .andReturn();
+        String location = created.getResponse().getHeader(HttpHeaders.LOCATION);
+        String etagV0 = created.getResponse().getHeader(HttpHeaders.ETAG);
+        assertThat(location).isNotNull();
+        assertThat(etagV0).isNotBlank();
+        String id = location.substring(location.lastIndexOf('/') + 1);
+        String version = etagV0.replace("\"", "");
+
+        mockMvc.perform(put("/api/v1/boats/" + id)
+                        .with(mockJwt())
+                        .header(HttpHeaders.IF_MATCH, version)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"name\":\"Schooner\"}"))
+                .andExpect(status().isOk())
+                .andExpect(header().exists(HttpHeaders.ETAG))
+                .andExpect(jsonPath("$.messages.length()").value(1))
+                .andExpect(jsonPath("$.messages[0].severity").value("INFO"))
+                .andExpect(jsonPath("$.messages[0].code").value("boat.description.missing"));
+    }
+
     /** Search by partial name returns only matching rows. */
     @Test
     void list_with_search_filters_by_name() throws Exception {
