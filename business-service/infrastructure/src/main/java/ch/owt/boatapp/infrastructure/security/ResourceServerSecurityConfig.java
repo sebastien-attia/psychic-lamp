@@ -24,8 +24,8 @@ import org.springframework.security.web.SecurityFilterChain;
  * configurer (for anonymous-access rejections on protected paths).
  *
  * <p>Public paths (no auth): {@code /actuator/health[/**]},
- * {@code /swagger-ui/**}, {@code /v3/api-docs/**}. Everything else requires
- * a valid JWT.
+ * {@code /actuator/info}, {@code /swagger-ui/**}, {@code /v3/api-docs/**}.
+ * Everything else requires a valid JWT.
  */
 @Configuration
 @Profile("!dev")
@@ -58,6 +58,7 @@ public class ResourceServerSecurityConfig {
                         .requestMatchers(
                                 "/actuator/health",
                                 "/actuator/health/**",
+                                "/actuator/info",
                                 "/swagger-ui/**",
                                 "/swagger-ui.html",
                                 "/v3/api-docs/**")

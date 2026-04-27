@@ -20,6 +20,10 @@ WORKDIR /workspace
 # (domain → application → infrastructure → bootstrap) make up the
 # multi-module reactor; their poms must all be present before
 # `dependency:go-offline` can resolve the in-repo dependency graph.
+# The root pom.xml (boatapp-parent) is the parent of
+# business-service/pom.xml via <relativePath>../pom.xml</relativePath>;
+# without it on disk, parent resolution fails before any plugin runs.
+COPY pom.xml ./
 COPY business-service/.mvn ./business-service/.mvn
 COPY business-service/mvnw business-service/mvnw.cmd ./business-service/
 COPY business-service/pom.xml                ./business-service/
@@ -27,6 +31,13 @@ COPY business-service/domain/pom.xml         ./business-service/domain/
 COPY business-service/application/pom.xml    ./business-service/application/
 COPY business-service/infrastructure/pom.xml ./business-service/infrastructure/
 COPY business-service/bootstrap/pom.xml      ./business-service/bootstrap/
+# Honour CI overrides like `--build-arg REVISION=1.0.0` so the JAR baked
+# into the image carries the release version. Defaults to the in-pom
+# SNAPSHOT (no flag → boatapp-parent's <revision> wins). NOT passed to
+# go-offline below: dependency resolution is version-agnostic, so keeping
+# REVISION off the warm-cache layer means a release rebuild only invalidates
+# the final `package` step, not the (slow) dependency download.
+ARG REVISION
 RUN cd business-service && ./mvnw -B -ntp dependency:go-offline
 COPY business-service/domain/src         ./business-service/domain/src
 COPY business-service/application/src    ./business-service/application/src
@@ -37,7 +48,7 @@ COPY contracts ./contracts
 # `-pl bootstrap -am` builds bootstrap and everything it depends on
 # (domain → application → infrastructure → bootstrap), skipping any
 # unrelated reactor work.
-RUN cd business-service && ./mvnw -B -ntp -pl bootstrap -am package -DskipTests
+RUN cd business-service && ./mvnw -B -ntp ${REVISION:+-Drevision=${REVISION}} -pl bootstrap -am package -DskipTests
 
 # ── Stage 2: runtime ──────────────────────────────────────────────────────
 FROM eclipse-temurin:25-jre AS runtime

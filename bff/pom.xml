@@ -3,14 +3,13 @@
 	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 	<parent>
-		<groupId>org.springframework.boot</groupId>
-		<artifactId>spring-boot-starter-parent</artifactId>
-		<version>4.0.6</version>
-		<relativePath/> <!-- lookup parent from repository -->
+		<groupId>ch.owt.boatapp</groupId>
+		<artifactId>boatapp-parent</artifactId>
+		<version>${revision}</version>
+		<relativePath>../pom.xml</relativePath>
 	</parent>
-	<groupId>ch.owt.boatapp</groupId>
 	<artifactId>bff</artifactId>
-	<version>0.0.1-SNAPSHOT</version>
+	<version>${revision}</version>
 	<name>bff</name>
 	<description/>
 	<url/>
@@ -27,22 +26,14 @@
 		<url/>
 	</scm>
 	<properties>
-		<java.version>25</java.version>
-		<archunit.version>1.4.1</archunit.version>
-		<springdoc.version>2.8.13</springdoc.version>
+		<!--
+		    BFF-specific versions only. Shared properties (java.version,
+		    archunit.version, springdoc.version, openapi-generator.version,
+		    jacoco.version, dtrack.*) are inherited from boatapp-parent.
+		-->
 		<wiremock-standalone.version>3.3.1</wiremock-standalone.version>
 		<testcontainers-keycloak.version>4.2.1</testcontainers-keycloak.version>
-		<openapi-generator.version>7.11.0</openapi-generator.version>
 		<nimbus-jose-jwt.version>10.0.2</nimbus-jose-jwt.version>
-		<jacoco.version>0.8.13</jacoco.version>
-		<!--
-		    Dependency-Track upload — defaults to a no-op for local builds.
-		    CI overrides via -Ddtrack.skip=false -Ddependency-track.url=...
-		    -Ddependency-track.apiKey=... in staging / prod environments.
-		-->
-		<dtrack.skip>true</dtrack.skip>
-		<dependency-track.url>https://dtrack.example.invalid</dependency-track.url>
-		<dependency-track.apiKey>unset</dependency-track.apiKey>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -318,7 +309,7 @@
 			<plugin>
 				<groupId>com.github.spotbugs</groupId>
 				<artifactId>spotbugs-maven-plugin</artifactId>
-				<version>4.9.8.3</version>
+				<version>${spotbugs-maven-plugin.version}</version>
 				<configuration>
 					<effort>Max</effort>
 					<threshold>Low</threshold>
@@ -329,7 +320,7 @@
 						<plugin>
 							<groupId>com.h3xstream.findsecbugs</groupId>
 							<artifactId>findsecbugs-plugin</artifactId>
-							<version>1.14.0</version>
+							<version>${findsecbugs-plugin.version}</version>
 						</plugin>
 					</plugins>
 				</configuration>
@@ -350,7 +341,7 @@
 			<plugin>
 				<groupId>org.cyclonedx</groupId>
 				<artifactId>cyclonedx-maven-plugin</artifactId>
-				<version>2.9.1</version>
+				<version>${cyclonedx-maven-plugin.version}</version>
 				<configuration>
 					<outputFormat>all</outputFormat>
 					<outputName>bom</outputName>
@@ -376,7 +367,7 @@
 			<plugin>
 				<groupId>io.github.pmckeown</groupId>
 				<artifactId>dependency-track-maven-plugin</artifactId>
-				<version>1.11.0</version>
+				<version>${dependency-track-maven-plugin.version}</version>
 				<configuration>
 					<dependencyTrackBaseUrl>${dependency-track.url}</dependencyTrackBaseUrl>
 					<apiKey>${dependency-track.apiKey}</apiKey>
@@ -399,39 +390,9 @@
 	</build>
 
 	<!--
-	    Local-only SCA convenience profile: `./mvnw -Posv verify` invokes
-	    the OSV-Scanner CLI (must be on PATH) and fails on HIGH-severity
-	    findings. Primary SCA still runs in CI via google/osv-scanner-action.
+	    The `osv` SCA profile is inherited from boatapp-parent — running
+	    `./mvnw -Posv verify` here scans the whole repo via
+	    ${maven.multiModuleProjectDirectory}.
 	-->
-	<profiles>
-		<profile>
-			<id>osv</id>
-			<build>
-				<plugins>
-					<plugin>
-						<groupId>org.codehaus.mojo</groupId>
-						<artifactId>exec-maven-plugin</artifactId>
-						<version>3.5.0</version>
-						<executions>
-							<execution>
-								<id>osv-scan</id>
-								<phase>verify</phase>
-								<goals><goal>exec</goal></goals>
-								<configuration>
-									<executable>osv-scanner</executable>
-									<arguments>
-										<argument>scan</argument>
-										<argument>source</argument>
-										<argument>--fail-on-vuln=HIGH</argument>
-										<argument>${project.basedir}</argument>
-									</arguments>
-								</configuration>
-							</execution>
-						</executions>
-					</plugin>
-				</plugins>
-			</build>
-		</profile>
-	</profiles>
 
 </project>

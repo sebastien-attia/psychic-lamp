@@ -9,7 +9,8 @@
 #
 # Run `make help` to list every target with its description.
 
-.PHONY: help dev dev-frontend up down down-dev logs clean test-bff test-business test e2e
+.PHONY: help dev dev-frontend up down down-dev logs clean test-bff test-business test e2e \
+        current-version release release-dry-run
 
 ## help: Show this help (default target).
 help:
@@ -58,3 +59,28 @@ test: test-bff test-business
 ## e2e: Run the Playwright end-to-end suite (requires running stack).
 e2e:
 	cd frontend && npx playwright test
+
+# ── Versioning / release ──────────────────────────────────────────────────
+# The single source of truth for the artifact version is <revision> in the
+# root pom.xml. `make release` cuts a release of the current SNAPSHOT and
+# publishes a GitHub release that fires deploy-production.yml.
+#
+# Usage:
+#   make current-version                        # print the current <revision>
+#   make release                                # patch bump (0.1.0-SNAPSHOT → v0.1.0, then 0.1.1-SNAPSHOT)
+#   make release NEXT=0.2.0                     # explicit next snapshot (minor/major bump)
+#   make release AS=0.1.5                       # release a different version than the SNAPSHOT base
+#   make release AS=1.0.0 NEXT=1.1.0            # both
+#   make release-dry-run [NEXT=…] [AS=…]        # print every step, no writes / pushes
+
+## current-version: Print the current <revision> from the root pom.
+current-version:
+	@sed -n 's|^[[:space:]]*<revision>\([^<]*\)</revision>.*|\1|p' pom.xml | head -n1
+
+## release: Cut a release of the current SNAPSHOT (NEXT=, AS= optional).
+release:
+	@./scripts/release.sh $(if $(AS),--as $(AS)) $(if $(NEXT),--next $(NEXT))
+
+## release-dry-run: Show what `make release` would do, without writing.
+release-dry-run:
+	@./scripts/release.sh --dry-run $(if $(AS),--as $(AS)) $(if $(NEXT),--next $(NEXT))

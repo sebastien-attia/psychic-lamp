@@ -82,7 +82,12 @@ jobs:
 
       - name: Compute image tag
         id: tag
-        run: echo "tag=staging-${GITHUB_SHA::8}" >> "$GITHUB_OUTPUT"
+        run: |
+          SHORT="${GITHUB_SHA::8}"
+          echo "tag=staging-${SHORT}" >> "$GITHUB_OUTPUT"
+          # Maven ${revision} for staging — encodes the commit so the JAR
+          # filename + /actuator/info trace back to a specific build.
+          echo "revision=0.0.0-staging-${SHORT}" >> "$GITHUB_OUTPUT"
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -145,6 +150,7 @@ jobs:
           dockerfile: bff/Dockerfile
           image:      ${{ steps.tf-output.outputs.acr_login_server }}/bff
           tags:       ${{ steps.tag.outputs.tag }}
+          build-args: REVISION=${{ steps.tag.outputs.revision }}
 
       - name: Build & push business-service
         uses: ./.github/actions/docker-build-push
@@ -153,6 +159,7 @@ jobs:
           dockerfile: business-service/Dockerfile
           image:      ${{ steps.tf-output.outputs.acr_login_server }}/business-service
           tags:       ${{ steps.tag.outputs.tag }}
+          build-args: REVISION=${{ steps.tag.outputs.revision }}
 
       # Keycloak is built from keycloak/Dockerfile so the custom
       # `boatapp-fun` login theme (referenced by infra/keycloak/realm.yaml)

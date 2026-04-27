@@ -61,9 +61,19 @@ RUN npm run build:no-codegen
 FROM eclipse-temurin:25-jdk AS bff-build
 WORKDIR /workspace
 # Copy Maven wrapper + pom first to leverage the Docker layer cache when
-# only sources change.
+# only sources change. The root pom.xml (boatapp-parent) is the parent of
+# bff/pom.xml via <relativePath>../pom.xml</relativePath>; without it on
+# disk, parent resolution fails before any plugin runs.
+COPY pom.xml ./
 COPY bff/.mvn ./bff/.mvn
 COPY bff/mvnw bff/mvnw.cmd bff/pom.xml ./bff/
+# Honour CI overrides like `--build-arg REVISION=1.0.0` so the JAR baked
+# into the image carries the release version. Defaults to the in-pom
+# SNAPSHOT (no flag → boatapp-parent's <revision> wins). NOT passed to
+# go-offline below: dependency resolution is version-agnostic, so keeping
+# REVISION off the warm-cache layer means a release rebuild only invalidates
+# the final `package` step, not the (slow) dependency download.
+ARG REVISION
 RUN cd bff && ./mvnw -B -ntp dependency:go-offline
 COPY bff/src ./bff/src
 COPY contracts ./contracts
@@ -74,7 +84,7 @@ COPY contracts ./contracts
 RUN rm -rf /workspace/bff/src/main/resources/static \
  && mkdir -p /workspace/bff/src/main/resources/static
 COPY --from=frontend /workspace/frontend/dist/ ./bff/src/main/resources/static/
-RUN cd bff && ./mvnw -B -ntp package -DskipTests
+RUN cd bff && ./mvnw -B -ntp ${REVISION:+-Drevision=${REVISION}} package -DskipTests
 
 # ── Stage 4: runtime ──────────────────────────────────────────────────────
 FROM eclipse-temurin:25-jre AS runtime

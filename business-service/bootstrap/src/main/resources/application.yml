@@ -13,3 +13,35 @@ spring:
 
 server:
   port: 8081
+
+# Build-time @…@ placeholders are filled by Spring Boot's resource filtering
+# (enabled by default in spring-boot-starter-parent). At runtime this surfaces
+# the deployed version through GET /actuator/info → {"app":{"name":
+# "business-service","version":"1.0.0"}}, so smoke tests / curl can verify
+# what shipped. ResourceServerSecurityConfig also permits /actuator/info
+# unauthenticated.
+info:
+  app:
+    # Spring placeholder (resolved at runtime) — stays correct even though
+    # @project.name@ would resolve at build time to the Maven submodule
+    # artifactId "business-service-bootstrap".
+    name: ${spring.application.name}
+    version: '@project.version@'
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # /actuator/health was already public; /actuator/info is added so the
+        # version is queryable.
+        include: health, info
+  info:
+    # Required since Spring Boot 2.6 for `info.*` properties to surface
+    # through /actuator/info (otherwise the endpoint returns "{}").
+    # WHITELIST: only `info.app.{name,version}` are intentionally exposed.
+    # `/actuator/info` is permitAll'd in ResourceServerSecurityConfig —
+    # adding any new `info.*` key here PUBLISHES it. Never reference
+    # secrets/URLs from `info.*`. New entries should land alongside an
+    # info-endpoint slice test that pins the expected response shape.
+    env:
+      enabled: true

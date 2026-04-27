@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+	<modelVersion>4.0.0</modelVersion>
+
+	<!--
+	    Spring Boot version is owned here so a bump only happens in one place.
+	    Both bff and business-service-parent inherit from boatapp-parent and
+	    therefore reach spring-boot-starter-parent transitively.
+	-->
+	<parent>
+		<groupId>org.springframework.boot</groupId>
+		<artifactId>spring-boot-starter-parent</artifactId>
+		<version>4.0.6</version>
+		<relativePath/>
+	</parent>
+
+	<groupId>ch.owt.boatapp</groupId>
+	<artifactId>boatapp-parent</artifactId>
+	<version>${revision}</version>
+	<packaging>pom</packaging>
+	<name>boatapp-parent</name>
+	<description>Root parent POM for The Boat App. Single source of truth for the artifact version (${revision}) and the Spring Boot version, plus pinned plugin/library versions shared by bff and business-service.</description>
+
+	<properties>
+		<!--
+		    Single source of truth for the version of every Java artifact in
+		    this repo: bff, business-service-parent, and the four
+		    business-service submodules (domain, application, infrastructure,
+		    bootstrap). They all declare <version>${revision}</version> and
+		    inherit this property through the parent chain.
+
+		    Default is the in-repo SNAPSHOT — local `./mvnw verify` keeps
+		    working with no flag. CI builds override per-build with
+		    `-Drevision=1.2.3` (release) or
+		    `-Drevision=0.0.0-staging-abc1def2` (staging).
+
+		    The release script (scripts/release.sh) updates this single line
+		    when cutting a release and again when starting the next snapshot.
+		-->
+		<revision>0.0.1-SNAPSHOT</revision>
+
+		<java.version>25</java.version>
+
+		<!-- Plugin / library versions used by both bff and business-service -->
+		<archunit.version>1.4.1</archunit.version>
+		<springdoc.version>2.8.13</springdoc.version>
+		<openapi-generator.version>7.11.0</openapi-generator.version>
+		<jacoco.version>0.8.13</jacoco.version>
+		<spotbugs-maven-plugin.version>4.9.8.3</spotbugs-maven-plugin.version>
+		<findsecbugs-plugin.version>1.14.0</findsecbugs-plugin.version>
+		<cyclonedx-maven-plugin.version>2.9.1</cyclonedx-maven-plugin.version>
+		<dependency-track-maven-plugin.version>1.11.0</dependency-track-maven-plugin.version>
+		<exec-maven-plugin.version>3.5.0</exec-maven-plugin.version>
+
+		<!--
+		    Dependency-Track upload — defaults to a no-op for local builds.
+		    CI overrides via -Ddtrack.skip=false -Ddependency-track.url=...
+		    -Ddependency-track.apiKey=... in staging / prod environments.
+		-->
+		<dtrack.skip>true</dtrack.skip>
+		<dependency-track.url>https://dtrack.example.invalid</dependency-track.url>
+		<dependency-track.apiKey>unset</dependency-track.apiKey>
+
+		<flatten-maven-plugin.version>1.6.0</flatten-maven-plugin.version>
+	</properties>
+
+	<!--
+	    flatten-maven-plugin — required companion of CI-Friendly Versions.
+	    Without it, an installed/deployed POM still contains the literal
+	    "<version>${revision}</version>" on its <parent> element, which
+	    breaks any consumer that resolves the artifact outside this reactor
+	    (mvn install + downstream consumer, IDE partial-reactor import, or
+	    the dependency-track-maven-plugin's deploy-phase upload, which reads
+	    the project model). `resolveCiFriendliesOnly` keeps the flattened
+	    POM as close to the original as possible — only ${revision},
+	    ${sha1}, ${changelist} placeholders are resolved; everything else
+	    (properties, profiles, plugin config) stays put. Inherited by every
+	    child module via the parent chain.
+	-->
+	<build>
+		<plugins>
+			<plugin>
+				<groupId>org.codehaus.mojo</groupId>
+				<artifactId>flatten-maven-plugin</artifactId>
+				<version>${flatten-maven-plugin.version}</version>
+				<configuration>
+					<flattenMode>resolveCiFriendliesOnly</flattenMode>
+					<updatePomFile>true</updatePomFile>
+				</configuration>
+				<executions>
+					<execution>
+						<id>flatten</id>
+						<phase>process-resources</phase>
+						<goals><goal>flatten</goal></goals>
+					</execution>
+					<execution>
+						<id>flatten.clean</id>
+						<phase>clean</phase>
+						<goals><goal>clean</goal></goals>
+					</execution>
+				</executions>
+			</plugin>
+		</plugins>
+	</build>
+
+	<!--
+	    Shared SCA convenience profile. Inherited by every child POM, so
+	    `./mvnw -Posv verify` from bff/, business-service/, or any
+	    business-service submodule runs the same OSV scan against the repo
+	    root. Primary SCA still runs in CI via google/osv-scanner-action.
+	-->
+	<profiles>
+		<profile>
+			<id>osv</id>
+			<build>
+				<plugins>
+					<plugin>
+						<groupId>org.codehaus.mojo</groupId>
+						<artifactId>exec-maven-plugin</artifactId>
+						<version>${exec-maven-plugin.version}</version>
+						<executions>
+							<execution>
+								<id>osv-scan</id>
+								<phase>verify</phase>
+								<goals><goal>exec</goal></goals>
+								<configuration>
+									<executable>osv-scanner</executable>
+									<arguments>
+										<argument>scan</argument>
+										<argument>source</argument>
+										<argument>--fail-on-vuln=HIGH</argument>
+										<argument>${maven.multiModuleProjectDirectory}</argument>
+									</arguments>
+								</configuration>
+							</execution>
+						</executions>
+					</plugin>
+				</plugins>
+			</build>
+		</profile>
+	</profiles>
+
+</project>

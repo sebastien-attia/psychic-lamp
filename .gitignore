@@ -24,3 +24,9 @@ infra/docker/keys/*
 !infra/docker/keys/.gitkeep
 frontend/src/services/api-client/
 **/generated-sources/
+
+# flatten-maven-plugin writes a resolved POM next to each module's pom.xml.
+# Regenerated on every build and is what gets installed/deployed in place of
+# the source pom.xml — never check it in.
+.flattened-pom.xml
+**/.flattened-pom.xml

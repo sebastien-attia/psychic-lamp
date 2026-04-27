@@ -86,6 +86,9 @@ jobs:
           # Production tag = the release tag verbatim (e.g. v1.0.0).
           # Immutable per release.
           echo "tag=${REF}" >> "$GITHUB_OUTPUT"
+          # Maven ${revision} = release tag with the `v` prefix stripped
+          # (v1.0.0 → 1.0.0). Drives the JAR filename and /actuator/info.
+          echo "revision=${REF#v}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout release tag
         uses: actions/checkout@v4
@@ -136,6 +139,9 @@ jobs:
       - name: az acr login
         run: az acr login --name "$(echo '${{ steps.tf-output.outputs.acr_login_server }}' | cut -d. -f1)"
 
+      # ${revision} is the release tag minus the `v` prefix (1.0.0 not v1.0.0)
+      # so the JAR baked into the image is named bff-1.0.0.jar /
+      # business-service-bootstrap-1.0.0.jar and /actuator/info reports 1.0.0.
       - name: Build & push BFF
         uses: ./.github/actions/docker-build-push
         with:
@@ -143,6 +149,7 @@ jobs:
           dockerfile: bff/Dockerfile
           image:      ${{ steps.tf-output.outputs.acr_login_server }}/bff
           tags:       ${{ steps.tag.outputs.tag }}
+          build-args: REVISION=${{ steps.tag.outputs.revision }}
 
       - name: Build & push business-service
         uses: ./.github/actions/docker-build-push
@@ -151,6 +158,7 @@ jobs:
           dockerfile: business-service/Dockerfile
           image:      ${{ steps.tf-output.outputs.acr_login_server }}/business-service
           tags:       ${{ steps.tag.outputs.tag }}
+          build-args: REVISION=${{ steps.tag.outputs.revision }}
 
       # Keycloak is built from keycloak/Dockerfile so the custom
       # `boatapp-fun` login theme (referenced by infra/keycloak/realm.yaml)

@@ -39,6 +39,10 @@ inputs:
   tags:
     description: 'Newline-separated list of tags to apply and push (e.g. "staging\nstaging-abcdef0").'
     required: true
+  build-args:
+    description: 'Newline-separated KEY=VALUE pairs forwarded as `docker build --build-arg`. Empty lines and lines starting with "#" are ignored.'
+    required: false
+    default: ''
 
 outputs:
   digest:
@@ -61,6 +65,7 @@ runs:
         DBP_DOCKERFILE: ${{ inputs.dockerfile }}
         DBP_IMAGE: ${{ inputs.image }}
         DBP_TAGS: ${{ inputs.tags }}
+        DBP_BUILD_ARGS: ${{ inputs.build-args }}
       run: |
         set -euo pipefail
 
@@ -70,6 +75,17 @@ runs:
           echo "::error::docker-build-push: 'tags' input is empty" >&2
           exit 1
         fi
+
+        # Parse build-args input. Empty / commented lines are skipped;
+        # each remaining line is forwarded as a separate --build-arg flag.
+        # Build-args carry NO secrets (they end up in the image layer
+        # history); REVISION is the only consumer today.
+        BUILD_ARG_FLAGS=()
+        while IFS= read -r line; do
+          [ -z "${line}" ] && continue
+          case "${line}" in \#*) continue ;; esac
+          BUILD_ARG_FLAGS+=( --build-arg "${line}" )
+        done < <(printf '%s\n' "${DBP_BUILD_ARGS}" | tr -d '\r')
 
         # Validate each tag against the OCI / docker reference grammar
         # (https://docs.docker.com/reference/cli/docker/image/tag/):
@@ -88,9 +104,13 @@ runs:
 
         FIRST_TAG="${TAGS[0]}"
         echo "::group::docker build ${DBP_IMAGE}:${FIRST_TAG}"
+        # ${BUILD_ARG_FLAGS[@]+"${BUILD_ARG_FLAGS[@]}"} expands to nothing
+        # when the array is empty, avoiding an "unbound variable" tripwire
+        # under set -u on older bash.
         docker build \
           --file "${DBP_DOCKERFILE}" \
           --tag "${DBP_IMAGE}:${FIRST_TAG}" \
+          ${BUILD_ARG_FLAGS[@]+"${BUILD_ARG_FLAGS[@]}"} \
           "${DBP_CONTEXT}"
         echo "::endgroup::"
 

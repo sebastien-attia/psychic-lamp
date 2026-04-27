@@ -88,6 +88,7 @@ public class SecurityConfig {
                                 PathPatternRequestMatcher.withDefaults().matcher("/.well-known/jwks.json"),
                                 PathPatternRequestMatcher.withDefaults().matcher("/actuator/health"),
                                 PathPatternRequestMatcher.withDefaults().matcher("/actuator/health/**"),
+                                PathPatternRequestMatcher.withDefaults().matcher("/actuator/info"),
                                 PathPatternRequestMatcher.withDefaults().matcher("/swagger-ui/**"),
                                 PathPatternRequestMatcher.withDefaults().matcher("/swagger-ui.html"),
                                 PathPatternRequestMatcher.withDefaults().matcher("/v3/api-docs/**"),
