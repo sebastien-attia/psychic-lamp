@@ -53,6 +53,23 @@ locals {
   }
 }
 
+# ── Log Analytics workspace ───────────────────────────────────────────────
+# The ACA Environment ships console + system streams here; without a
+# workspace, `az containerapp logs show` only streams live and historical
+# queries return nothing — which is exactly the diagnostic gap that left
+# the recent bootstrap-db-roles failure unexplained for hours. The
+# workspace is co-located with the ACA env (this module owns its
+# observability surface). PerGB2018 SKU + 30-day retention is the cheap
+# default; our log volume is tiny.
+resource "azurerm_log_analytics_workspace" "aca" {
+  name                = "${local.name_prefix}-aca-logs"
+  location            = var.location
+  resource_group_name = var.resource_group_name
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+  tags                = var.tags
+}
+
 # ── ACA Environment ───────────────────────────────────────────────────────
 resource "azurerm_container_app_environment" "this" {
   name                = "${local.name_prefix}-aca-env"
@@ -61,6 +78,13 @@ resource "azurerm_container_app_environment" "this" {
 
   infrastructure_subnet_id       = var.container_apps_subnet_id
   internal_load_balancer_enabled = false
+
+  # Wire the workspace so all Container Apps + Jobs in this env stream
+  # console output to a queryable destination. Setting this attribute on
+  # an existing env is an in-place update under azurerm v4 — explicitly
+  # not force-new — so adding it to a live env does NOT trigger the
+  # multi-minute teardown that prevent_destroy below now also blocks.
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.aca.id
 
   workload_profile {
     name                  = "Consumption"
@@ -215,8 +239,9 @@ resource "terraform_data" "bootstrap_db_roles_run" {
   provisioner "local-exec" {
     interpreter = ["/bin/bash", "-c"]
     environment = {
-      JOB_NAME = azurerm_container_app_job.bootstrap_db_roles.name
-      RG_NAME  = var.resource_group_name
+      JOB_NAME              = azurerm_container_app_job.bootstrap_db_roles.name
+      RG_NAME               = var.resource_group_name
+      LOG_ANALYTICS_WS_GUID = azurerm_log_analytics_workspace.aca.workspace_id
     }
     command = <<-EOT
       set -euo pipefail
@@ -300,6 +325,29 @@ resource "terraform_data" "bootstrap_db_roles_run" {
                 -o json 2>diag.err | sed 's/^/    /'; then
             echo "  [diag] az dump failed (non-fatal):" >&2
             sed 's/^/    /' diag.err >&2 || true
+          fi
+
+          # Pull the replica's stdout/stderr from Log Analytics so the
+          # actual psql error (e.g. "could not translate host name",
+          # "password authentication failed") surfaces in CI. ACA Jobs
+          # ship console output to ContainerAppConsoleLogs_CL via the
+          # workspace wired into the env above. Logs typically appear
+          # within 30–60 s of the container exiting; sleep then query.
+          # Same stdout/stderr split + non-fatal-on-failure pattern as
+          # the properties dump.
+          echo ">> bootstrap-db-roles: waiting 30 s for log ingest, then querying $EXEC console logs"
+          sleep 30
+          KQL="ContainerAppConsoleLogs_CL"
+          KQL="$KQL | where ContainerJobName_s == '$JOB_NAME' and ExecutionName_s == '$EXEC'"
+          KQL="$KQL | order by TimeGenerated asc"
+          KQL="$KQL | project TimeGenerated, Log_s"
+          KQL="$KQL | limit 200"
+          if ! az monitor log-analytics query \
+                --workspace "$LOG_ANALYTICS_WS_GUID" \
+                --analytics-query "$KQL" \
+                -o tsv 2>la.err | sed 's/^/    /'; then
+            echo "  [diag] log-analytics query failed (non-fatal — logs may not have ingested yet):" >&2
+            sed 's/^/    /' la.err >&2 || true
           fi
         fi
         if [ "$attempt" -lt 3 ]; then
