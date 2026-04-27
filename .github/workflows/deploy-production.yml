@@ -94,6 +94,17 @@ jobs:
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+      - name: Ensure TF-state blob container exists
+        # Idempotent — succeeds whether or not the container already exists.
+        # backend.tf hardcodes `container_name = "tfstate"`.
+        run: |
+          az storage container create \
+            --name          tfstate \
+            --account-name  "${{ secrets.TF_STATE_STORAGE_ACCOUNT }}" \
+            --auth-mode     login \
+            --public-access off \
+            --output        none
+
       - name: Discover ACR login server (from TF state)
         id: tf-output
         # ARM_* env vars come from the workflow-scope env: block.
@@ -164,6 +175,15 @@ jobs:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure TF-state blob container exists
+        run: |
+          az storage container create \
+            --name          tfstate \
+            --account-name  "${{ secrets.TF_STATE_STORAGE_ACCOUNT }}" \
+            --auth-mode     login \
+            --public-access off \
+            --output        none
 
       - name: terraform plan
         run: |
@@ -237,6 +257,15 @@ jobs:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Ensure TF-state blob container exists
+        run: |
+          az storage container create \
+            --name          tfstate \
+            --account-name  "${{ secrets.TF_STATE_STORAGE_ACCOUNT }}" \
+            --auth-mode     login \
+            --public-access off \
+            --output        none
 
       # No per-run firewall poke needed — see deploy-staging.yml for why.
 
