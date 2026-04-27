@@ -46,6 +46,18 @@ env:
   ARM_TENANT_ID:       ${{ secrets.AZURE_TENANT_ID }}
   ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
+  # TF root variables — needed by every `terraform` invocation (even
+  # `-target` applies validate the full variable surface). Promoting to
+  # workflow scope avoids duplicating these between build-push and the
+  # full-apply job.
+  TF_VAR_postgres_admin_password:    ${{ secrets.TF_VAR_POSTGRES_ADMIN_PASSWORD }}
+  TF_VAR_bff_db_password:            ${{ secrets.TF_VAR_BFF_DB_PASSWORD }}
+  TF_VAR_business_db_password:       ${{ secrets.TF_VAR_BUSINESS_DB_PASSWORD }}
+  TF_VAR_keycloak_db_password:       ${{ secrets.TF_VAR_KEYCLOAK_DB_PASSWORD }}
+  TF_VAR_keycloak_admin_password:    ${{ secrets.TF_VAR_KEYCLOAK_ADMIN_PASSWORD }}
+  TF_VAR_ci_push_principal_id:       ${{ secrets.AZURE_CLIENT_OBJECT_ID }}
+  TF_VAR_tf_apply_principal_id:      ${{ secrets.AZURE_CLIENT_OBJECT_ID }}
+
 jobs:
   ci:
     uses: ./.github/workflows/ci.yml
@@ -96,18 +108,29 @@ jobs:
             --public-access off \
             --output        none
 
-      - name: Discover ACR login server (from TF state)
+      - name: Bootstrap RG + ACR (targeted terraform apply)
         id: tf-output
-        # ARM_* env vars come from the workflow-scope env: block.
+        # The `build-push` job needs an ACR to push images to. On the very
+        # first deploy of a fresh environment, nothing exists yet — the
+        # full `terraform apply` runs LATER in the workflow, so we'd be
+        # pushing to a registry that doesn't exist.
+        #
+        # Solution: a tiny targeted apply here that creates ONLY the
+        # resource group and the container registry. Idempotent — on every
+        # subsequent run, both already exist and Terraform reports "no
+        # changes". The full apply later still creates everything else.
         run: |
           set -euo pipefail
           cd "${TF_DIR}"
           terraform init -input=false \
             -backend-config="resource_group_name=${{ secrets.TF_STATE_RESOURCE_GROUP }}" \
             -backend-config="storage_account_name=${{ secrets.TF_STATE_STORAGE_ACCOUNT }}"
-          ACR=$(terraform output -raw acr_login_server 2>/dev/null || echo "")
+          terraform apply -input=false -auto-approve \
+            -target='module.boatapp.azurerm_resource_group.this' \
+            -target='module.boatapp.module.container_registry'
+          ACR=$(terraform output -json 2>/dev/null | jq -r '.acr_login_server.value // empty')
           if [ -z "$ACR" ]; then
-            echo "::error::ACR login server not found in state. Run terraform apply once to bootstrap before pushing images."
+            echo "::error::Targeted apply succeeded but acr_login_server output is still empty — investigate."
             exit 1
           fi
           echo "acr_login_server=${ACR}" >> "$GITHUB_OUTPUT"
@@ -148,14 +171,8 @@ jobs:
       keycloak_app_name:         ${{ steps.outputs.outputs.keycloak_app_name }}
       resource_group_name:       ${{ steps.outputs.outputs.resource_group_name }}
     env:
-      # ARM_* come from workflow-scope env: block.
-      TF_VAR_postgres_admin_password:    ${{ secrets.TF_VAR_POSTGRES_ADMIN_PASSWORD }}
-      TF_VAR_bff_db_password:            ${{ secrets.TF_VAR_BFF_DB_PASSWORD }}
-      TF_VAR_business_db_password:       ${{ secrets.TF_VAR_BUSINESS_DB_PASSWORD }}
-      TF_VAR_keycloak_db_password:       ${{ secrets.TF_VAR_KEYCLOAK_DB_PASSWORD }}
-      TF_VAR_keycloak_admin_password:    ${{ secrets.TF_VAR_KEYCLOAK_ADMIN_PASSWORD }}
-      TF_VAR_ci_push_principal_id:       ${{ secrets.AZURE_CLIENT_OBJECT_ID }}
-      TF_VAR_tf_apply_principal_id:      ${{ secrets.AZURE_CLIENT_OBJECT_ID }}
+      # ARM_* and TF_VAR_* secrets come from workflow-scope env: block.
+      # Image tags can't be at workflow scope (they reference job outputs).
       TF_VAR_bff_image_tag:              ${{ needs.build-push.outputs.image_tag }}
       TF_VAR_business_service_image_tag: ${{ needs.build-push.outputs.image_tag }}
       # Keycloak image tag is set by the TF default; no per-deploy override.
