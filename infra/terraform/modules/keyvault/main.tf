@@ -99,10 +99,9 @@ resource "azurerm_key_vault_secret" "passwords" {
 
 resource "azurerm_key_vault_secret" "bff_signing_key" {
   name = "bff-signing-key"
-  # private_key_pem (PKCS#1, "-----BEGIN RSA PRIVATE KEY-----") is rejected by
+  # The PKCS#1 attribute on tls_private_key is rejected by
   # BffConfig.bffSigningJwk(), which decodes the body via PKCS8EncodedKeySpec.
-  # private_key_pem_pkcs8 ("-----BEGIN PRIVATE KEY-----") is what the JCE
-  # KeyFactory expects.
+  # The pkcs8 sibling attribute is what the JCE KeyFactory expects.
   value        = tls_private_key.bff_signing.private_key_pem_pkcs8
   key_vault_id = azurerm_key_vault.this.id
   content_type = "application/x-pem-file"
