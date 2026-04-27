@@ -15,22 +15,28 @@ staging deploy, and a manual-approval production release.
 Microsoft account
 └── Tenant (Entra ID directory)
     └── Subscription (billing)
-        ├── Resource Group: boat-app-tfstate-rg
-        │   └── Storage Account → Blob Containers (staging, production)   ← Terraform state
-        ├── Resource Group: boat-app-staging-rg                           ← created by Terraform
-        │   ├── ACR (shared)            ← Docker images
-        │   ├── Key Vault               ← TF_VAR_* passwords
-        │   ├── Flexible PostgreSQL     ← bff_session, boatapp, keycloak
-        │   ├── VNet + Private DNS
-        │   └── Container App Environment
-        │       ├── bff Container App
-        │       ├── business-service Container App
-        │       └── keycloak Container App
-        ├── Resource Group: boat-app-production-rg                        ← same shape
+        ├── Resource Group: boat-app-tfstate-rg                           ← bootstrap-script-managed
+        │   └── Storage Account → Blob Container `tfstate`                ← Terraform state (one .tfstate per env key)
+        ├── Resource Group: boatapp-v2-staging-rg                         ← created by Terraform (project=boatapp-v2)
+        │   ├── ACR                              ← Docker images (per-env)
+        │   ├── Key Vault                        ← TF_VAR_* passwords + BFF private_key_jwt PEM
+        │   ├── Flexible PostgreSQL (public + AllowAllAzure firewall)
+        │   │     └── DBs: bff_session, boatapp, keycloak
+        │   └── Linux App Service Plan (P0v3)
+        │       ├── Linux Web App: <project>-staging-bff       (public, :8080)
+        │       ├── Linux Web App: <project>-staging-business  (public, :8081, JWT-protected)
+        │       └── Linux Web App: <project>-staging-keycloak  (public, :8080)
+        ├── Resource Group: boatapp-production-rg                         ← same shape (project=boatapp)
         └── Entra ID App Registration "boat-app-ci"
             └── Service Principal  ← roles: Contributor, User Access Admin
                                    ← federated to GitHub via OIDC
 ```
+
+> **No VNet, no private endpoint.** The simplification this redesign is
+> built around: Postgres is reached over the public Azure backbone,
+> protected by the AllowAllAzureServicesAndResourcesWithinAzureIps
+> firewall rule + SSL, and Key Vault secrets are resolved by the Web Apps'
+> managed identities via `@Microsoft.KeyVault(SecretUri=...)` references.
 
 A GitHub Actions run mints a short-lived [**OIDC token**](CONCEPTS.md#oidc-token-from-the-github-runner),
 exchanges it via the [**Federated Credential**](CONCEPTS.md#oidc-federated-credential)
@@ -44,24 +50,27 @@ group.
 Personal account (you)
 └── Private repository
     ├── Branches: main (default), staging, feature/*
-    ├── Pull Requests           → fire ci.yml + CodeQL + terraform-plan
-    ├── Releases (on main)      → fire deploy-production.yml
-    ├── Repository secrets      ← AZURE_CLIENT_ID, AZURE_TENANT_ID, …
-    ├── Repository variables    ← ACR_NAME, PROJECT, LOCATION
+    ├── Pull Requests           → fire ci.yml + codeql.yml
+    ├── Releases (any branch)   → fire deploy-production.yml
+    ├── Repository secrets      ← AZURE_CLIENT_ID, AZURE_TENANT_ID, AZURE_CLIENT_OBJECT_ID,
+    │                              TF_STATE_*, TF_VAR_* (all repo-scoped — see Tables 2–4)
+    ├── Repository variables    ← ACR_NAME, TF_STATE_CONTAINER
     ├── Environments
-    │   ├── staging             ← TF_VAR_* secrets, no approval
-    │   └── production          ← TF_VAR_* secrets + Required Reviewer
+    │   ├── staging             ← deployment target only (no env-scoped secrets)
+    │   └── production          ← deployment target + Required Reviewer gate
     └── Actions workflows (.github/workflows/)
-        ├── ci.yml
-        ├── deploy-staging.yml
-        ├── deploy-production.yml
-        ├── codeql.yml
-        └── terraform-plan.yml
+        ├── ci.yml              (push/PR to main+staging+feature/**)
+        ├── codeql.yml          (push/PR to main+staging + weekly cron)
+        ├── deploy-staging.yml  (push to staging)
+        └── deploy-production.yml (release published / workflow_dispatch with tag input)
 ```
 
-A push to `staging` fires `deploy-staging.yml`; publishing a Release on
-`main` fires `deploy-production.yml`. Both authenticate to Azure via
-OIDC — no long-lived `AZURE_CLIENT_SECRET` ever exists.
+A push to `staging` fires `deploy-staging.yml`; publishing a GitHub
+Release fires `deploy-production.yml` (the release's tag becomes the
+immutable image tag). Both authenticate to Azure via OIDC — no
+long-lived `AZURE_CLIENT_SECRET` ever exists. Terraform plan runs as the
+first step inside each deploy workflow; there is no separate
+`terraform-plan.yml`.
 
 ### Cross-product bridge
 
@@ -70,11 +79,11 @@ Three contact points couple the two products:
 1. **OIDC federation** — GitHub mints, Azure validates. Trust is keyed
    by the federated credential's *subject* (e.g.
    `repo:you/repo:environment:production`).
-2. **Azure Container Registry (ACR)** — GitHub pushes images, Azure
-   Container Apps pull them.
-3. **Terraform state blob** — both `terraform-plan.yml` (PR) and
-   `deploy-*.yml` (apply) read/write the same state file in the
-   bootstrap-created storage account.
+2. **Azure Container Registry (ACR)** — GitHub pushes images, the App
+   Service Web Apps pull them via their system-assigned MIs (AcrPull).
+3. **Terraform state blob** — every `deploy-*.yml` run reads/writes the
+   same state file in the bootstrap-created storage account (one state
+   key per environment, in the `tfstate` container).
 
 ## 1. Prerequisites
 
@@ -124,26 +133,29 @@ script / Terraform) is responsible for setting it.
 
 ### Table 3 — GitHub repo-level variables (auto-set by bootstrap)
 
-| Variable    | Value source           | Used by                             |
-|-------------|------------------------|-------------------------------------|
-| `ACR_NAME`  | Derived from sub-hash  | Image push/pull in deploy workflows |
-| `PROJECT`   | `--project` flag       | Terraform variable + naming         |
-| `LOCATION`  | `--location` flag      | Terraform variable                  |
+| Variable             | Value source           | Used by                                |
+|----------------------|------------------------|----------------------------------------|
+| `ACR_NAME`           | Derived from sub-hash  | Image push/pull in deploy workflows    |
+| `TF_STATE_CONTAINER` | Bootstrap-created blob container (`tfstate`) | Terraform backend init |
 
-### Table 4 — GitHub environment-level secrets (you set MANUALLY)
+### Table 4 — GitHub repo-level secrets you set MANUALLY (one set, used by both envs)
 
-Set these once per environment (`staging` and `production`). The
-bootstrap script intentionally does **not** generate
+The bootstrap script intentionally does **not** generate
 database/admin passwords — they belong to you. Generate values with
-`openssl rand -base64 32`.
+`openssl rand -base64 32`. They are stored at **repository scope** (not
+environment scope), because the deploy workflows expose them via a
+top-level `env:` block before any `environment:`-gated job runs; the
+production manual-approval gate applies to the *deployment*, not to
+secret access. See `.github/ENVIRONMENTS.md` for the full design note.
 
-| Secret                            | Stored in Azure as | Purpose                       |
-|-----------------------------------|--------------------|-------------------------------|
-| `TF_VAR_postgres_admin_password`  | Key Vault secret   | Flexible Server admin login   |
-| `TF_VAR_bff_db_password`          | Key Vault secret   | BFF's per-DB Postgres role    |
-| `TF_VAR_business_db_password`     | Key Vault secret   | Business Service per-DB role  |
-| `TF_VAR_keycloak_db_password`     | Key Vault secret   | Keycloak's per-DB role        |
-| `TF_VAR_keycloak_admin_password`  | Key Vault secret   | Keycloak master admin         |
+| Secret                              | Stored in Azure as | Purpose                                                                    |
+|-------------------------------------|--------------------|----------------------------------------------------------------------------|
+| `TF_VAR_POSTGRES_ADMIN_PASSWORD`    | Key Vault secret   | Flexible Server administrator password                                     |
+| `TF_VAR_BFF_DB_PASSWORD`            | Key Vault secret   | BFF's per-DB Postgres role                                                 |
+| `TF_VAR_BUSINESS_DB_PASSWORD`       | Key Vault secret   | Business Service per-DB role                                               |
+| `TF_VAR_KEYCLOAK_DB_PASSWORD`       | Key Vault secret   | Keycloak's per-DB role                                                     |
+| `TF_VAR_KEYCLOAK_ADMIN_PASSWORD`    | Key Vault secret   | Initial Keycloak admin password                                            |
+| `AZURE_CLIENT_OBJECT_ID`            | —                  | SP **Object ID** (not appId) used by Terraform for AcrPush + Key Vault role assignments. Resolve once with `az ad sp show --id "$AZURE_CLIENT_ID" --query id -o tsv`. |
 
 ### Table 5 — Optional GitHub secrets (skip if unused)
 
@@ -156,14 +168,18 @@ database/admin passwords — they belong to you. Generate values with
 ### Table 6 — Azure runtime variables (informational only)
 
 These are derived by Terraform from Key Vault secrets and injected into
-the Container Apps' environment at runtime. **You do not set them
-manually.** Listed here so they are not a surprise when you read
-`application-staging.yml` / `application-prod.yml`:
+each Web App's `app_settings` at runtime — sensitive values via
+`@Microsoft.KeyVault(SecretUri=...)` placeholders that the App
+Service's managed identity resolves on app-start. **You do not set
+them manually.** Listed here so they are not a surprise when you read
+`application-staging.yml` / `application-production.yml`:
 
-`POSTGRES_FQDN`, `BFF_DB_USER`, `BFF_DB_PASSWORD`, `BUSINESS_DB_USER`,
-`BUSINESS_DB_PASSWORD`, `KEYCLOAK_DB_USER`, `KEYCLOAK_DB_PASSWORD`,
+`POSTGRES_FQDN`, `BFF_DB_NAME`, `BFF_DB_USER`, `BFF_DB_PASSWORD`,
+`BUSINESS_DB_NAME`, `BUSINESS_DB_USER`, `BUSINESS_DB_PASSWORD`,
+`KC_DB_USERNAME`, `KC_DB_PASSWORD`, `KEYCLOAK_ADMIN`,
 `KEYCLOAK_ADMIN_PASSWORD`, `KEYCLOAK_ISSUER_URI`, `KEYCLOAK_CLIENT_ID`,
-`BFF_SIGNING_KEY_PATH`, `BFF_SIGNING_KEY_ID`, `BUSINESS_SERVICE_URL`.
+`BFF_SIGNING_KEY_PEM`, `BFF_SIGNING_KEY_ID`, `BUSINESS_SERVICE_URL`,
+`SPRING_PROFILES_ACTIVE`, `WEBSITES_PORT`.
 
 ## 3. Part A — Azure account setup
 
@@ -188,11 +204,11 @@ Order-of-magnitude figures, Switzerland North region:
 | Resource                                        | ≈ USD/month |
 |-------------------------------------------------|-------------|
 | Flexible PostgreSQL `B1ms`, 32 GB               | $25         |
-| 3 Container Apps, idle, 0.25 vCPU / 0.5 GB each | $30         |
+| 1 Linux App Service Plan, P0v3 (1 vCPU / 4 GiB), shared by 3 Web Apps | $55 |
 | Azure Container Registry, Basic tier            | $5          |
 | Key Vault, standard, < 10k ops                  | < $1        |
-| Storage Account (tfstate), < 1 GB               | < $1        |
-| **Total per environment**                       | **≈ $60–80**|
+| Storage Account (tfstate, shared across envs)   | < $1        |
+| **Total per environment**                       | **≈ $85–95**|
 
 So staging + production ≈ $120–160/month. Refresh with the live
 calculator: <https://azure.microsoft.com/en-us/pricing/calculator/>.
@@ -240,39 +256,49 @@ What it provisions, in three bullets:
 The script is idempotent — re-running it against an already-bootstrapped
 tenant is a no-op.
 
-### A.4 Set the per-environment Terraform passwords
+### A.4 Set the Terraform passwords + the SP Object ID
 
-The bootstrap script does *not* generate these — they belong to you.
-The snippet below seeds all five secrets in **both** `staging` and
-`production` in one go. Replace the `REPO=` value with your own
-`owner/repo` slug. Works in both bash and zsh; uses an array instead
-of backslash line-continuations so a stray copy-paste whitespace
-cannot break it.
+The bootstrap script does *not* generate the `TF_VAR_*` passwords —
+they belong to you. The same secret values are used by both the
+staging and production deploy workflows, so the snippet below stores
+them at **repository scope** (single source of truth; the production
+manual-approval gate is enforced separately by the
+`environment: production` job-level setting).
 
 ```bash
 REPO=<owner>/<repo>           # e.g. sebastien-attia/psychic-lamp
 
 SECRETS=(
-  TF_VAR_postgres_admin_password
-  TF_VAR_bff_db_password
-  TF_VAR_business_db_password
-  TF_VAR_keycloak_db_password
-  TF_VAR_keycloak_admin_password
+  TF_VAR_POSTGRES_ADMIN_PASSWORD
+  TF_VAR_BFF_DB_PASSWORD
+  TF_VAR_BUSINESS_DB_PASSWORD
+  TF_VAR_KEYCLOAK_DB_PASSWORD
+  TF_VAR_KEYCLOAK_ADMIN_PASSWORD
 )
 
-for env in staging production; do
-  for name in "${SECRETS[@]}"; do
-    # `gh secret set` reads from stdin when --body is omitted.
-    # Do NOT use `--body -` — that stores the literal string "-".
-    openssl rand -base64 32 \
-      | gh secret set "$name" --env "$env" --repo "$REPO"
-  done
+for name in "${SECRETS[@]}"; do
+  # `gh secret set` reads from stdin when --body is omitted.
+  # Do NOT use `--body -` — that stores the literal string "-".
+  openssl rand -base64 32 \
+    | gh secret set "$name" --repo "$REPO"
 done
 ```
 
 Store the generated values out-of-band (your password manager) — Azure
 Key Vault will hold the canonical copy after the first
 `terraform apply`, but you may need them for a manual psql session.
+
+Then resolve and store the Service Principal **Object ID** (used by
+Terraform for the AcrPush + Key Vault Secrets Officer role
+assignments — different from the `appId` already in
+`AZURE_CLIENT_ID`):
+
+```bash
+AZURE_CLIENT_ID=$(gh secret list --repo "$REPO" --json name | grep -q AZURE_CLIENT_ID && \
+  az ad sp list --display-name boat-app-ci --query '[0].appId' -o tsv)
+SP_OBJECT_ID=$(az ad sp show --id "$AZURE_CLIENT_ID" --query id -o tsv)
+gh secret set AZURE_CLIENT_OBJECT_ID --repo "$REPO" --body "$SP_OBJECT_ID"
+```
 
 ### A.5 Enable "Required reviewers" on the `production` Environment
 
@@ -338,9 +364,11 @@ A free personal private repo has three notable gaps versus public or
 paid:
 
 - **CodeQL / GitHub Advanced Security** — paid. The committed
-  `codeql.yml` workflow includes a Semgrep-OSS fallback and skips
-  silently when GHAS is unavailable; expect the CodeQL job marked
-  "skipped", not failed.
+  `codeql.yml` workflow targets `language: java-kotlin` and
+  `javascript-typescript`; on a private free repo the analyse step
+  fails with an "Advanced Security must be enabled" error. Either
+  flip the repo to public (§C.7) or remove `codeql.yml` from the
+  required-status-checks list in `.github/settings.yml` until then.
 - **Required Reviewers on Environments** — paid (GitHub Pro and
   above). See the §A.5 caveat for workarounds.
 - **Secret scanning + Push protection** — paid (GHAS).
@@ -355,12 +383,13 @@ repo the gitleaks job runs without a license — no action needed.
 
 ### B.5 How a build is triggered
 
-| Git action                          | Workflow(s)                               | Effect                                                                                |
-|-------------------------------------|-------------------------------------------|---------------------------------------------------------------------------------------|
-| Open PR to `main` or `staging`      | `ci.yml`, `codeql.yml`, `terraform-plan.yml` | Lint, build, SAST, SBOM, SCA, container scan, e2e; terraform plan posted as PR comment |
-| Push to `main`                      | `ci.yml`                                  | Same as above (no deploy)                                                             |
-| Push to `staging`                   | `deploy-staging.yml`                      | Build + push images to ACR, terraform apply, Ansible deploy, smoke tests              |
-| Publish a GitHub Release on `main`  | `deploy-production.yml`                   | Production version of the staging flow, gated by the Required-Reviewer rule (§A.5)    |
+| Git action                                | Workflow(s)                | Effect                                                                                                       |
+|-------------------------------------------|----------------------------|--------------------------------------------------------------------------------------------------------------|
+| Open PR to `main` or `staging`            | `ci.yml`, `codeql.yml`     | Lint, SBOM, SCA, secret-scan, build (BFF / business-service / frontend), container scan, e2e, CodeQL         |
+| Push to `main`, `staging`, or `feature/**`| `ci.yml`, `codeql.yml` (main+staging only) | Same as above (no deploy)                                                                  |
+| Push to `staging`                         | `deploy-staging.yml`       | Re-runs `ci.yml`, builds + pushes `staging-<short-sha>` images to ACR, `terraform apply`, applies the Keycloak realm via `keycloak-config-cli`, smoke-tests |
+| Publish a GitHub Release (any branch)     | `deploy-production.yml`    | Same flow as staging but the image tag = release tag; `apply` job is gated by the Required-Reviewer rule on the `production` Environment (§A.5) |
+| Manual rerun of production                | `deploy-production.yml` (`workflow_dispatch`) | Same as above; you supply the existing git tag via the `tag` input                          |
 
 ### B.6 First-build smoke test
 
@@ -379,121 +408,36 @@ git push origin staging
 gh run watch                              # deploy-staging.yml
 ```
 
-You should see Terraform create the `boat-app-staging-rg` resource
-group and three Container Apps. The BFF's external hostname is
-printed in the deploy summary.
+You should see Terraform create the `boatapp-v2-staging-rg` resource
+group, the App Service Plan, and three Linux Web Apps. Their public
+hostnames (`<project>-staging-{bff,business,keycloak}.azurewebsites.net`)
+are printed in the deploy summary.
 
-### B.7 Bind a custom domain (your own DNS) to the BFF and/or Keycloak
+### B.7 Custom domains (not yet wired)
 
-Out of the box each environment is reachable only at the random Azure
-FQDN `<app>.<rand>.<region>.azurecontainerapps.io`. To publish under
-your own domain (e.g. `app.example.com`) with a free Azure-managed
-TLS cert, follow this **strict order** — the cert issuance fails if
-DNS is not in place first.
+Out of the box each environment is reachable only at the deterministic
+App Service hostname `<project>-<env>-<svc>.azurewebsites.net`
+(e.g. `boatapp-v2-staging-bff.azurewebsites.net`). HTTPS is on by
+default with a Microsoft-issued cert for the `*.azurewebsites.net`
+wildcard, so no further action is needed for the public staging URL.
 
-#### Step 1 — Deploy once with no custom domain
+The current Terraform module (`modules/app-service`) does not yet
+declare `azurerm_app_service_custom_hostname_binding` /
+`azurerm_app_service_managed_certificate` resources, so binding a
+custom domain like `app.example.com` is **not a one-flag operation**
+today. If/when you need it, the path is:
 
-This is what `B.6` already does. After it succeeds, the BFF and
-Keycloak each have a stable Azure FQDN that does not change for the
-life of the Container App.
+1. Add a CNAME (`app.example.com → <bff>.azurewebsites.net`) and an
+   `asuid.app.example.com` TXT record (value =
+   `azurerm_linux_web_app.bff.custom_domain_verification_id`) at your
+   DNS provider.
+2. Extend `modules/app-service/main.tf` with the two resources
+   referenced above (binding + managed cert), guarded by an optional
+   `bff_custom_domain` variable so it stays opt-in per environment.
+3. Re-apply.
 
-#### Step 2 — Read the DNS values from terraform
-
-```bash
-cd infra/terraform/environments/staging         # or .../production
-terraform output bff_fqdn                       # e.g. bff.nicemoss-1234.switzerlandnorth.azurecontainerapps.io
-terraform output bff_custom_domain_verification_id   # e.g. ABCDE1234567890...
-# repeat for keycloak_* if you want a custom auth subdomain too
-```
-
-The verification ID is **per-Container-App** and stable; it never
-changes unless the Container App itself is destroyed and recreated.
-
-#### Step 3 — Create two records at your DNS provider
-
-Pick a subdomain you control (e.g. `app.example.com` for the BFF —
-**not the apex** unless your provider supports CNAME-flattening /
-ALIAS / ANAME, since Azure requires a CNAME). Add **both** records:
-
-| Type  | Name (host)                | Value                                              | TTL   |
-|-------|----------------------------|----------------------------------------------------|-------|
-| CNAME | `app.example.com`          | `<bff_fqdn from step 2>`                           | 300 s |
-| TXT   | `asuid.app.example.com`    | `<bff_custom_domain_verification_id from step 2>`  | 300 s |
-
-The `asuid.` prefix proves to Azure that you own the domain. Repeat
-for `auth.example.com` (CNAME → `<keycloak_fqdn>`,
-TXT `asuid.auth.example.com` → `<keycloak_custom_domain_verification_id>`)
-if you want a custom Keycloak hostname too.
-
-Wait for DNS to propagate. Verify with:
-
-```bash
-dig +short CNAME app.example.com
-dig +short TXT   asuid.app.example.com
-```
-
-Both must return the values you set — Azure only checks them once
-during cert issuance, and a stale answer fails the apply.
-
-#### Step 4 — Set the variable and re-apply
-
-For staging, append to whatever you pass to terraform (in CI, this
-goes in the `TF_VAR_*` env vars on the `staging` GitHub Environment):
-
-```bash
-export TF_VAR_bff_custom_domain="app-staging.example.com"
-# Optional — only set if you ALSO created the auth.* DNS records
-export TF_VAR_keycloak_custom_domain="auth-staging.example.com"
-
-terraform -chdir=infra/terraform/environments/staging apply
-```
-
-Terraform creates the custom-domain binding and triggers Azure-managed
-cert issuance in one apply. Cert provisioning is async and usually
-completes within 1–3 minutes; check status with:
-
-```bash
-az containerapp hostname list --name bff --resource-group boat-app-staging-rg \
-  --query "[?name=='app-staging.example.com'].{state:bindingType, cert:certificateId}" -o table
-```
-
-`bindingType` flips from `Disabled` to `SniEnabled` once the cert is
-bound. Visit `https://app-staging.example.com` — you should see the
-Vue SPA served over HTTPS with a valid Microsoft-issued cert.
-
-#### Step 5 (only if you set keycloak_custom_domain) — re-run Ansible
-
-Setting `keycloak_custom_domain` flips `KC_HOSTNAME` and the JWT
-issuer URI to the new domain. The BFF's redirect URI registered on
-the `boat-app-confidential` Keycloak client must therefore be
-re-published from the new BFF URL. Re-run the Ansible
-`configure-keycloak` playbook (or the equivalent CI step) so the
-client config is refreshed.
-
-#### Production — same flow, separate DNS records
-
-Use a different subdomain per environment (e.g.
-`app-staging.example.com` vs `app.example.com`). Each environment
-has its own Container App with its own verification ID, so the TXT
-records cannot be shared.
-
-#### What "no fixed IP" means in practice
-
-Azure Container Apps Consumption profile has no static public IP —
-inbound traffic hits Azure's anycast frontend, which can resolve to
-different IPs over time. The CNAME stays valid because the FQDN
-itself is stable; only the IPs behind it move. If you need a literal
-A record (apex domain on a registrar without ALIAS, or an
-allowlist that takes IPs), you have to put **Azure Front Door** or
-**Application Gateway** in front of the Container Apps — out of
-scope for this runbook.
-
-#### Renewal
-
-Azure-managed certs auto-renew ~45 days before expiry as long as the
-CNAME record stays in place. No operator action and no terraform
-re-apply needed. If the CNAME is removed, the next renewal fails and
-the cert lapses.
+Until that lands, treat custom domains as out of scope for this
+runbook.
 
 ## 5. Part C — Lock-down
 
@@ -512,10 +456,14 @@ script:
    approving review. Even though you are the only author, this
    prevents accidental direct pushes from your local clone and
    forces CI to run.
-2. **Require status checks to pass before merging** — pin the
-   check names from `ci.yml` (lint, build-bff, build-business-service,
-   build-frontend, container-scan, e2e). PRs that bypass CI cannot
-   merge.
+2. **Require status checks to pass before merging** — pin the exact
+   contexts from `.github/settings.yml`: `lint`, `sca-scan`,
+   `secret-scan`, `build-bff`, `build-business-service`,
+   `build-frontend`, `container-scan`, `e2e-tests`, plus the two
+   CodeQL contexts (`CodeQL / analyze (java-kotlin)` and
+   `CodeQL / analyze (javascript-typescript)`) on `main` only.
+   `staging` mirrors `main` minus the CodeQL gate so the integration
+   loop stays fast. PRs that bypass CI cannot merge.
 3. **Block force-pushes** and **block branch deletion**. Force-pushes
    destroy history; deletion drops the protection rule with the
    branch.
@@ -652,7 +600,7 @@ For the gritty internals of the pipeline, see
 | Bootstrap step `[5/7]` fails with `ERROR: (SubscriptionNotFound)`      | A required Azure resource provider is `NotRegistered` on a brand-new subscription — the storage data-plane returns this misleading error. The bootstrap script's step `[1/7]` registers the providers it needs; if you ran an older copy of the script, pull the latest and re-run, or pre-register manually with `az provider register -n Microsoft.Storage --wait` (and `Microsoft.ContainerRegistry`, `Microsoft.App`, `Microsoft.OperationalInsights`, `Microsoft.DBforPostgreSQL`, `Microsoft.KeyVault`, `Microsoft.Network`, `Microsoft.ManagedIdentity`). The bootstrap is idempotent — just re-run after registering. |
 | `AADSTS70021: No matching federated identity record found`             | The branch / environment in the GitHub run does not match a federated credential subject. Re-run the bootstrap script — it is idempotent. |
 | Terraform `Error: state lease conflict`                                | Another apply is in flight, or a prior run died holding the lease. Wait, or `az storage blob lease break` on the state blob.               |
-| Container Apps return 503 right after the first deploy                 | Revision is still starting. Wait ~3 minutes, then `az containerapp logs show -n <app> -g boat-app-staging-rg --follow`.                    |
-| CodeQL job marked "skipped" on a private repo                          | Expected — GHAS is paid on private. The Semgrep-OSS fallback covers basic SAST. Resolves itself when you flip to public (§C.7).            |
+| Web Apps return 503 right after the first deploy                       | Container is still starting and Web App + Postgres are still settling after `db-bootstrap`. Wait ~90 s, then `az webapp log tail -n <app> -g boatapp-v2-staging-rg`.                              |
+| CodeQL job fails with "Advanced Security must be enabled"              | Expected on a private free repo — GHAS (and therefore CodeQL) is paid on private. Either flip to public (§C.7) or remove the two CodeQL contexts from `.github/settings.yml` until you do. |
 | `production` Environment has no "Required reviewers" option in the UI  | You are on the free personal plan; Required Reviewers is paid on private repos. See §A.5 — upgrade to Pro, flip to public, or fall back to a tag-pattern restriction in "Deployment branches and tags". |
 | Release tag created but `deploy-production.yml` did not run            | Required Reviewers (§A.5) is not configured *and* the tag does not match the trigger pattern. Confirm the Release is published, not draft. |

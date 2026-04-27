@@ -144,36 +144,50 @@ A quick reference for every Microsoft Azure and GitHub concept used in
 
 - **Analogy** — Docker Hub, but private and scoped to your
   subscription.
-- **Big picture** — stores the BFF and Business Service container
-  images; Container Apps pull from it via a managed identity. Image
-  tags include the commit SHA, `latest`, and (for releases) the
-  release tag.
+- **Big picture** — stores the BFF, business-service, and Keycloak
+  container images; the App Service Web Apps pull them via their
+  system-assigned managed identities (AcrPull). Staging tags are
+  `staging-<short-sha>`; production tags are the published release
+  tag (immutable).
 - **Used in** — every push from `deploy-staging.yml` and
   `deploy-production.yml`.
 - **Docs** —
   <https://learn.microsoft.com/azure/container-registry/container-registry-intro>
 
-### Azure Container Apps + Container App Environment
+### Azure App Service Plan + Linux Web App for Containers
 
-- **Analogy** — managed serverless containers (Kubernetes runs
-  underneath, but you never see it).
-- **Big picture** — each *Container App* hosts one workload; all
-  Container Apps in an environment share a VNet, log workspace, and
-  egress IP. The boat-app deploys 3 Container Apps (bff,
-  business-service, keycloak) plus 2 one-shot Liquibase migration
-  *Jobs*.
-- **Used in** — Terraform `modules/container-apps`.
+- **Analogy** — a managed PaaS host for containerised web apps:
+  Azure runs the OS, the TLS frontend, autoscale, and the rolling
+  deploy; you only ship a Docker image.
+- **Big picture** — one shared Linux **App Service Plan** (default
+  `P0v3` — 1 vCPU / 4 GiB) hosts three **Linux Web Apps for
+  Containers**: `<project>-<env>-bff`, `<project>-<env>-business`,
+  `<project>-<env>-keycloak`. Each Web App pulls its image from ACR
+  via its system-assigned managed identity (AcrPull). Sensitive app
+  settings reference Key Vault using the
+  `@Microsoft.KeyVault(SecretUri=...)` placeholder, resolved at
+  app-start by the same MI (Key Vault Secrets User). All three Web
+  Apps are public over HTTPS; the business-service is JWT-protected
+  by the BFF's bearer token. Per-environment public FQDNs are
+  `<app-name>.azurewebsites.net`.
+- **Used in** — Terraform `modules/app-service`.
 - **Docs** —
-  <https://learn.microsoft.com/azure/container-apps/overview>
+  <https://learn.microsoft.com/azure/app-service/overview>
 
 ### Azure Database for PostgreSQL — Flexible Server
 
 - **Analogy** — managed PostgreSQL: Azure runs the server, you own
   the schema.
 - **Big picture** — one Flexible Server hosts the three logical
-  databases (`bff_session`, `boatapp`, `keycloak`) over a private
-  endpoint inside the VNet — no public internet path.
-- **Used in** — Terraform `modules/database`.
+  databases (`bff_session`, `boatapp`, `keycloak`). Network posture
+  is **public endpoint + firewall**: the
+  `AllowAllAzureServicesAndResourcesWithinAzureIps` firewall rule
+  lets any Azure-hosted resource reach the server (App Service Web
+  Apps and Microsoft-hosted GitHub runners both qualify), and SSL is
+  enforced (`require_secure_transport=on`). Per-DB application roles
+  (`bff`, `business_service`, `keycloak`) are created by Terraform's
+  `db-bootstrap` module via a `local-exec` psql call during apply.
+- **Used in** — Terraform `modules/database` + `modules/db-bootstrap`.
 - **Docs** —
   <https://learn.microsoft.com/azure/postgresql/flexible-server/overview>
 
@@ -187,17 +201,6 @@ A quick reference for every Microsoft Azure and GitHub concept used in
 - **Used in** — §A.4 + Terraform `modules/keyvault`.
 - **Docs** —
   <https://learn.microsoft.com/azure/key-vault/general/overview>
-
-### VNet + Private DNS Zone
-
-- **Analogy** — a private network for your Azure resources, plus a
-  private "phonebook" so they can reach each other by name.
-- **Big picture** — keeps PostgreSQL traffic off the public
-  internet; the Container Apps environment plugs into the same VNet,
-  the database has a private endpoint, and the private DNS zone
-  resolves the database FQDN to that private IP.
-- **Used in** — Terraform `modules/networking`.
-- **Docs** — <https://learn.microsoft.com/azure/virtual-network/>
 
 ## GitHub
 
