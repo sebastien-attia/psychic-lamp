@@ -153,6 +153,39 @@ fail the build if anyone breaks the hexagonal rules:
 Belt-and-braces with the Maven module split — even if someone deleted an
 ArchUnit rule, the dependency graph would still reject the import.
 
+### 🔁 Concurrency control: optimistic locking
+
+Multiple users can edit the same boat at the same time. Rather than holding
+database row locks across the request, the app uses **optimistic locking** —
+writes proceed in parallel, and the second writer is rejected only if the
+first has already changed the row. The pattern is consistent end-to-end:
+
+- 🧱 **Domain model** — `Boat` carries a `version` field (`Long`) that is
+  bumped on every persisted update.
+- 💾 **Persistence (JPA)** — the `BoatJpaEntity` is annotated with
+  `@Version`, so Hibernate emits `UPDATE … WHERE id = ? AND version = ?`
+  and translates a zero-row result into Spring's
+  `OptimisticLockingFailureException`.
+- 🌐 **HTTP contract** — read responses (`GET`, `POST`) carry an `ETag`
+  header containing the current version. Every `PUT` **must** echo it back
+  in the `If-Match` header (parsed as a bare integer per
+  `contracts/openapi.yaml`).
+- 🚦 **Error mapping** (RFC 9457 ProblemDetail, see
+  [`.claude/rules/validation-and-errors.md`](.claude/rules/validation-and-errors.md)):
+  - `409 Conflict` (`type: …/concurrency-conflict`) — `If-Match` was sent
+    but the version is stale (someone else won the race). Both the domain
+    `ConcurrentModificationException` (raised by the application service
+    when it notices a stale version *before* writing) and JPA's
+    `OptimisticLockException` (raised by Hibernate at flush time) map to
+    this single response shape.
+  - `428 Precondition Required` (`type: …/precondition-required`) —
+    `If-Match` was missing entirely. Forces clients to participate in the
+    contract instead of silently last-write-wins.
+- 🖥️ **Frontend UX** — a 409 surfaces as a toast with a **Refresh** action
+  that re-fetches the current state and re-arms the form, so the user can
+  re-apply their edit on top of the latest version. An E2E Playwright test
+  exercises this conflict path end-to-end.
+
 ---
 
 ## 🌱 Environments
@@ -301,8 +334,8 @@ in [`CONCEPTS.md`](CONCEPTS.md).
 - **RFC 9457 ProblemDetail** is the single error envelope (status, type,
   title, instance, plus `messages[]` for validation). See
   [`.claude/rules/validation-and-errors.md`](.claude/rules/validation-and-errors.md).
-- **Optimistic locking** with `If-Match` / `ETag` on every `PUT`; conflicts
-  surface to the UI as a toast with a Refresh action.
+- **Optimistic locking** with `@Version` + `ETag` / `If-Match` — see
+  [Concurrency control](#-concurrency-control-optimistic-locking) above.
 - **Liquibase per service**: BFF owns `SPRING_SESSION`, Business Service owns
   `APP_USER` / `BOATS` / `BOAT_AUDIT`, Keycloak manages its own schema.
 
