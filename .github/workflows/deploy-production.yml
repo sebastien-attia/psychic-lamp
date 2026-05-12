@@ -91,16 +91,16 @@ jobs:
           echo "revision=${REF#v}" >> "$GITHUB_OUTPUT"
 
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ steps.tag.outputs.ref }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.9.8
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
@@ -183,16 +183,16 @@ jobs:
       TF_VAR_keycloak_image_tag:         ${{ needs.build-push.outputs.image_tag }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.build-push.outputs.release_ref }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.9.8
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
@@ -226,7 +226,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload tfplan
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tfplan-production
           path: ${{ env.TF_DIR }}/tfplan
@@ -253,11 +253,11 @@ jobs:
       TF_VAR_keycloak_image_tag:         ${{ needs.build-push.outputs.image_tag }}
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.build-push.outputs.release_ref }}
 
-      - uses: hashicorp/setup-terraform@v3
+      - uses: hashicorp/setup-terraform@v4
         with:
           terraform_version: 1.9.8
 
@@ -267,7 +267,7 @@ jobs:
           sudo apt-get install -y -qq postgresql-client
 
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
@@ -285,7 +285,7 @@ jobs:
       # No per-run firewall poke needed — see deploy-staging.yml for why.
 
       - name: Download tfplan
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           # download-artifact lays a single-file artifact at this exact
           # path, leaving us with `${TF_DIR}/tfplan` ready for `apply`.
@@ -325,7 +325,7 @@ jobs:
     environment: production
     steps:
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           ref: ${{ needs.build-push.outputs.release_ref }}
 
@@ -359,7 +359,7 @@ jobs:
     environment: production
     steps:
       - name: Azure login (OIDC)
-        uses: azure/login@v2
+        uses: azure/login@v3
         with:
           client-id:       ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id:       ${{ secrets.AZURE_TENANT_ID }}
